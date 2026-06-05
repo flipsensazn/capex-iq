@@ -1,5 +1,5 @@
-requests
-pandas
-numpy
-psycopg2-binary
-yfinance
+requests==2.32.3
+pandas==2.2.3
+numpy==1.26.4
+psycopg2-binary==2.9.9
+yfinance==0.2.51

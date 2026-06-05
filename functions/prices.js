@@ -331,12 +331,7 @@ export async function onRequest(context) {
 
   if (Object.keys(results).length > 0 && env.SHARED_DATA) {
     try {
-      let merged = results;
-      try {
-        const existing = await env.SHARED_DATA.get(KV_CACHE_KEY, "json");
-        if (existing && existing.data) merged = { ...existing.data, ...results };
-      } catch {}
-      const cachePayload = JSON.stringify({ data: merged, timestamp: Date.now() });
+      const cachePayload = JSON.stringify({ data: results, timestamp: Date.now() });
       await env.SHARED_DATA.put(KV_CACHE_KEY, cachePayload, { expirationTtl: CACHE_TTL_SECONDS * 4 });
     } catch (err) {}
   }

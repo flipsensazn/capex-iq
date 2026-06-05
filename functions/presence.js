@@ -15,18 +15,22 @@ export async function onRequest(context) {
   };
 
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: { ...headers, "Access-Control-Allow-Methods": "GET, OPTIONS" } });
+    return new Response(null, { status: 204, headers: { ...headers, "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } });
   }
 
-  const { searchParams } = new URL(request.url);
-  const rawSessionId = searchParams.get("session");
-  
-  if (!rawSessionId) {
+  let sessionId = null;
+
+  if (request.method === "POST") {
+    try {
+      const body = await request.json();
+      const raw = typeof body?.session === "string" ? body.session : "";
+      sessionId = raw.replace(/[^a-zA-Z0-9-]/g, "").substring(0, 50) || null;
+    } catch {}
+  }
+
+  if (!sessionId) {
     return new Response(JSON.stringify({ count: 1 }), { status: 200, headers });
   }
-
-  // Sanitize input to prevent SQL injection
-  const sessionId = rawSessionId.replace(/[^a-zA-Z0-9-]/g, "").substring(0, 50);
 
   const DATABASE_URL = env.DATABASE_URL;
   if (!DATABASE_URL) return new Response(JSON.stringify({ count: 1 }), { status: 200, headers });
@@ -44,7 +48,7 @@ export async function onRequest(context) {
       ),
       upsert AS (
           INSERT INTO active_sessions (session_id, last_seen)
-          VALUES ('${sessionId}', NOW())
+          VALUES ($1, NOW())
           ON CONFLICT (session_id) DO UPDATE SET last_seen = NOW()
       )
       SELECT COUNT(*) AS active_users FROM active_sessions;
@@ -56,7 +60,7 @@ export async function onRequest(context) {
         "Content-Type": "application/json",
         "Neon-Connection-String": DATABASE_URL,
       },
-      body: JSON.stringify({ query: sqlQuery }),
+      body: JSON.stringify({ query: sqlQuery, params: [sessionId] }),
     });
 
     if (!dbRes.ok) throw new Error("DB Error");

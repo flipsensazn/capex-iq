@@ -39,32 +39,21 @@ export async function onRequest(context) {
       const xmlText = await res.text();
       const feedName = feeds[i].name;
 
-      // Extract RSS items
-      const itemRegex = /<item>([\s\S]*?)<\/item>/g;
-      const titleRegex = /<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/;
-      const linkRegex = /<link>([\s\S]*?)<\/link>/;
-      const pubDateRegex = /<pubDate>([\s\S]*?)<\/pubDate>/;
+      const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+      const items = [...doc.querySelectorAll("item")];
 
-      let match;
-      while ((match = itemRegex.exec(xmlText)) !== null) {
-        const itemContent = match[1];
-        const titleMatch = titleRegex.exec(itemContent);
-        const linkMatch = linkRegex.exec(itemContent);
-        const pubDateMatch = pubDateRegex.exec(itemContent);
+      for (const item of items) {
+        const title = item.querySelector("title")?.textContent?.trim();
+        const link = item.querySelector("link")?.textContent?.trim();
+        const pubDateStr = item.querySelector("pubDate")?.textContent?.trim();
 
-        if (titleMatch && linkMatch && pubDateMatch) {
-          let title = (titleMatch[1] || titleMatch[2]).trim();
-          // Unescape common HTML entities
-          title = title.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
-
-          const pubDateStr = pubDateMatch[1].trim();
+        if (title && link && pubDateStr) {
           const pubDateObj = new Date(pubDateStr);
-
           allItems.push({
             title,
-            link: linkMatch[1].trim(),
+            link,
             timestamp: pubDateObj.getTime(),
-            category: feedName
+            category: feedName,
           });
         }
       }
