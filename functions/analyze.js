@@ -7,8 +7,8 @@
 
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
-const MODEL_AGENT = "gemini-3.5-flash";   // fast parallel agents
-const MODEL_SYNTH = "gemini-3.1-pro-preview"; // high-quality synthesis
+const MODEL_AGENT = "gemini-3.5-flash";
+const MODEL_SYNTH = "gemini-3.5-flash"; // same model — pro-preview has much lower Tier 1 RPM
 
 // ── GEMINI HELPER ─────────────────────────────────────────────────────────────
 async function callGemini(apiKey, systemPrompt, userContent, maxTokens = 900, timeoutMs = 25000) {
@@ -23,11 +23,13 @@ async function callGemini(apiKey, systemPrompt, userContent, maxTokens = 900, ti
     },
   });
 
-  // Retry up to 6 times with true exponential backoff: 2s, 4s, 8s, 16s, 32s
+  // 3 attempts with exponential backoff: 2s then 4s.
+  // Capped at 3 — Cloudflare Functions have a 30s wall-clock limit so longer
+  // waits would be killed before they complete anyway.
   let lastError;
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
-      const delay = Math.min(2000 * Math.pow(2, attempt - 1), 32000);
+      const delay = 2000 * Math.pow(2, attempt - 1); // 2s, 4s
       await new Promise(r => setTimeout(r, delay));
     }
 
@@ -352,7 +354,7 @@ Analyze ${ticker} based on the above data points and your training knowledge of 
       weightedScore,
       verdict,
       projection,
-      model:       `${MODEL_AGENT} (agents) + ${MODEL_SYNTH} (synthesis)`,
+      model:       MODEL_AGENT,
       generatedAt: Date.now(),
       disclaimer:  "AI-generated analysis based on training data through August 2025. Not financial advice. Always conduct your own due diligence.",
     };
