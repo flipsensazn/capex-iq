@@ -1,39 +1,37 @@
 // functions/analyze.js
 //
 // POST /analyze  { ticker, currentPrice, peRatio, marketCap, week52Low, week52High }
-// Runs 3 Claude agents concurrently (Fundamentals · Technical · Qual/Macro),
+// Runs 3 Gemini agents concurrently (Fundamentals · Technical · Qual/Macro),
 // then synthesizes into a markdown report with a BUY/HOLD/SELL score and
 // 3-year price projection.  Results cached in KV for 24 hours.
 
 const CACHE_KEY_PREFIX = "analysis_v2_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
-const MODEL_AGENT      = "claude-haiku-4-5-20251001"; // fast parallel agents
-const MODEL_SYNTH      = "claude-haiku-4-5-20251001"; // synthesis pass
+const MODEL            = "gemini-2.0-flash";
 
-// ── ANTHROPIC HELPER ──────────────────────────────────────────────────────────
-async function callClaude(apiKey, systemPrompt, userContent, maxTokens = 900) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: MODEL_AGENT,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userContent }],
-    }),
-  });
+// ── GEMINI HELPER ─────────────────────────────────────────────────────────────
+async function callGemini(apiKey, systemPrompt, userContent, maxTokens = 900) {
+  const prompt = `${systemPrompt}\n\n${userContent}`;
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
+      }),
+    }
+  );
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Anthropic ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`Gemini ${res.status}: ${body.slice(0, 200)}`);
   }
 
   const data    = await res.json();
-  const rawText = data.content?.[0]?.text ?? "";
+  const rawText = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join("") ?? "";
   const clean   = rawText
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
@@ -111,7 +109,7 @@ Schema:
 }`;
 
 // ── SYNTHESIZER ───────────────────────────────────────────────────────────────
-async function synthesize(apiKey, ticker, currentPrice, fundamentals, technical, macro) {
+async function synthesize(geminiKey, ticker, currentPrice, fundamentals, technical, macro) {
   const weightedScore =
     Math.round(fundamentals.score * 0.40 + technical.score * 0.30 + macro.score * 0.30);
 
@@ -173,24 +171,21 @@ ${JSON.stringify(technical, null, 2)}
 MACRO JSON:
 ${JSON.stringify(macro, null, 2)}`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: MODEL_SYNTH,
-      max_tokens: 1400,
-      system: "You are a professional equity research writer. Return clean markdown only.",
-      messages: [{ role: "user", content: synthPrompt }],
-    }),
-  });
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${geminiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: synthPrompt }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 1400 },
+      }),
+    }
+  );
 
   if (!res.ok) throw new Error(`Synthesis API error ${res.status}`);
   const data = await res.json();
-  const report = data.content?.[0]?.text ?? "";
+  const report = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join("") ?? "";
 
   return { report, weightedScore, verdict, projection };
 }
@@ -224,10 +219,10 @@ export async function onRequest(context) {
     return new Response(JSON.stringify({ error: "Method Not Allowed" }), { status: 405, headers });
   }
 
-  const apiKey = env.ANTHROPIC_API_KEY;
+  const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) {
     return new Response(
-      JSON.stringify({ error: "ANTHROPIC_API_KEY not configured. Add it as a Cloudflare Pages environment variable." }),
+      JSON.stringify({ error: "GEMINI_API_KEY not configured. Add it as a Cloudflare Pages environment variable." }),
       { status: 500, headers }
     );
   }
@@ -282,9 +277,9 @@ Analyze ${ticker} based on the above data points and your training knowledge of 
   try {
     // ── Run 3 agents concurrently ─────────────────────────
     const [fundamentals, technical, macro] = await Promise.all([
-      callClaude(apiKey, FUNDAMENTALS_SYSTEM, contextBlock, 900),
-      callClaude(apiKey, TECHNICAL_SYSTEM,    contextBlock, 800),
-      callClaude(apiKey, MACRO_SYSTEM,        contextBlock, 800),
+      callGemini(apiKey, FUNDAMENTALS_SYSTEM, contextBlock, 900),
+      callGemini(apiKey, TECHNICAL_SYSTEM,    contextBlock, 800),
+      callGemini(apiKey, MACRO_SYSTEM,        contextBlock, 800),
     ]);
 
     // ── Synthesize ────────────────────────────────────────
@@ -300,7 +295,7 @@ Analyze ${ticker} based on the above data points and your training knowledge of 
       weightedScore,
       verdict,
       projection,
-      model:       MODEL_AGENT,
+      model:       MODEL,
       generatedAt: Date.now(),
       disclaimer:  "AI-generated analysis based on training data through August 2025. Not financial advice. Always conduct your own due diligence.",
     };
