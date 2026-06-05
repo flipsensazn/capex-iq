@@ -7,7 +7,7 @@
 
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
-const MODEL            = "gemini-2.0-flash";
+const MODEL            = "gemini-3.5-flash";
 
 // ── GEMINI HELPER ─────────────────────────────────────────────────────────────
 async function callGemini(apiKey, systemPrompt, userContent, maxTokens = 900, timeoutMs = 25000) {
