@@ -7,12 +7,13 @@
 
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
-const MODEL            = "gemini-3.5-flash";
+const MODEL_AGENT = "gemini-3.5-flash";   // fast parallel agents
+const MODEL_SYNTH = "gemini-3.1-pro-preview"; // high-quality synthesis
 
 // ── GEMINI HELPER ─────────────────────────────────────────────────────────────
 async function callGemini(apiKey, systemPrompt, userContent, maxTokens = 900, timeoutMs = 25000) {
   const prompt = `${systemPrompt}\n\n${userContent}`;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_AGENT}:generateContent?key=${apiKey}`;
   const body = JSON.stringify({
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
@@ -221,7 +222,7 @@ ${JSON.stringify(macro, null, 2)}`;
   let synthRes;
   try {
     synthRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_SYNTH}:generateContent?key=${geminiKey}`,
       {
         method: "POST",
         signal: synthController.signal,
@@ -348,7 +349,7 @@ Analyze ${ticker} based on the above data points and your training knowledge of 
       weightedScore,
       verdict,
       projection,
-      model:       MODEL,
+      model:       `${MODEL_AGENT} (agents) + ${MODEL_SYNTH} (synthesis)`,
       generatedAt: Date.now(),
       disclaimer:  "AI-generated analysis based on training data through August 2025. Not financial advice. Always conduct your own due diligence.",
     };
