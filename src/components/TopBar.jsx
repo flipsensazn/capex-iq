@@ -9,8 +9,10 @@ const TOP_BAR_TICKERS = [
   { ticker: "XRP-USD", label: "XRP", color: "#34d399" },
 ];
 
-// Update this set annually — last updated for 2027. Source: NYSE holiday calendar.
-const NYSE_HOLIDAYS_2025_2026 = new Set([
+// NYSE holiday calendar, currently covering 2025–2027. Extend this set before
+// the last listed year lapses, or market-state logic will treat new holidays as
+// regular trading days. Source: NYSE holiday calendar.
+const NYSE_HOLIDAYS_2025_2027 = new Set([
   "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18",
   "2025-05-26", "2025-06-19", "2025-07-04", "2025-09-01",
   "2025-11-27", "2025-12-25",
@@ -49,7 +51,7 @@ function getNYTime(date = new Date()) {
 function getMarketState(date = new Date()) {
   const { h, m, dow, dateStr } = getNYTime(date);
   const isWeekend = dow === "Sat" || dow === "Sun";
-  const isHoliday = NYSE_HOLIDAYS_2025_2026.has(dateStr);
+  const isHoliday = NYSE_HOLIDAYS_2025_2027.has(dateStr);
   const totalMins = h * 60 + m;
 
   if (isWeekend || isHoliday) return { state: "closed", session: "weekend" };
@@ -71,7 +73,7 @@ function secsUntilNextEvent(date = new Date()) {
 
   const openSecs = 9 * 3600 + 30 * 60;
   const isWeekend = dow === "Sat" || dow === "Sun";
-  const isHoliday = NYSE_HOLIDAYS_2025_2026.has(dateStr);
+  const isHoliday = NYSE_HOLIDAYS_2025_2027.has(dateStr);
   if (!isWeekend && !isHoliday && totalSecs < openSecs) {
     return openSecs - totalSecs;
   }
@@ -79,7 +81,7 @@ function secsUntilNextEvent(date = new Date()) {
   for (let d = 1; d <= 7; d++) {
     const candidate = new Date(date.getTime() + d * 86400000);
     const cny = getNYTime(candidate);
-    if (cny.dow !== "Sat" && cny.dow !== "Sun" && !NYSE_HOLIDAYS_2025_2026.has(cny.dateStr)) {
+    if (cny.dow !== "Sat" && cny.dow !== "Sun" && !NYSE_HOLIDAYS_2025_2027.has(cny.dateStr)) {
       const secsLeftToday = 86400 - totalSecs;
       return secsLeftToday + (d - 1) * 86400 + openSecs;
     }

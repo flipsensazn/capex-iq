@@ -64,12 +64,12 @@ The app uses this binding for:
 
 ## Database Notes
 
-The ETL pipeline in [src/etl_pipeline.py](/Users/erwsalaz/Documents/GitHub/wizzles-watchlist/src/etl_pipeline.py:449) now bootstraps the `ranked_candidates` table if it does not already exist.
+The ETL pipeline in [src/etl_pipeline.py](../src/etl_pipeline.py) now bootstraps the `ranked_candidates` table if it does not already exist.
 
 The following runtime functions expect `DATABASE_URL` to be present:
 
-- [functions/scanner-ranked.js](/Users/erwsalaz/Documents/GitHub/wizzles-watchlist/functions/scanner-ranked.js:3)
-- [functions/presence.js](/Users/erwsalaz/Documents/GitHub/wizzles-watchlist/functions/presence.js:3)
+- [functions/scanner-ranked.js](../functions/scanner-ranked.js)
+- [functions/presence.js](../functions/presence.js)
 
 ## Deployment Checklist
 

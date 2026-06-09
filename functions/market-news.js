@@ -1,5 +1,37 @@
 // functions/market-news.js
 
+// ── RSS PARSING ──────────────────────────────────────────────────────────────
+// The Cloudflare Workers runtime has no DOMParser (it's a browser API), so we
+// parse the RSS XML with scoped regexes instead. Each <item> is isolated first,
+// then individual tags are extracted from within it.
+function decodeEntities(str) {
+  if (!str) return str;
+  return str
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#0?39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&"); // decode &amp; last so it doesn't double-decode
+}
+
+function extractTag(itemXml, tag) {
+  const m = itemXml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return m ? decodeEntities(m[1].trim()).trim() : null;
+}
+
+function parseRssItems(xml) {
+  const matches = xml.match(/<item[\s\S]*?<\/item>/gi) || [];
+  return matches.map(itemXml => ({
+    title:   extractTag(itemXml, "title"),
+    link:    extractTag(itemXml, "link"),
+    pubDate: extractTag(itemXml, "pubDate"),
+  }));
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
 
@@ -39,16 +71,13 @@ export async function onRequest(context) {
       const xmlText = await res.text();
       const feedName = feeds[i].name;
 
-      const doc = new DOMParser().parseFromString(xmlText, "text/xml");
-      const items = [...doc.querySelectorAll("item")];
+      const items = parseRssItems(xmlText);
 
       for (const item of items) {
-        const title = item.querySelector("title")?.textContent?.trim();
-        const link = item.querySelector("link")?.textContent?.trim();
-        const pubDateStr = item.querySelector("pubDate")?.textContent?.trim();
+        const { title, link, pubDate } = item;
 
-        if (title && link && pubDateStr) {
-          const pubDateObj = new Date(pubDateStr);
+        if (title && link && pubDate) {
+          const pubDateObj = new Date(pubDate);
           allItems.push({
             title,
             link,

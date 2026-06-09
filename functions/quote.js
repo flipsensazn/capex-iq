@@ -4,6 +4,17 @@ const KV_CRUMB_KEY = "yahooSession_v1";
 const CRUMB_TTL_MS = 55 * 60 * 1000; // 55 minutes
 const USER_AGENT   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+// ── COOKIE HELPER ────────────────────────────────────────────────────────────
+// Headers.get("set-cookie") collapses multiple cookies into one comma-joined
+// string, so .split(";")[0] can mangle the session. getSetCookie() returns each
+// Set-Cookie header separately; we keep the name=value pair from each and rejoin.
+function parseCookies(headers) {
+  const raw = typeof headers.getSetCookie === "function"
+    ? headers.getSetCookie()
+    : (headers.get("set-cookie") ? [headers.get("set-cookie")] : []);
+  return raw.map(c => c.split(";")[0]).filter(Boolean).join("; ");
+}
+
 // ── CRUMB HELPER ─────────────────────────────────────────────────────────────
 // Shared with prices.js — reads from KV first, fetches fresh only when stale.
 // Both functions use the same KV_CRUMB_KEY so they share the cached session.
@@ -20,8 +31,7 @@ async function getYahooSession(env) {
   }
 
   const cookieRes = await fetch("https://fc.yahoo.com", { headers: { "User-Agent": USER_AGENT } });
-  const rawCookie = cookieRes.headers.get("set-cookie");
-  const cookie    = rawCookie ? rawCookie.split(";")[0] : "";
+  const cookie    = parseCookies(cookieRes.headers);
 
   const crumbRes = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", {
     headers: { "User-Agent": USER_AGENT, "Cookie": cookie }

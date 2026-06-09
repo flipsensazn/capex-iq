@@ -29,4 +29,4 @@ Configure these Cloudflare environment variables as needed:
   time, but falls back to the latest available headlines on weekends and holidays.
 - The ETL pipeline can now bootstrap the `ranked_candidates` table in a fresh
   Neon database before loading scanner results.
-- Full setup guide: [docs/cloudflare-setup.md](/Users/erwsalaz/Documents/GitHub/wizzles-watchlist/docs/cloudflare-setup.md)
+- Full setup guide: [docs/cloudflare-setup.md](docs/cloudflare-setup.md)
