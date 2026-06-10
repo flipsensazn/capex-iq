@@ -352,7 +352,16 @@ def call_gemini(prompt, max_retries=3):
            f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}")
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1200},
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 2048,
+            # Force structured output — no markdown fences, no prose.
+            "responseMimeType": "application/json",
+            # gemini-2.5-flash "thinks" by default and thinking tokens count
+            # against maxOutputTokens, which truncated responses mid-JSON.
+            # This is a mechanical classification — no thinking needed.
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
     }
     delay = 15
     for attempt in range(max_retries):
@@ -369,7 +378,13 @@ def call_gemini(prompt, max_retries=3):
         if not text:
             raise ValueError("Empty Gemini response")
         text = re.sub(r"^```json\s*|^```\s*|```\s*$", "", text, flags=re.I | re.M).strip()
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            if attempt < max_retries - 1:
+                print(f"    Gemini returned malformed JSON ({e}) — retrying...")
+                continue
+            raise
     raise RuntimeError("Gemini retries exhausted")
 
 
@@ -443,9 +458,21 @@ UPSERT_SQL = """
 
 
 def get_existing_keys(conn):
-    """Set of (ticker, year, quarter) already analyzed — never re-fetch those."""
+    """
+    Set of (ticker, year, quarter) we can skip. A row is final if it got a
+    Gemini classification (model set) or never needed one (zero lexicon hits).
+    Lexicon-only rows WITH hits are degraded — Gemini was down or returned
+    garbage when they were written — so when a Gemini key is available we
+    leave them out of this set and the upsert upgrades them in place.
+    """
     with conn.cursor() as cur:
-        cur.execute("SELECT ticker, fiscal_year, fiscal_quarter FROM transcript_stress")
+        if GEMINI_API_KEY:
+            cur.execute("""
+                SELECT ticker, fiscal_year, fiscal_quarter FROM transcript_stress
+                WHERE model IS NOT NULL OR COALESCE(lexicon_hits, 0) = 0
+            """)
+        else:
+            cur.execute("SELECT ticker, fiscal_year, fiscal_quarter FROM transcript_stress")
         return {(t, y, q) for t, y, q in cur.fetchall()}
 
 
