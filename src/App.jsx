@@ -861,152 +861,6 @@ function HeatMap({ prices, capexData, onTickerClick, timeline, setTimeline, isAd
   );
 }
 
-// ── DONUT CHART ───────────────────────────────────────────
-function DonutChart({ prices, capexData, capexIntel, capexIntelStatus, capexIntelError, timeline }) {
-  const isMobile = useMobile();
-  const [hovered, setHovered] = useState(null);
-  const total = useMemo(() => capexData.tracks.reduce((s, t) => s + (t.capex || 0), 0), [capexData]);
-  const cx = 130, cy = 130, R = 90, r = 52;
-
-  const isLive    = capexIntelStatus === "success" && !!(capexIntel?.allocations?.length);
-  const isLoading = capexIntelStatus === "loading";
-  const isError   = capexIntelStatus === "error";
-  const intelAge = capexIntel?.fetchedAt
-    ? (() => {
-        const diffMs  = Date.now() - capexIntel.fetchedAt;
-        const diffMin = Math.floor(diffMs / 60000);
-        const diffHr  = Math.floor(diffMin / 60);
-        if (diffHr >= 1) return `${diffHr}h ago`;
-        if (diffMin >= 1) return `${diffMin}m ago`;
-        return "just now";
-      })()
-    : null;
-
-  const segmentShapes = useMemo(() => {
-    let cumAngle = -Math.PI / 2;
-    return capexData.tracks.map(track => {
-      const frac = (track.capex || 0) / total;
-      const angle = frac * 2 * Math.PI;
-      const startAngle = cumAngle;
-      cumAngle += angle;
-      const x1 = cx + R * Math.cos(startAngle), y1 = cy + R * Math.sin(startAngle);
-      const x2 = cx + R * Math.cos(startAngle + angle), y2 = cy + R * Math.sin(startAngle + angle);
-      const xi1 = cx + r * Math.cos(startAngle), yi1 = cy + r * Math.sin(startAngle);
-      const xi2 = cx + r * Math.cos(startAngle + angle), yi2 = cy + r * Math.sin(startAngle + angle);
-      const large = angle > Math.PI ? 1 : 0;
-      const tickerCount = new Set(track.subsectors.flatMap(s => s.tickers)).size;
-      return { track, frac, tickerCount, path: `M${x1} ${y1} A${R} ${R} 0 ${large} 1 ${x2} ${y2} L${xi2} ${yi2} A${r} ${r} 0 ${large} 0 ${xi1} ${yi1} Z` };
-    });
-  }, [capexData, total]);
-
-  const trackPerf = useMemo(() =>
-    capexData.tracks.map(track => {
-      const tickers = [...new Set(track.subsectors.flatMap(s => s.tickers))];
-      const changes = tickers.map(t => getChangeForTimeline(prices[t], timeline)).filter(v => typeof v === 'number');
-      const avg = changes.length ? changes.reduce((a, b) => a + b, 0) / changes.length : 0;
-      return { ...track, avg };
-    }).sort((a, b) => b.avg - a.avg),
-  [capexData, prices, timeline]);
-
-  const segments = useMemo(() =>
-    segmentShapes.map(s => {
-      const perf = trackPerf.find(t => t.id === s.track.id);
-      return { ...s, avg: perf?.avg ?? 0 };
-    }),
-  [segmentShapes, trackPerf]);
-
-  const hov = hovered ? segments.find(s => s.track.id === hovered) : null;
-
-  return (
-    <div style={{ borderRadius: 18, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(24,24,24,0.7)", padding: isMobile ? "12px 8px" : 20, height: "100%", overflowY: "auto", overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0" }}>Sector Allocation</h3>
-          {isLoading && (
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: "#f59e0b", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 4, padding: "2px 7px" }}>
-              ⟳ FETCHING LIVE INTEL…
-            </span>
-          )}
-          {isLive && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", color: "#34d399", background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 4, padding: "2px 7px" }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#34d399", display: "inline-block", boxShadow: "0 0 5px #34d399" }} />
-                LIVE INTEL
-              </span>
-              {intelAge && <span style={{ fontSize: 9, color: "#475569" }}>{intelAge}</span>}
-            </div>
-          )}
-          {isError && (
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", color: "#f87171", background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 4, padding: "2px 7px", display: "block", whiteSpace: "normal", lineHeight: 1.5 }}>
-              ⚠ {capexIntelError}
-            </span>
-          )}
-          {!isLoading && !isLive && !isError && (
-            <span style={{ fontSize: 9, color: "#475569", letterSpacing: "0.06em" }}>ESTIMATED</span>
-          )}
-        </div>
-        <p style={{ fontSize: 11, color: "#475569", marginTop: 3 }}>
-          {isLive ? "Claude web search · hyperscaler filings & earnings · hover to inspect"
-           : isError ? "Showing static estimates — check GEMINI_API_KEY env var & redeploy capex-intel.js"
-           : "Capex weight · hover to inspect avg performance"}
-        </p>
-      </div>
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <svg viewBox="0 0 260 260" style={{ width: "100%", maxWidth: 260, height: "auto" }}>
-          {segments.map(seg => {
-            const isHov = hovered === seg.track.id;
-            return (
-              <g key={seg.track.id} onMouseEnter={() => setHovered(seg.track.id)} onMouseLeave={() => setHovered(null)} style={{ transformOrigin: `${cx}px ${cy}px`, transform: `scale(${isHov ? 1.06 : 1})`, transition: "transform .2s", cursor: "pointer" }}>
-                <path d={seg.path} fill={isHov ? seg.track.color : seg.track.borderColor} opacity={isHov ? 1 : hovered ? 0.35 : 0.82} stroke="rgba(24,24,24,0.8)" strokeWidth="2.5" />
-              </g>
-            );
-          })}
-          <circle cx={cx} cy={cy} r={r - 2} fill="rgba(24,24,24,0.95)" />
-          {hov ? (
-            <>
-              <text x={cx} y={cy - 14} textAnchor="middle" fill={hov.track.color} fontSize="11" fontWeight="600">{hov.track.label.split(" ")[0]}</text>
-              <text x={cx} y={cy + 6} textAnchor="middle" fill="#f1f5f9" fontSize="20" fontWeight="800">{hov.track.value}</text>
-              <text x={cx} y={cy + 24} textAnchor="middle" fill={hov.avg >= 0 ? "#34d399" : "#f87171"} fontSize="12">avg {hov.avg >= 0 ? "+" : ""}{hov.avg.toFixed(1)}%</text>
-              <text x={cx} y={cy + 38} textAnchor="middle" fill="#475569" fontSize="10">{hov.tickerCount} tickers</text>
-            </>
-          ) : (
-            <>
-              <text x={cx} y={cy - 8} textAnchor="middle" fill="#94a3b8" fontSize="10">TOTAL CAPEX</text>
-              <text x={cx} y={cy + 14} textAnchor="middle" fill="#fbbf24" fontSize="20" fontWeight="800">${total}B</text>
-              <text x={cx} y={cy + 30} textAnchor="middle" fill={isLive ? "#34d399" : "#475569"} fontSize="10">{isLive ? "live intel" : "tracked"}</text>
-            </>
-          )}
-        </svg>
-        <div style={{ flex: "1 1 140px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-          {trackPerf.map(track => (
-            <div key={track.id} onMouseEnter={() => setHovered(track.id)} onMouseLeave={() => setHovered(null)} style={{ cursor: "default", opacity: hovered && hovered !== track.id ? 0.35 : 1, transition: "opacity .2s" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: track.color }} />
-                  <span style={{ fontSize: 11, color: "#cbd5e1", fontWeight: 600 }}>{track.label}</span>
-                  {isLive && track.intelConfidence === "high" && (
-                    <span style={{ fontSize: 8, color: "#34d399", opacity: 0.7 }}>●</span>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <span style={{ fontSize: 10, color: isLive ? "#94a3b8" : "#475569" }}>${track.capex}B</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: track.avg >= 0 ? "#34d399" : "#f87171", minWidth: 46, textAlign: "right" }}>{track.avg >= 0 ? "+" : ""}{track.avg.toFixed(1)}%</span>
-                </div>
-              </div>
-              <div style={{ height: 4, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
-                <div style={{ height: "100%", borderRadius: 4, width: `${(track.capex / total) * 100}%`, background: `linear-gradient(90deg,${track.borderColor},${track.color})`, transition: "width .6s cubic-bezier(.4,0,.2,1)" }} />
-              </div>
-              {isLive && track.rationale && hovered === track.id && (
-                <div style={{ fontSize: 9, color: "#64748b", marginTop: 4, lineHeight: 1.4, fontStyle: "italic" }}>{track.rationale}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── WATCHLIST ─────────────────────────────────────────────
 function Watchlist({ prices, capexData, onTickerClick, isAdmin, shortList, onSaveShortlist, timeline, activeFilter }) {
   const isMobile = useMobile();
@@ -1240,89 +1094,52 @@ function Watchlist({ prices, capexData, onTickerClick, isAdmin, shortList, onSav
   );
 }
 
-// ── MULTIBAGGER PANEL ─────────────────────────────────────
-function MultibaggerPanel({ prices, scannerPool, isAdmin, onSaveScanner, onTickerClick }) {
-  const isMobile = useMobile();
-  const [allData, setAllData]           = useState([]);
-  const [data, setData]                 = useState([]);
-  const [loading, setLoading]           = useState(true);
-  const [error, setError]               = useState(null);
-  const [newTicker, setNewTicker]       = useState("");
-  const [showImport, setShowImport]     = useState(false);
-  const [importText, setImportText]     = useState("");
-  const [importError, setImportError]   = useState("");
-  const [sectorFilter, setSectorFilter] = useState("");
-  const [lastUpdated, setLastUpdated]   = useState(null);
+// ── PRE-MARKET GAP SCANNER PANEL ──────────────────────────
+const TJL_BADGES = {
+  PASS:          { label: "PASS",     color: "#34d399", title: "Trend Join Long: daily breakout + intraday breakout confirmed" },
+  fail_daily:    { label: "FAIL · D", color: "#f87171", title: "Failed daily leg: below prev daily high or close under 200 SMA" },
+  fail_intraday: { label: "FAIL · I", color: "#fbbf24", title: "Failed intraday leg: below premarket high or high-of-day" },
+};
 
-  const fetchRanked = async () => {
+function GapScannerPanel({ prices, onTickerClick }) {
+  const isMobile = useMobile();
+  const [scan, setScan]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+
+  const fetchScan = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res  = await fetch("/scanner-ranked");
+      const res  = await fetch("/gap-scanner");
       const json = await res.json();
-      if (json.success && json.data?.length > 0) {
-        setAllData(json.data);
-        setData(json.data);
-        setLastUpdated(new Date().toLocaleDateString());
+      if (json.success && json.data?.gappers?.length > 0) {
+        setScan(json.data);
       } else {
-        setError(json.message || "No ranked data available yet. Run the ETL pipeline to populate the scanner.");
-        setAllData([]);
-        setData([]);
+        setError(json.message || "No gap scan available yet.");
+        setScan(null);
       }
     } catch (err) {
-      setError("Could not reach scanner API. Check your Cloudflare deployment.");
-      setAllData([]);
-      setData([]);
+      setError("Could not reach gap-scanner API. Check your Cloudflare deployment.");
+      setScan(null);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetchRanked(); }, []);
+  useEffect(() => { fetchScan(); }, []);
 
-  useEffect(() => {
-    if (sectorFilter) {
-      setData(allData.filter(d => d.sector === sectorFilter));
-    } else {
-      setData(allData);
-    }
-  }, [sectorFilter, allData]);
+  const scannedAgo = scan?.scanned_at
+    ? (() => {
+        const diffMin = Math.floor((Date.now() - new Date(scan.scanned_at).getTime()) / 60000);
+        if (diffMin >= 60) return `${Math.floor(diffMin / 60)}h ${diffMin % 60}m ago`;
+        if (diffMin >= 1) return `${diffMin}m ago`;
+        return "just now";
+      })()
+    : null;
 
-  const addTicker = () => {
-    const sym = newTicker.trim().toUpperCase();
-    if (sym && !scannerPool.includes(sym)) { onSaveScanner([...scannerPool, sym]); setNewTicker(""); }
-  };
-
-  const handleImport = () => {
-    const words = importText.toUpperCase().match(/\b[A-Z]{1,5}\b/g) || [];
-    const ignoreList = ["INC","CORP","CO","LTD","PLC","LLC","USD","EUR","CAD","M","B","K","TRUE","FALSE"];
-    const found = [...new Set(words)].filter(w => !ignoreList.includes(w));
-    if (found.length > 0) {
-      onSaveScanner(found);
-      setShowImport(false);
-      setImportText("");
-      setImportError("");
-    } else {
-      setImportError("No valid tickers found in that import.");
-    }
-  };
-
-  const removeTicker = (ticker) => { onSaveScanner(scannerPool.filter(t => t !== ticker)); };
-
-  const getScoreColor = (score) => {
-    if (score >= 70) return "#34d399";
-    if (score >= 45) return "#fbbf24";
-    return "#f87171";
-  };
-
-  const get52wColor = (pct) => {
-    if (pct == null) return "#475569";
-    if (pct <= 20)  return "#34d399";
-    if (pct <= 50)  return "#fbbf24";
-    return "#64748b";
-  };
-
-  const sectors = [...new Set(allData.map(d => d.sector).filter(Boolean))].sort();
+  const passCount = scan?.gappers?.filter(g => g.tjl?.result === "PASS").length ?? 0;
+  const fmtVol = v => v == null ? "—" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? (v / 1e3).toFixed(0) + "K" : String(v);
 
   return (
     <div style={{ borderRadius: 18, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(24,24,24,0.7)", padding: isMobile ? "12px 8px" : 20, display: "flex", flexDirection: "column", height: "100%", boxSizing: "border-box", width: "100%", overflowX: "hidden" }}>
@@ -1330,131 +1147,67 @@ function MultibaggerPanel({ prices, scannerPool, isAdmin, onSaveScanner, onTicke
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8, flexShrink: 0, minWidth: 0 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#fbbf24" }}>Small-cap Scanner</h3>
-            <span style={{ fontSize: 9, color: "#34d399", background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 4, padding: "2px 7px", fontWeight: 700, letterSpacing: "0.1em" }}>● DB RANKED</span>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#fbbf24" }}>Pre-market Gap Scanner</h3>
+            <span style={{ fontSize: 9, color: "#60a5fa", background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.3)", borderRadius: 4, padding: "2px 7px", fontWeight: 700, letterSpacing: "0.1em" }}>● TJL STRATEGY</span>
+            {passCount > 0 && (
+              <span style={{ fontSize: 9, color: "#34d399", background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 4, padding: "2px 7px", fontWeight: 700, letterSpacing: "0.1em" }}>
+                {passCount} PASS{passCount > 1 ? "ES" : ""}
+              </span>
+            )}
           </div>
           <p style={{ fontSize: 11, color: "#475569", marginTop: 3 }}>
-            ETL-ranked · FCF(35%) B/M(20%) ROA(15%) Growth(15%) Rev(15%) · updated {lastUpdated ?? "weekly"}
+            Gap &gt;5% · price &gt;$3 · vol &gt;50K · Trend Join Long: above prev daily high, 200 SMA, PMH &amp; HOD
+            {scannedAgo ? ` · scanned ${scannedAgo}` : ""}
           </p>
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {sectors.length > 0 && (
-            <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)}
-              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "6px 10px", color: "#e2e8f0", fontSize: 11, fontFamily: "inherit", cursor: "pointer", outline: "none" }}>
-              <option value="">All Sectors</option>
-              {sectors.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          )}
-          <button onClick={() => fetchRanked()}
+          <button onClick={() => fetchScan()}
             style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#64748b", borderRadius: 8, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
             ↻ Refresh
           </button>
-          {isAdmin && (
-            <>
-              <button onClick={() => setShowImport(!showImport)}
-                style={{ background: "transparent", color: "#60a5fa", border: "1px solid rgba(96,165,250,0.3)", borderRadius: 8, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontWeight: 700 }}>
-                {showImport ? "Close Import" : "⎘ Smart Import"}
-              </button>
-              <input value={newTicker} onChange={e => setNewTicker(e.target.value.toUpperCase())}
-                onKeyDown={e => e.key === "Enter" && addTicker()} placeholder="Add ticker..."
-                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "6px 12px", color: "#fff", fontSize: 12, outline: "none", width: 100 }} />
-              <button onClick={addTicker}
-                style={{ background: "#fbbf24", color: "#000", borderRadius: 8, padding: "6px 12px", fontWeight: 700, cursor: "pointer", border: "none" }}>+</button>
-            </>
-          )}
         </div>
       </div>
 
-      {showImport && isAdmin && (
-        <div style={{ marginBottom: 16, background: "rgba(0,0,0,0.2)", padding: 12, borderRadius: 12, border: "1px dashed rgba(255,255,255,0.1)", animation: "fadeSlideIn .2s ease-out", flexShrink: 0 }}>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>Paste raw tickers to instantly update the dashboard globally.</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="e.g. NVDA, MSFT, AAPL"
-              style={{ flex: 1, height: 60, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 8, color: "#e2e8f0", fontSize: 12, fontFamily: "monospace", outline: "none", resize: "vertical" }} />
-            <button onClick={handleImport}
-              style={{ background: "#60a5fa", color: "#000", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>Update Global</button>
-          </div>
-          {importError && (
-            <div style={{ marginTop: 8, fontSize: 11, color: "#fca5a5" }}>
-              {importError}
-            </div>
-          )}
-        </div>
-      )}
-
       <div style={{ flex: 1, overflowY: "auto", overflowX: "auto", minHeight: 400, paddingRight: isMobile ? 0 : 4, WebkitOverflowScrolling: "touch" }}>
         {error && (
-          <div style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#f87171", fontSize: 12 }}>⚠ {error} — showing live-scored fallback.</div>
+          <div style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#94a3b8", fontSize: 12 }}>⚠ {error}</div>
         )}
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: isMobile ? 10 : 11, textAlign: "left" }}>
           <thead>
             <tr style={{ color: "#475569", borderBottom: "1px solid rgba(255,255,255,0.05)", position: "sticky", top: 0, background: "rgba(14,17,23,0.95)", zIndex: 10 }}>
-              {...['#','TICKER','PRICE','MKT CAP','FCF YLD','B/M','ROA','REV GR','52W LOW'].map((h,i) => <th key={h} style={{ padding: isMobile ? '6px 4px' : '10px 8px', whiteSpace: 'nowrap' }}>{h}</th>)}
-              <th style={{ padding: isMobile ? '6px 4px' : '10px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>SCORE</th>
-              {isAdmin && <th style={{ width: 30 }}></th>}
+              {['#','TICKER','PRICE','GAP %','PM VOL','CATALYST','PREV HIGH','SMA200','PMH','HOD'].map(h => <th key={h} style={{ padding: isMobile ? '6px 4px' : '10px 8px', whiteSpace: 'nowrap' }}>{h}</th>)}
+              <th style={{ padding: isMobile ? '6px 4px' : '10px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>TJL</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr><td colSpan="11" style={{ padding: 20, color: "#475569" }}>
-                Loading ranked candidates from Neon...
+                Loading gap scan…
               </td></tr>
-            ) : data.length === 0 ? (
+            ) : !scan?.gappers?.length ? (
               <tr><td colSpan="11" style={{ padding: 20, color: "#475569" }}>
-                No candidates found{sectorFilter ? ` in ${sectorFilter}` : ""}.
+                No gappers today (or the morning pipeline hasn't pushed yet).
               </td></tr>
-            ) : data.map((stock) => {
-              const priceEntry = prices[stock.ticker];
-              const livePrice  = priceEntry?.price;
+            ) : scan.gappers.map(g => {
+              const priceEntry = prices[g.symbol];
+              const livePrice  = priceEntry?.price ?? g.tjl?.curr_price ?? g.price;
               const change     = priceEntry?.change;
-
-              const priceStr = livePrice
-                ? "$" + livePrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                : stock.price != null
-                  ? "$" + Number(stock.price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                  : "—";
-
-              const marketCapRaw = (stock.market_cap ?? 0) * 1_000_000;
-              const marketCapStr = marketCapRaw > 0 ? fmtMarketCap(marketCapRaw) : "—";
-
-              const score    = Number(stock.composite_score);
-              const fcfYield = Number(stock.fcf_yield);
-              const bm       = Number(stock.book_to_market);
-              const roa      = Number(stock.roa);
-              const revGr    = stock.revenue_growth != null ? Number(stock.revenue_growth) : null;
-              const pct52w   = stock.pct_above_52w_low != null ? Number(stock.pct_above_52w_low) : null;
-              const penalty  = stock.quality_penalty ?? 0;
-
-              const fcfDisplay = !isNaN(fcfYield) ? (fcfYield * 100).toFixed(2) + "%" : "—";
-              const roaDisplay = !isNaN(roa) ? (roa * 100).toFixed(1) + "%" : "—";
-              const revDisplay = revGr != null && !isNaN(revGr)
-                ? (revGr >= 0 ? "+" : "") + (revGr * 100).toFixed(1) + "%" : "—";
-              const pct52wDisplay = pct52w != null
-                ? "+" + pct52w.toFixed(1) + "%" : "—";
+              const tjl        = g.tjl || {};
+              const badge      = TJL_BADGES[tjl.result] || { label: "—", color: "#475569", title: "TJL not evaluated" };
+              const fmtPx = v => v == null ? "—" : "$" + Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
               return (
-                <tr key={stock.ticker}
-                  style={{ borderBottom: "1px solid rgba(255,255,255,0.03)", transition: "background .15s" }}
+                <tr key={g.symbol}
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.03)", transition: "background .15s", background: tjl.result === "PASS" ? "rgba(52,211,153,0.05)" : "" }}
                   onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
-                  onMouseLeave={e => e.currentTarget.style.background = ""}>
+                  onMouseLeave={e => e.currentTarget.style.background = tjl.result === "PASS" ? "rgba(52,211,153,0.05)" : ""}>
 
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#334155", fontSize: 10 }}>
-                    {stock.rank_overall ?? "—"}
-                  </td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#334155", fontSize: 10 }}>{g.rank ?? "—"}</td>
 
-                  <td onClick={e => onTickerClick(stock.ticker, e.currentTarget.getBoundingClientRect())}
+                  <td onClick={e => onTickerClick(g.symbol, e.currentTarget.getBoundingClientRect())}
                     style={{ padding: isMobile ? "8px 4px" : "12px 8px", cursor: "pointer" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ fontWeight: 700, color: "#f1f5f9" }}>{stock.ticker}</span>
-                      {penalty > 0 && (
-                        <span title={`Quality penalty: ${penalty} flag${penalty > 1 ? "s" : ""}`}
-                          style={{ fontSize: 9, color: "#f87171", fontWeight: 700 }}>
-                          {"⚑".repeat(penalty)}
-                        </span>
-                      )}
-                    </div>
-                    {stock.sector && <div style={{ fontSize: 9, color: "#475569", marginTop: 1 }}>{stock.sector}</div>}
+                    <span style={{ fontWeight: 700, color: "#f1f5f9" }}>{g.symbol}</span>
                     {change !== undefined && (
                       <div style={{ fontSize: 9, color: change >= 0 ? "#34d399" : "#f87171" }}>
                         {change >= 0 ? "+" : ""}{change}%
@@ -1462,39 +1215,24 @@ function MultibaggerPanel({ prices, scannerPool, isAdmin, onSaveScanner, onTicke
                     )}
                   </td>
 
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#e2e8f0", fontWeight: 600 }}>{priceStr}</td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#cbd5e1" }}>{marketCapStr}</td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#e2e8f0", fontWeight: 600 }}>{fmtPx(livePrice)}</td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#34d399", fontWeight: 700 }}>+{Number(g.gap_pct).toFixed(1)}%</td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#cbd5e1" }}>{fmtVol(g.premarket_volume)}</td>
 
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: !isNaN(fcfYield) && fcfYield > 0.08 ? "#34d399" : "#cbd5e1" }}>
-                    {fcfDisplay}
-                  </td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#cbd5e1" }}>
-                    {!isNaN(bm) ? bm.toFixed(3) : "—"}
-                  </td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: !isNaN(roa) && roa < 0 ? "#f87171" : "#cbd5e1" }}>
-                    {roaDisplay}
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#94a3b8", maxWidth: isMobile ? 120 : 260 }} title={g.catalyst || undefined}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.catalyst || "—"}</div>
                   </td>
 
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: revGr != null && revGr > 0 ? "#34d399" : revGr != null && revGr < -0.1 ? "#f87171" : "#cbd5e1" }}>
-                    {revDisplay}
-                  </td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#cbd5e1" }}>{fmtPx(tjl.prev_daily_high)}</td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#cbd5e1" }}>{fmtPx(tjl.sma200)}</td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#cbd5e1" }}>{fmtPx(tjl.pmh)}</td>
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "#cbd5e1" }}>{fmtPx(tjl.today_hod)}</td>
 
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: get52wColor(pct52w), fontWeight: pct52w != null && pct52w <= 20 ? 700 : 400 }}>
-                    {pct52wDisplay}
+                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", textAlign: "right" }}>
+                    <span title={badge.title} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: badge.color, background: badge.color + "18", border: `1px solid ${badge.color}55`, borderRadius: 4, padding: "2px 8px", whiteSpace: "nowrap" }}>
+                      {badge.label}
+                    </span>
                   </td>
-
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", textAlign: "right", fontWeight: 800, color: getScoreColor(score * 100), fontSize: 13 }}>
-                    {!isNaN(score) ? (score * 100).toFixed(1) : "—"}
-                  </td>
-
-                  {isAdmin && (
-                    <td style={{ textAlign: "right" }}>
-                      <button onClick={() => removeTicker(stock.ticker)}
-                        style={{ background: "none", border: "none", color: "#334155", cursor: "pointer", fontSize: 16, transition: "color .15s" }}
-                        onMouseEnter={e => e.currentTarget.style.color = "#ef4444"}
-                        onMouseLeave={e => e.currentTarget.style.color = "#334155"}>×</button>
-                    </td>
-                  )}
                 </tr>
               );
             })}
@@ -1541,6 +1279,7 @@ const GLOBAL_STYLES = `
   .bottom-grid-all { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   .span-2 { grid-column: span 2; }
   .span-1 { grid-column: span 1; }
+  .span-3 { grid-column: 1 / -1; }
   .panel-wrapper { position: relative; height: 600px; min-height: 600px; }
   .panel-inner { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
   .watchlist-wrapper { position: relative; height: 100%; min-height: 400px; }
@@ -2001,15 +1740,10 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 3 & 4. Keep fixed heights for the bottom row */}
-              <div className="span-1 panel-wrapper">
+              {/* 3. Pre-market Gap Scanner spans the full bottom row */}
+              <div className="span-3 panel-wrapper">
                 <div className="panel-inner">
-                  <DonutChart prices={prices} capexData={liveCapexData} capexIntel={capexIntel} capexIntelStatus={capexIntelStatus} capexIntelError={capexIntelError} timeline={timeline} />
-                </div>
-              </div>
-              <div className="span-2 panel-wrapper">
-                <div className="panel-inner">
-                  <MultibaggerPanel prices={prices} scannerPool={scannerPool} isAdmin={isAdmin} onSaveScanner={saveGlobalScanner} onTickerClick={openPopup} />
+                  <GapScannerPanel prices={prices} onTickerClick={openPopup} />
                 </div>
               </div>
             </div>
