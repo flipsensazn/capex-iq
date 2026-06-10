@@ -52,6 +52,7 @@ export function useDashboardData({
   const [capexIntelStatus, setCapexIntelStatus] = useState("idle");
   const [capexIntelError, setCapexIntelError] = useState(null);
   const [newsFeed, setNewsFeed] = useState([]);
+  const [stressData, setStressData] = useState({});
   const [prices, setPrices] = useState({});
   const pricesRef = useRef({});
   const capexDataRef = useRef(defaultCapexData);
@@ -105,6 +106,13 @@ export function useDashboardData({
         setCapexIntelStatus("error");
         setCapexIntelError(e.name === "AbortError" ? "Request timed out — Gemini took too long" : (e.message || "Network error"));
       });
+
+    fetch("/stress")
+      .then(res => res.json())
+      .then(json => {
+        if (json.success && json.data) setStressData(json.data);
+      })
+      .catch(() => {});
 
     fetch("/shortlist")
       .then(res => res.json())
@@ -239,6 +247,7 @@ export function useDashboardData({
     capexIntelStatus,
     capexIntelError,
     newsFeed,
+    stressData,
     prices,
     pricesRef,
     marketData,

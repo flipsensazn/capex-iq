@@ -1,0 +1,56 @@
+name: Weekly Transcript Stress ETL
+
+on:
+  schedule:
+    # Saturday 12:00 UTC — after the week's earnings calls, transcripts have
+    # had a few days to be published by the providers
+    - cron: '0 12 * * 6'
+
+  # Manual trigger for testing / backfills
+  workflow_dispatch:
+    inputs:
+      ticker_limit:
+        description: 'Limit run to first N tickers (testing)'
+        required: false
+        default: ''
+
+jobs:
+  run-transcript-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # ~90 tickers × (provider + Gemini pauses) fits comfortably
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install requests psycopg2-binary defeatbeta-api
+
+      - name: Run Transcript Stress ETL
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+          # Transcripts come from defeatbeta-api (free, no key). These two are
+          # OPTIONAL paid fallbacks for tickers defeatbeta doesn't carry:
+          API_NINJAS_KEY:       ${{ secrets.API_NINJAS_KEY }}
+          EARNINGSCALL_API_KEY: ${{ secrets.EARNINGSCALL_API_KEY }}
+          WATCHLIST_BASE_URL:   ${{ vars.WATCHLIST_BASE_URL }}
+          TICKER_LIMIT:         ${{ github.event.inputs.ticker_limit }}
+        run: python src/transcript_stress.py
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -s -X POST "$SLACK_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d '{"text":"⚠️ Wizzles Watchlist transcript-stress ETL failed — check the GitHub Actions log for details."}'
+          fi

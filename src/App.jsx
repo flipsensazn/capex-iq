@@ -1345,6 +1345,7 @@ export default function App() {
     capexIntelStatus,
     capexIntelError,
     newsFeed,
+    stressData,
     prices,
     pricesRef,
     marketData,
@@ -1498,6 +1499,44 @@ export default function App() {
       }),
     };
   }, [capexData, capexIntel]);
+
+  // Aggregate per-ticker transcript stress (GET /stress) up to each subsector:
+  // score = avg of member companies' latest scores, trend = avg QoQ delta,
+  // companies sorted most-stressed first for the drilldown.
+  const subsectorStress = useMemo(() => {
+    const out = {};
+    if (!stressData || !Object.keys(stressData).length) return out;
+    for (const track of liveCapexData.tracks) {
+      for (const sub of track.subsectors) {
+        const companies = [];
+        for (const ticker of sub.tickers) {
+          const latest = stressData[ticker]?.latest;
+          if (!latest || latest.stressScore == null) continue;
+          const prevScore = stressData[ticker]?.prev?.stressScore;
+          companies.push({
+            ticker,
+            score:     latest.stressScore,
+            delta:     prevScore != null ? latest.stressScore - prevScore : null,
+            direction: latest.direction,
+            summary:   latest.summary,
+            quotes:    latest.quotes ?? [],
+            fy:        latest.fiscalYear,
+            fq:        latest.fiscalQuarter,
+          });
+        }
+        if (!companies.length) continue;
+        companies.sort((a, b) => b.score - a.score);
+        const deltas = companies.filter(c => c.delta != null);
+        out[`${track.id}:${sub.id}`] = {
+          score: companies.reduce((s, c) => s + c.score, 0) / companies.length,
+          trend: deltas.length ? deltas.reduce((s, c) => s + c.delta, 0) / deltas.length : null,
+          count: companies.length,
+          companies,
+        };
+      }
+    }
+    return out;
+  }, [stressData, liveCapexData]);
 
   const liveTotal = useMemo(() => {
     if (capexIntelStatus === "success" && capexIntel?.totalCapexDerived) {
@@ -1714,8 +1753,9 @@ export default function App() {
           </div>
 
           {activeData && (
-            <TrackPane 
-              track={activeData} prices={prices} isAdmin={isAdmin} 
+            <TrackPane
+              track={activeData} prices={prices} isAdmin={isAdmin}
+              stressBySub={subsectorStress}
               onAddTicker={addTickerToSubsector} onRemoveTicker={removeTickerFromSubsector} onTickerClick={openPopup} 
               onAddSubsector={addSubsector}
               onRemoveSubsector={removeSubsector}

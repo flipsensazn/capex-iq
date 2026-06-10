@@ -3,6 +3,7 @@ import SubsectorCard from "./SubsectorCard";
 export default function TrackPane({
   track,
   prices,
+  stressBySub = {},
   isAdmin,
   onAddTicker,
   onRemoveTicker,
@@ -30,6 +31,7 @@ export default function TrackPane({
             key={sub.id}
             sub={sub}
             prices={prices}
+            stress={stressBySub[`${track.id}:${sub.id}`]}
             isAdmin={isAdmin}
             onAddTicker={ticker => onAddTicker(track.id, sub.id, ticker)}
             onRemoveTicker={ticker => onRemoveTicker(track.id, sub.id, ticker)}

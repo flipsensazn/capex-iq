@@ -1,9 +1,11 @@
 import { useState } from "react";
 import TickerChip from "./TickerChip";
+import StressBadge, { StressDetail } from "./StressBadge";
 
 export default function SubsectorCard({
   sub,
   prices,
+  stress,
   isAdmin,
   onAddTicker,
   onRemoveTicker,
@@ -14,9 +16,11 @@ export default function SubsectorCard({
   Badge,
 }) {
   const [open, setOpen] = useState(false);
+  const [stressOpen, setStressOpen] = useState(false);
   const [addingTicker, setAddingTicker] = useState(false);
   const [newTicker, setNewTicker] = useState("");
-  const isBottleneck = sub.badge === "EXTREME BOTTLENECK" || sub.badge === "GRID BOTTLENECK";
+  // Bottleneck styling fires from the hand-curated badge OR live transcript stress
+  const isBottleneck = sub.badge === "EXTREME BOTTLENECK" || sub.badge === "GRID BOTTLENECK" || (stress?.score ?? 0) >= 70;
   const isHot = sub.badge === "HIGH DEMAND" || sub.badge === "RAPID GROWTH";
 
   function handleAdd() {
@@ -48,6 +52,7 @@ export default function SubsectorCard({
           textStyles={{ fontSize: 12, fontWeight: 600, color: "#cbd5e1", lineHeight: 1.4 }}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <StressBadge stress={stress} open={stressOpen} onClick={() => setStressOpen(v => !v)} />
           {sub.badge && <Badge text={sub.badge} color={sub.badgeColor} />}
           {isAdmin && (
             <button
@@ -95,6 +100,16 @@ export default function SubsectorCard({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {stress && (
+        <div>
+          <button onClick={() => setStressOpen(v => !v)} style={{ background: "none", border: "none", color: "#64748b", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, padding: 0, fontFamily: "inherit" }}>
+            <span style={{ display: "inline-block", transition: "transform .2s", transform: stressOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+            Transcript Stress Signals ({stress.count})
+          </button>
+          {stressOpen && <StressDetail stress={stress} onTickerClick={onTickerClick} />}
         </div>
       )}
 
