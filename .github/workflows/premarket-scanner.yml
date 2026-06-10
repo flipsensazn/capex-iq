@@ -1,0 +1,55 @@
+name: Premarket Scanner
+
+# All crons are UTC. The morning job fires at both 12:30 and 13:30 UTC and
+# run_morning.py keeps only the one that is 8:30am ET (DST-proof); it also
+# skips market holidays. The intraday job fires every 30 min across a wide
+# UTC window and tjl_scan.py --guarded keeps only 10:00am-2:00pm ET fires.
+on:
+  schedule:
+    - cron: "30 12 * * 1-5"      # 8:30am ET during daylight saving
+    - cron: "30 13 * * 1-5"      # 8:30am ET during standard time
+    - cron: "0,30 14-19 * * 1-5" # intraday TJL reruns (guarded to 10-14 ET)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which pipeline to run"
+        required: true
+        type: choice
+        options: [morning, intraday]
+
+permissions:
+  contents: read
+
+env:
+  GAP_SCANNER_URL: https://wizzles-watchlist.pages.dev/gap-scanner
+  ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+jobs:
+  morning:
+    if: >-
+      github.event.schedule == '30 12 * * 1-5' ||
+      github.event.schedule == '30 13 * * 1-5' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'morning')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run morning pipeline (gappers + TJL)
+        # Manual dispatches bypass the 8:30am ET window/holiday guard
+        run: python3 scanner/run_morning.py
+        env:
+          FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+
+  intraday:
+    if: >-
+      github.event.schedule == '0,30 14-19 * * 1-5' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'intraday')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run TJL intraday re-evaluation
+        # Manual dispatches run unguarded so they work outside the window
+        run: python3 scanner/tjl_scan.py ${{ github.event_name == 'schedule' && '--guarded' || '' }}

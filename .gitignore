@@ -4,3 +4,9 @@ dist
 .wrangler
 .env
 .env.*
+
+# Scanner output artifacts (ephemeral on CI, local runs only)
+scanner/premarket_gappers_*.json
+scanner/tjl_gap_scan_*.json
+scanner/gap_scanner_config.json
+scanner/__pycache__/
