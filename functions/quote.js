@@ -69,6 +69,10 @@ export async function onRequest(context) {
     "Cache-Control": "public, max-age=300, s-maxage=300"
   };
 
+  // Errors must NEVER be cached: a transient Yahoo session failure that gets
+  // edge-cached for 5 minutes pins "no data" on that ticker for every retry.
+  const errHeaders = { ...headers, "Cache-Control": "no-store" };
+
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -80,7 +84,7 @@ export async function onRequest(context) {
   const ticker = searchParams.get("ticker");
 
   if (!ticker) {
-    return new Response(JSON.stringify({ error: "No ticker provided" }), { status: 400, headers });
+    return new Response(JSON.stringify({ error: "No ticker provided" }), { status: 400, headers: errHeaders });
   }
 
   try {
@@ -105,12 +109,26 @@ export async function onRequest(context) {
       if (env.SHARED_DATA) {
         try { await env.SHARED_DATA.delete(KV_CRUMB_KEY); } catch {}
       }
-      return new Response(JSON.stringify({ error: "Yahoo session expired, please retry" }), { status: 503, headers });
+      return new Response(JSON.stringify({ error: "Yahoo session expired, please retry" }), { status: 503, headers: errHeaders });
     }
 
     const quoteData = await quoteRes.json();
     const chartData = await chartRes.json();
     const newsData  = await newsRes.json();
+
+    // Yahoo sometimes returns 200 with an empty/error quoteSummary when the
+    // session is stale. Treat that as a session failure too — evict the crumb
+    // and answer uncacheable so the client's retry gets a fresh attempt
+    // instead of a 5-minute edge-cached empty payload.
+    if (!quoteData?.quoteSummary?.result?.length) {
+      if (env.SHARED_DATA) {
+        try { await env.SHARED_DATA.delete(KV_CRUMB_KEY); } catch {}
+      }
+      return new Response(
+        JSON.stringify({ error: "Yahoo returned no data, please retry", detail: quoteData?.quoteSummary?.error ?? null }),
+        { status: 503, headers: errHeaders }
+      );
+    }
 
     // Merge responses into a single payload
     return new Response(JSON.stringify({
@@ -120,6 +138,6 @@ export async function onRequest(context) {
     }), { status: 200, headers });
 
   } catch (err) {
-    return new Response(JSON.stringify({ error: "Fetch failed" }), { status: 500, headers });
+    return new Response(JSON.stringify({ error: "Fetch failed" }), { status: 500, headers: errHeaders });
   }
 }

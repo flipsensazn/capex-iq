@@ -69,7 +69,7 @@ const quoteCache = {};
 const QUOTE_CACHE_TTL = 5 * 60 * 1000;
 const QUOTE_CACHE_MAX = 50;
 
-async function fetchQuoteSummary(ticker) {
+async function fetchQuoteSummary(ticker, attempt = 0) {
   const now = Date.now();
   if (quoteCache[ticker] && (now - quoteCache[ticker].timestamp < QUOTE_CACHE_TTL)) {
     return quoteCache[ticker].data;
@@ -83,7 +83,15 @@ async function fetchQuoteSummary(ticker) {
     const r = payload?.quoteSummary?.result?.[0];
     const chartResult = payload?.chart?.result?.[0];
     const newsResult = payload?.news;
-    if (!r) return null;
+    if (!r) {
+      // Transient Yahoo-session blip on the server (now answered uncacheable)
+      // — one retry after a short pause usually lands on a fresh session.
+      if (attempt < 1) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        return fetchQuoteSummary(ticker, attempt + 1);
+      }
+      return null;
+    }
 
     const profile = r.assetProfile ?? {};
     const detail  = r.summaryDetail ?? {};
