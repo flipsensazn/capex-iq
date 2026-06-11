@@ -54,6 +54,7 @@ export function useDashboardData({
   const [newsFeed, setNewsFeed] = useState([]);
   const [stressData, setStressData] = useState({});
   const [gaugesData, setGaugesData] = useState({});
+  const [exposureData, setExposureData] = useState({});
   const [prices, setPrices] = useState({});
   const pricesRef = useRef({});
   const capexDataRef = useRef(defaultCapexData);
@@ -119,6 +120,13 @@ export function useDashboardData({
       .then(res => res.json())
       .then(json => {
         if (json.success && json.data) setGaugesData(json.data);
+      })
+      .catch(() => {});
+
+    fetch("/exposure")
+      .then(res => res.json())
+      .then(json => {
+        if (json.success && json.data) setExposureData(json.data);
       })
       .catch(() => {});
 
@@ -257,6 +265,7 @@ export function useDashboardData({
     newsFeed,
     stressData,
     gaugesData,
+    exposureData,
     prices,
     pricesRef,
     marketData,

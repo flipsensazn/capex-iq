@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   GRAPH_NODES, GRAPH_EDGES, LAYERS,
-  computeStrength, propagate, reachable, neighbors,
+  computeStrength, propagate, reachable, neighbors, enrichEdges,
 } from "./supplyGraphData";
 
 // Supply-chain dependency graph. Edges run supplier → customer; nodes light
@@ -31,8 +31,13 @@ const DIR_LABEL = {
   both: "constrained both sides",
 };
 
-export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices = {}, onTickerClick }) {
+export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposureData = {}, prices = {}, onTickerClick }) {
   const [selected, setSelected] = useState(null);
+
+  // Edges upgraded with filed customer-concentration percentages where a
+  // disclosed, named customer matches — these carry "(filed)" facts in the
+  // UI and override curated criticality in the propagation weight.
+  const edges = useMemo(() => enrichEdges(GRAPH_EDGES, exposureData), [exposureData]);
 
   const { positions, width, height } = useMemo(() => {
     const byLayer = LAYERS.map(() => []);
@@ -51,15 +56,15 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices =
   }, []);
 
   const strength = useMemo(() => computeStrength(GRAPH_NODES, stressData, gaugesData), [stressData, gaugesData]);
-  const risk = useMemo(() => propagate(GRAPH_NODES, GRAPH_EDGES, strength), [strength]);
+  const risk = useMemo(() => propagate(GRAPH_NODES, edges, strength), [edges, strength]);
 
   const highlight = useMemo(() => {
     if (!selected) return null;
     return {
-      down: reachable(GRAPH_EDGES, selected, "down"),
-      up: reachable(GRAPH_EDGES, selected, "up"),
+      down: reachable(edges, selected, "down"),
+      up: reachable(edges, selected, "up"),
     };
-  }, [selected]);
+  }, [edges, selected]);
 
   const topBottlenecks = useMemo(() =>
     GRAPH_NODES
@@ -70,7 +75,8 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices =
     [strength]);
 
   const selNode = GRAPH_NODES.find(n => n.id === selected);
-  const selNbrs = selected ? neighbors(GRAPH_EDGES, selected) : null;
+  const selNbrs = selected ? neighbors(edges, selected) : null;
+  const selExposure = selected ? exposureData[selected] : null;
 
   function edgeState(e) {
     if (!selected) return "idle";
@@ -95,7 +101,8 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices =
           <span style={{ fontSize: 14 }}>🕸</span> Supply Chain Dependency Graph
         </div>
         <div style={{ fontSize: 10, color: "#475569" }}>
-          supplier → customer · click a node to trace its cone · {GRAPH_NODES.length} nodes / {GRAPH_EDGES.length} edges
+          supplier → customer · click a node to trace its cone · {GRAPH_NODES.length} nodes / {edges.length} edges
+          {edges.some(e => e.exposurePct != null) && ` · ${edges.filter(e => e.exposurePct != null).length} with filed exposure`}
         </div>
       </div>
 
@@ -125,23 +132,25 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices =
           ))}
 
           {/* edges under nodes */}
-          {GRAPH_EDGES.map((e, i) => {
+          {edges.map((e, i) => {
             const a = positions[e.from], b = positions[e.to];
             if (!a || !b) return null;
             const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2;
             const x2 = b.x, y2 = b.y + NODE_H / 2;
             const mx = (x1 + x2) / 2;
             const state = edgeState(e);
+            const filed = e.exposurePct != null;
             const stroke =
               state === "active" ? "#e2e8f0" :
               state === "down" ? "#ef4444" :
               state === "up" ? "#60a5fa" :
-              "rgba(148,163,184,0.10)";
-            const w = state === "idle" ? 0.8 : state === "dim" ? 0.4 : e.criticality * 0.7 + 0.6;
+              filed ? "rgba(125,211,252,0.22)" : "rgba(148,163,184,0.10)";
+            const w = state === "idle" ? (filed ? 1.1 : 0.8) : state === "dim" ? 0.4 : e.criticality * 0.7 + 0.6;
             return (
               <path key={i} d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
                 fill="none" stroke={state === "dim" ? "rgba(148,163,184,0.04)" : stroke} strokeWidth={w}>
-                <title>{`${e.from} → ${e.to}: ${e.what} (criticality ${e.criticality})`}</title>
+                <title>{`${e.from} → ${e.to}: ${e.what} (criticality ${e.criticality})` +
+                  (filed ? `\nFILED: ${e.exposurePct}% of ${e.from} revenue (${e.exposurePeriod || e.exposureForm})` : "")}</title>
               </path>
             );
           })}
@@ -190,6 +199,7 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices =
         <span><span style={{ color: "#fbbf24" }}>⚠</span> inherited supply risk</span>
         <span><span style={{ color: "#ef4444" }}>━</span> downstream of selection</span>
         <span><span style={{ color: "#60a5fa" }}>━</span> upstream suppliers</span>
+        <span><span style={{ color: "#7dd3fc" }}>━</span> filed revenue exposure (10-K/10-Q)</span>
       </div>
 
       {/* detail panel */}
@@ -233,6 +243,22 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices =
                 {gaugesData[selected].inventoryDays != null && <> · inv days {gaugesData[selected].inventoryDays.toFixed(0)}</>}
               </div>
             )}
+            {selExposure?.customers?.length > 0 && (
+              <div style={{ color: "#7dd3fc" }}>
+                Filed concentration:{" "}
+                {selExposure.customers.filter(c => c.basis === "revenue").slice(0, 5).map((c, i) => (
+                  <span key={i} title={c.quote || ""}>
+                    {i > 0 && " · "}
+                    {c.ticker ? (
+                      <span onClick={() => setSelected(c.ticker)} style={{ fontWeight: 700, cursor: "pointer" }}>{c.ticker}</span>
+                    ) : (
+                      <span style={{ color: "#94a3b8" }}>{c.label}</span>
+                    )}
+                    {" "}{c.pct.toFixed(0)}% of rev{c.period ? ` (${c.period})` : ""}
+                  </span>
+                ))}
+              </div>
+            )}
             {risk[selected]?.contributors?.length > 0 && (
               <div>
                 At risk via:{" "}
@@ -253,15 +279,19 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, prices =
               <div key={title} style={{ minWidth: 200, flex: 1 }}>
                 <div style={{ fontSize: 9.5, color: "#475569", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>{title} ({list.length})</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  {list.sort((a, b) => b.criticality - a.criticality).map((e, i) => {
+                  {list.sort((a, b) => (b.exposurePct ?? 0) - (a.exposurePct ?? 0) || b.criticality - a.criticality).map((e, i) => {
                     const other = pick(e);
                     const oc = nodeColor(strength[other] ?? 0, risk[other]?.score ?? 0);
                     return (
                       <div key={i} style={{ fontSize: 10.5, color: "#94a3b8" }}>
                         <span onClick={() => setSelected(other)} style={{ color: oc === "#334155" ? "#cbd5e1" : oc, fontWeight: 700, cursor: "pointer" }}>{other}</span>
                         <span style={{ color: "#64748b" }}> — {e.what}</span>
-                        {e.criticality === 3 && <span style={{ color: "#ef4444" }}> ●●●</span>}
-                        {e.criticality === 2 && <span style={{ color: "#f59e0b" }}> ●●</span>}
+                        {e.exposurePct != null && (
+                          <span title={`${e.exposureQuote || ""}\n(${e.exposureForm}${e.exposurePeriod ? `, ${e.exposurePeriod}` : ""})`}
+                            style={{ color: "#7dd3fc", fontWeight: 700 }}> {e.exposurePct.toFixed(0)}% of {e.from} rev (filed)</span>
+                        )}
+                        {e.exposurePct == null && e.criticality === 3 && <span style={{ color: "#ef4444" }}> ●●●</span>}
+                        {e.exposurePct == null && e.criticality === 2 && <span style={{ color: "#f59e0b" }}> ●●</span>}
                       </div>
                     );
                   })}

@@ -1348,6 +1348,7 @@ export default function App() {
     newsFeed,
     stressData,
     gaugesData,
+    exposureData,
     prices,
     pricesRef,
     marketData,
@@ -1771,6 +1772,7 @@ export default function App() {
           <SupplyGraph
             stressData={stressData}
             gaugesData={gaugesData}
+            exposureData={exposureData}
             prices={prices}
             onTickerClick={openPopup}
           />

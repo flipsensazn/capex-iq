@@ -1,0 +1,52 @@
+name: Monthly Customer Exposure ETL
+
+on:
+  schedule:
+    # 2nd day of each month, 13:00 UTC — 10-Ks/10-Qs are annual/quarterly,
+    # monthly refresh keeps the latest filings covered
+    - cron: '0 13 2 * *'
+
+  # Manual trigger for testing / backfills
+  workflow_dispatch:
+    inputs:
+      ticker_limit:
+        description: 'Limit run to first N tickers (testing)'
+        required: false
+        default: ''
+
+jobs:
+  run-customer-exposure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # ~90 tickers × (2 filings + Gemini pauses)
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install requests psycopg2-binary
+
+      - name: Run Customer Exposure ETL
+        env:
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          WATCHLIST_BASE_URL: ${{ vars.WATCHLIST_BASE_URL }}
+          TICKER_LIMIT:       ${{ github.event.inputs.ticker_limit }}
+        run: python src/customer_exposure.py
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -s -X POST "$SLACK_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d '{"text":"⚠️ Wizzles Watchlist customer-exposure ETL failed — check the GitHub Actions log for details."}'
+          fi
