@@ -1513,9 +1513,13 @@ export default function App() {
         };
         saveTarget(newData);
       }
-      setCandidates(prev => prev.map(c => c.ticker === candidate.ticker
-        ? { ...c, status: action, reviewedAt: new Date().toISOString() }
-        : c));
+      // Approved tickers leave the queue immediately (they now live on the
+      // map); rejected ones stay briefly, dimmed, as a reminder.
+      setCandidates(prev => action === "approved"
+        ? prev.filter(c => c.ticker !== candidate.ticker)
+        : prev.map(c => c.ticker === candidate.ticker
+            ? { ...c, status: action, reviewedAt: new Date().toISOString() }
+            : c));
       showNotice(`${candidate.ticker} ${action}${action === "approved" ? " — added to the map" : ""}`, "success");
     } catch (err) {
       showNotice(err.message || "Review failed");
