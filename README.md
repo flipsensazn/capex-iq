@@ -23,6 +23,19 @@ Configure these Cloudflare environment variables as needed:
 - `GEMINI_API_KEY`
 - `SHARED_DATA` KV binding
 
+## Musk Galaxy view
+
+A second view (tab at the top, or `#musk` in the URL) tracking capex flow and
+supply-chain dependency for Elon Musk's companies — Tesla, SpaceX/Starlink,
+xAI, the Terafab project, Boring, Neuralink. Same machinery as the AI view:
+a Sankey fed by search-grounded `/musk-intel` (private-company capex from
+public reporting; only TSLA carries live prices), a KV-backed editable map
+(`/musk-capex`, dataset defaults in
+`src/components/capex-map/muskData.js`), and a dedicated dependency graph
+with the same stress propagation. Musk-map tickers are automatically unioned
+into the weekly transcript/XBRL/exposure scan universe, so STRESS and BKLG
+badges light up on Musk sub-sectors with no extra setup.
+
 ## Bottleneck Scout (AI candidate discovery)
 
 `src/bottleneck_scout.py` (run weekly by `.github/workflows/bottleneck-scout.yml`)

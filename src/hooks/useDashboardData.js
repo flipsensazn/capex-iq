@@ -39,6 +39,7 @@ function mergePriceEntries(prev, incoming) {
 export function useDashboardData({
   defaultScannerPool,
   defaultCapexData,
+  defaultMuskData,
   indexTickers,
   cryptoTickers,
   hyperscalerTickers,
@@ -56,9 +57,13 @@ export function useDashboardData({
   const [gaugesData, setGaugesData] = useState({});
   const [exposureData, setExposureData] = useState({});
   const [candidates, setCandidates] = useState([]);
+  const [muskCapexData, setMuskCapexData] = useState(defaultMuskData);
+  const [muskIntel, setMuskIntel] = useState(null);
+  const [muskIntelStatus, setMuskIntelStatus] = useState("idle");
   const [prices, setPrices] = useState({});
   const pricesRef = useRef({});
   const capexDataRef = useRef(defaultCapexData);
+  const muskDataRef = useRef(defaultMuskData);
   const scannerPoolRef = useRef(defaultScannerPool);
   const shortListRef = useRef([]);
   const [marketData, setMarketData] = useState({});
@@ -85,6 +90,29 @@ export function useDashboardData({
         }
       })
       .catch(() => {});
+
+    fetch("/musk-capex")
+      .then(res => res.json())
+      .then(data => {
+        if (data.capexData && (data.capexData.version ?? 0) >= (defaultMuskData?.version ?? 1)) {
+          setMuskCapexData(data.capexData);
+          muskDataRef.current = data.capexData;
+        }
+      })
+      .catch(() => {});
+
+    setMuskIntelStatus("loading");
+    fetch("/musk-intel")
+      .then(res => res.json())
+      .then(data => {
+        if (!data.error && data.allocations?.length) {
+          setMuskIntel(data);
+          setMuskIntelStatus("success");
+        } else {
+          setMuskIntelStatus("error");
+        }
+      })
+      .catch(() => setMuskIntelStatus("error"));
 
     setCapexIntelStatus("loading");
     const intelController = new AbortController();
@@ -180,6 +208,10 @@ export function useDashboardData({
   }, [capexData]);
 
   useEffect(() => {
+    muskDataRef.current = muskCapexData;
+  }, [muskCapexData]);
+
+  useEffect(() => {
     scannerPoolRef.current = scannerPool;
   }, [scannerPool]);
 
@@ -192,6 +224,7 @@ export function useDashboardData({
     const marketTickers = [...indexTickers, ...cryptoTickers, ...hyperscalerTickers];
     const allTickers = [...new Set([
       ...getAllTickers(capexDataRef.current),
+      ...(muskDataRef.current ? getAllTickers(muskDataRef.current) : []),
       ...scannerPoolRef.current,
       ...shortListRef.current,
       ...marketTickers,
@@ -263,6 +296,10 @@ export function useDashboardData({
     exposureData,
     candidates,
     setCandidates,
+    muskCapexData,
+    setMuskCapexData,
+    muskIntel,
+    muskIntelStatus,
     prices,
     pricesRef,
     marketData,

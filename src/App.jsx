@@ -9,6 +9,7 @@ import TopBar from "./components/TopBar";
 import SupplyGraph from "./components/capex-map/SupplyGraph";
 import TrackCard from "./components/capex-map/TrackCard";
 import TrackPane from "./components/capex-map/TrackPane";
+import { MUSK_CAPEX_DATA, MUSK_COMPANIES, MUSK_GRAPH_NODES, MUSK_GRAPH_EDGES, MUSK_LAYERS } from "./components/capex-map/muskData";
 import { useAdminActions } from "./hooks/useAdminActions";
 import { useDashboardData } from "./hooks/useDashboardData";
 import { usePresence } from "./hooks/usePresence";
@@ -1332,6 +1333,15 @@ export default function App() {
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [appNotice, setAppNotice] = useState(null);
 
+  // "ai" = hyperscaler capex flow · "musk" = the Musk Galaxy view
+  const [view, setView] = useState(() => (window.location.hash === "#musk" ? "musk" : "ai"));
+  const isMusk = view === "musk";
+  function switchView(next) {
+    setView(next);
+    setActiveTrack(null);
+    window.location.hash = next === "musk" ? "musk" : "";
+  }
+
   const [activeTrack, setActiveTrack] = useState(null);
   const [timeline, setTimeline] = useState("1D");
   const [activeFilter, setActiveFilter] = useState(null);
@@ -1354,6 +1364,10 @@ export default function App() {
     exposureData,
     candidates,
     setCandidates,
+    muskCapexData,
+    setMuskCapexData,
+    muskIntel,
+    muskIntelStatus,
     prices,
     pricesRef,
     marketData,
@@ -1366,6 +1380,7 @@ export default function App() {
   } = useDashboardData({
     defaultScannerPool: DEFAULT_MULTIBAGGER,
     defaultCapexData: CAPEX_DATA,
+    defaultMuskData: MUSK_CAPEX_DATA,
     indexTickers: INDEX_TICKERS,
     cryptoTickers: CRYPTO_TICKERS,
     hyperscalerTickers: HYPERSCALER_TICKERS,
@@ -1384,6 +1399,7 @@ export default function App() {
     saveGlobalScanner,
     saveGlobalShortlist,
     saveGlobalCapex,
+    saveGlobalMuskCapex,
   } = useAdminActions({
     adminPassword,
     setAdminPassword,
@@ -1391,10 +1407,15 @@ export default function App() {
     setScannerPool,
     setShortList,
     setCapexData,
+    setMuskCapexData,
     shortListRef,
     showNotice,
     refresh,
   });
+
+  // Admin map edits operate on whichever view is active.
+  const activeMapData = isMusk ? muskCapexData : capexData;
+  const saveActiveMap = isMusk ? saveGlobalMuskCapex : saveGlobalCapex;
 
   useEffect(() => {
     if (!appNotice) return;
@@ -1413,8 +1434,8 @@ export default function App() {
     const sym = ticker.trim().toUpperCase();
     if (!sym) return;
     const newData = {
-      ...capexData,
-      tracks: capexData.tracks.map(track =>
+      ...activeMapData,
+      tracks: activeMapData.tracks.map(track =>
         track.id !== trackId ? track : {
           ...track,
           subsectors: track.subsectors.map(sub =>
@@ -1426,13 +1447,13 @@ export default function App() {
         }
       ),
     };
-    saveGlobalCapex(newData);
+    saveActiveMap(newData);
   }
 
   function removeTickerFromSubsector(trackId, subsectorId, ticker) {
     const newData = {
-      ...capexData,
-      tracks: capexData.tracks.map(track =>
+      ...activeMapData,
+      tracks: activeMapData.tracks.map(track =>
         track.id !== trackId ? track : {
           ...track,
           subsectors: track.subsectors.map(sub =>
@@ -1444,7 +1465,7 @@ export default function App() {
         }
       ),
     };
-    saveGlobalCapex(newData);
+    saveActiveMap(newData);
   }
 
   // Bottleneck Scout review: mark the candidate in the DB; on approval also
@@ -1501,62 +1522,68 @@ export default function App() {
     const newId = `sub-${Date.now()}`;
     const newSub = { id: newId, label: "New Sub-Sector", tickers: [], materials: [] };
     const newData = {
-      ...capexData,
-      tracks: capexData.tracks.map(t => t.id === trackId ? { ...t, subsectors: [...t.subsectors, newSub] } : t)
+      ...activeMapData,
+      tracks: activeMapData.tracks.map(t => t.id === trackId ? { ...t, subsectors: [...t.subsectors, newSub] } : t)
     };
-    saveGlobalCapex(newData);
+    saveActiveMap(newData);
   }
 
   function removeSubsector(trackId, subId) {
     if (!window.confirm("Are you sure you want to remove this sub-sector?")) return;
     const newData = {
-      ...capexData,
-      tracks: capexData.tracks.map(t => t.id === trackId ? { ...t, subsectors: t.subsectors.filter(s => s.id !== subId) } : t)
+      ...activeMapData,
+      tracks: activeMapData.tracks.map(t => t.id === trackId ? { ...t, subsectors: t.subsectors.filter(s => s.id !== subId) } : t)
     };
-    saveGlobalCapex(newData);
+    saveActiveMap(newData);
   }
 
   function renameSubsector(trackId, subId, newName) {
     const newData = {
-      ...capexData,
-      tracks: capexData.tracks.map(t => t.id === trackId ? {
+      ...activeMapData,
+      tracks: activeMapData.tracks.map(t => t.id === trackId ? {
         ...t,
         subsectors: t.subsectors.map(s => s.id === subId ? { ...s, label: newName } : s)
       } : t)
     };
-    saveGlobalCapex(newData);
+    saveActiveMap(newData);
   }
 
   function renameSector(trackId, newName) {
     const newData = {
-      ...capexData,
-      tracks: capexData.tracks.map(t => t.id === trackId ? { ...t, label: newName } : t)
+      ...activeMapData,
+      tracks: activeMapData.tracks.map(t => t.id === trackId ? { ...t, label: newName } : t)
     };
-    saveGlobalCapex(newData);
+    saveActiveMap(newData);
   }
 
   const allTickerCount = useMemo(() => getAllTickers(capexData).length, [capexData]);
-  
-  const liveCapexData = useMemo(() => {
-    if (!capexIntel?.allocations?.length) return capexData;
-    const intelMap = Object.fromEntries(capexIntel.allocations.map(a => [a.id, a]));
+
+  // Merge grounded intel allocations into a capex map (shared by both views).
+  function mergeIntel(mapData, intel) {
+    if (!intel?.allocations?.length) return mapData;
+    const intelMap = Object.fromEntries(intel.allocations.map(a => [a.id, a]));
     return {
-      ...capexData,
-      tracks: capexData.tracks.map(track => {
-        const intel = intelMap[track.id];
-        if (!intel) return track;
-        const liveValue = intel.value || (intel.capex ? `~$${intel.capex}B` : track.value);
+      ...mapData,
+      tracks: mapData.tracks.map(track => {
+        const t = intelMap[track.id];
+        if (!t) return track;
         return {
           ...track,
-          capex:           intel.capex ?? track.capex,
-          value:           liveValue,
-          rationale:       intel.rationale,
-          intelConfidence: intel.confidence,
+          capex:           t.capex ?? track.capex,
+          value:           t.value || (t.capex ? `~$${t.capex}B` : track.value),
+          rationale:       t.rationale,
+          intelConfidence: t.confidence,
           isLiveIntel:     true,
         };
       }),
     };
-  }, [capexData, capexIntel]);
+  }
+
+  const liveCapexData = useMemo(() => mergeIntel(capexData, capexIntel), [capexData, capexIntel]);
+  const liveMuskData = useMemo(() => mergeIntel(muskCapexData, muskIntel), [muskCapexData, muskIntel]);
+  const activeLiveData = isMusk ? liveMuskData : liveCapexData;
+  const activeIntelStatus = isMusk ? muskIntelStatus : capexIntelStatus;
+  const activeIntel = isMusk ? muskIntel : capexIntel;
 
   // Aggregate per-ticker transcript stress (GET /stress) up to each subsector:
   // score = avg of member companies' latest scores, trend = avg QoQ delta,
@@ -1564,7 +1591,7 @@ export default function App() {
   const subsectorStress = useMemo(() => {
     const out = {};
     if (!stressData || !Object.keys(stressData).length) return out;
-    for (const track of liveCapexData.tracks) {
+    for (const track of activeLiveData.tracks) {
       for (const sub of track.subsectors) {
         const companies = [];
         for (const ticker of sub.tickers) {
@@ -1594,19 +1621,19 @@ export default function App() {
       }
     }
     return out;
-  }, [stressData, liveCapexData]);
+  }, [stressData, activeLiveData]);
 
   const liveTotal = useMemo(() => {
-    if (capexIntelStatus === "success" && capexIntel?.totalCapexDerived) {
-      return capexIntel.totalCapexDerived;
+    if (activeIntelStatus === "success" && activeIntel?.totalCapexDerived) {
+      return activeIntel.totalCapexDerived;
     }
-    return liveCapexData.tracks.reduce((s, t) => s + (t.capex || 0), 0);
-  }, [liveCapexData, capexIntel, capexIntelStatus]);
+    return activeLiveData.tracks.reduce((s, t) => s + (t.capex || 0), 0);
+  }, [activeLiveData, activeIntel, activeIntelStatus]);
 
-  const watchlistTickers = useMemo(() => getAllTickers(capexData), [capexData]);
+  const watchlistTickers = useMemo(() => getAllTickers(activeMapData), [activeMapData]);
   const gainers = watchlistTickers.filter(t => (prices[t]?.change ?? prices[t]) > 0).length;
   const losers  = watchlistTickers.filter(t => (prices[t]?.change ?? prices[t]) < 0).length;
-  const activeData = liveCapexData.tracks.find(t => t.id === activeTrack);
+  const activeData = activeLiveData.tracks.find(t => t.id === activeTrack);
   const tickerEntries = Object.entries(prices);
 
   return (
@@ -1687,19 +1714,39 @@ export default function App() {
 
         <div className="main-content" style={{ maxWidth: 1480, margin: "0 auto", padding: "32px 20px 64px", display: "flex", flexDirection: "column", gap: 28, overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
           
-          {/* HERO: capex flow Sankey — hyperscalers → tracks, with guidance trend */}
+          {/* VIEW SWITCHER: AI hyperscaler capex flow ↔ Musk Galaxy */}
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["ai", "🌐 AI Capex Flow"], ["musk", "🚀 Musk Galaxy"]].map(([id, label]) => (
+              <button key={id} onClick={() => switchView(id)}
+                style={{
+                  background: view === id ? "rgba(251,191,36,0.12)" : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${view === id ? "#fbbf24" : "rgba(255,255,255,0.1)"}`,
+                  color: view === id ? "#fbbf24" : "#64748b",
+                  borderRadius: 8, padding: "8px 18px", cursor: "pointer",
+                  fontSize: 12, fontWeight: 800, letterSpacing: "0.08em",
+                  textTransform: "uppercase", fontFamily: "inherit", transition: "all .15s",
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* HERO: capex flow Sankey — spenders → tracks, with guidance trend */}
           <CapexSankey
+            key={`sankey-${view}`}
             total={liveTotal}
-            live={capexIntelStatus === "success"}
-            byCompany={capexIntel?.byCompany}
-            tracks={liveCapexData.tracks}
-            marketData={marketData}
-            history={capexHistory}
+            live={activeIntelStatus === "success"}
+            byCompany={activeIntel?.byCompany}
+            tracks={activeLiveData.tracks}
+            marketData={isMusk ? prices : marketData}
+            history={isMusk ? [] : capexHistory}
+            companyConfig={isMusk ? MUSK_COMPANIES : undefined}
+            subtitle={isMusk ? "Musk Companies Capex" : undefined}
             onTrackClick={trackId => setActiveTrack(p => p === trackId ? null : trackId)}
           />
 
           <div className="track-grid" style={{ display: "grid", gridTemplateColumns: "repeat(6,minmax(0,1fr))", gap: 10, paddingTop: 8 }}>
-            {liveCapexData.tracks.map(track => (
+            {activeLiveData.tracks.map(track => (
               <div key={track.id} style={{ paddingTop: activeTrack === track.id ? 14 : 0 }}>
                 <TrackCard 
                   track={track} 
@@ -1727,11 +1774,16 @@ export default function App() {
           )}
 
           <SupplyGraph
+            key={`graph-${view}`}
             stressData={stressData}
             gaugesData={gaugesData}
             exposureData={exposureData}
             prices={prices}
             onTickerClick={openPopup}
+            graphNodes={isMusk ? MUSK_GRAPH_NODES : undefined}
+            graphEdges={isMusk ? MUSK_GRAPH_EDGES : undefined}
+            layers={isMusk ? MUSK_LAYERS : undefined}
+            title={isMusk ? "Musk Galaxy Dependency Graph" : undefined}
           />
 
           <BottleneckScout
@@ -1746,13 +1798,13 @@ export default function App() {
               
               {/* 1. Heat Map dictates the row height naturally */}
               <div className="span-2" style={{ display: "flex", flexDirection: "column" }}>
-                <HeatMap prices={prices} capexData={liveCapexData} onTickerClick={openPopup} timeline={timeline} setTimeline={setTimeline} isAdmin={isAdmin} shortList={shortList} onSaveShortlist={saveGlobalShortlist} activeFilter={activeFilter} setActiveFilter={setActiveFilter} />
+                <HeatMap prices={prices} capexData={activeLiveData} onTickerClick={openPopup} timeline={timeline} setTimeline={setTimeline} isAdmin={isAdmin} shortList={shortList} onSaveShortlist={saveGlobalShortlist} activeFilter={activeFilter} setActiveFilter={setActiveFilter} />
               </div>
               
               {/* 2. Watchlist absolute trick matches the row height and scrolls */}
               <div className="span-1 watchlist-wrapper">
                 <div className="watchlist-inner">
-                  <Watchlist prices={prices} capexData={liveCapexData} onTickerClick={openPopup} isAdmin={isAdmin} shortList={shortList} onSaveShortlist={saveGlobalShortlist} timeline={timeline} activeFilter={activeFilter} />
+                  <Watchlist prices={prices} capexData={activeLiveData} onTickerClick={openPopup} isAdmin={isAdmin} shortList={shortList} onSaveShortlist={saveGlobalShortlist} timeline={timeline} activeFilter={activeFilter} />
                 </div>
               </div>
 

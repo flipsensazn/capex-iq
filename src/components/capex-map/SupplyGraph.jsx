@@ -31,17 +31,23 @@ const DIR_LABEL = {
   both: "constrained both sides",
 };
 
-export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposureData = {}, prices = {}, onTickerClick }) {
+export default function SupplyGraph({
+  stressData = {}, gaugesData = {}, exposureData = {}, prices = {}, onTickerClick,
+  // Dataset props — default to the AI hyperscaler graph; the Musk Galaxy
+  // view passes its own nodes/edges/layers.
+  graphNodes = GRAPH_NODES, graphEdges = GRAPH_EDGES, layers = LAYERS,
+  title = "Supply Chain Dependency Graph",
+}) {
   const [selected, setSelected] = useState(null);
 
   // Edges upgraded with filed customer-concentration percentages where a
   // disclosed, named customer matches — these carry "(filed)" facts in the
   // UI and override curated criticality in the propagation weight.
-  const edges = useMemo(() => enrichEdges(GRAPH_EDGES, exposureData), [exposureData]);
+  const edges = useMemo(() => enrichEdges(graphEdges, exposureData), [graphEdges, exposureData]);
 
   const { positions, width, height } = useMemo(() => {
-    const byLayer = LAYERS.map(() => []);
-    for (const n of GRAPH_NODES) byLayer[n.layer].push(n);
+    const byLayer = layers.map(() => []);
+    for (const n of graphNodes) byLayer[n.layer].push(n);
     const maxRows = Math.max(...byLayer.map(l => l.length));
     const h = PAD_Y + maxRows * (NODE_H + GAP_Y) + 8;
     const pos = {};
@@ -52,11 +58,11 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposure
         pos[n.id] = { x: PAD_X + li * COL_W, y: y0 + i * (NODE_H + GAP_Y) };
       });
     });
-    return { positions: pos, width: PAD_X * 2 + LAYERS.length * COL_W - (COL_W - NODE_W), height: h };
-  }, []);
+    return { positions: pos, width: PAD_X * 2 + layers.length * COL_W - (COL_W - NODE_W), height: h };
+  }, [graphNodes, layers]);
 
-  const strength = useMemo(() => computeStrength(GRAPH_NODES, stressData, gaugesData), [stressData, gaugesData]);
-  const risk = useMemo(() => propagate(GRAPH_NODES, edges, strength), [edges, strength]);
+  const strength = useMemo(() => computeStrength(graphNodes, stressData, gaugesData), [graphNodes, stressData, gaugesData]);
+  const risk = useMemo(() => propagate(graphNodes, edges, strength), [graphNodes, edges, strength]);
 
   const highlight = useMemo(() => {
     if (!selected) return null;
@@ -67,14 +73,14 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposure
   }, [edges, selected]);
 
   const topBottlenecks = useMemo(() =>
-    GRAPH_NODES
+    graphNodes
       .map(n => ({ id: n.id, s: strength[n.id] ?? 0 }))
       .filter(x => x.s >= 40)
       .sort((a, b) => b.s - a.s)
       .slice(0, 6),
-    [strength]);
+    [graphNodes, strength]);
 
-  const selNode = GRAPH_NODES.find(n => n.id === selected);
+  const selNode = graphNodes.find(n => n.id === selected);
   const selNbrs = selected ? neighbors(edges, selected) : null;
   const selExposure = selected ? exposureData[selected] : null;
 
@@ -98,10 +104,10 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposure
     <div style={{ borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(24,24,24,0.92)", padding: 18, marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
         <div style={{ fontSize: 11, color: "#94a3b8", letterSpacing: "0.15em", textTransform: "uppercase", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 14 }}>🕸</span> Supply Chain Dependency Graph
+          <span style={{ fontSize: 14 }}>🕸</span> {title}
         </div>
         <div style={{ fontSize: 10, color: "#475569" }}>
-          supplier → customer · click a node to trace its cone · {GRAPH_NODES.length} nodes / {edges.length} edges
+          supplier → customer · click a node to trace its cone · {graphNodes.length} nodes / {edges.length} edges
           {edges.some(e => e.exposurePct != null) && ` · ${edges.filter(e => e.exposurePct != null).length} with filed exposure`}
         </div>
       </div>
@@ -124,7 +130,7 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposure
       <div style={{ overflowX: "auto", paddingBottom: 4 }}>
         <svg viewBox={`0 0 ${width} ${height}`} style={{ minWidth: width, width: "100%", display: "block" }}>
           {/* layer headers */}
-          {LAYERS.map((label, i) => (
+          {layers.map((label, i) => (
             <text key={label} x={PAD_X + i * COL_W + NODE_W / 2} y={18} textAnchor="middle"
               style={{ fill: "#475569", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
               {label}
@@ -156,7 +162,7 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposure
           })}
 
           {/* nodes */}
-          {GRAPH_NODES.map(n => {
+          {graphNodes.map(n => {
             const p = positions[n.id];
             const s = strength[n.id] ?? 0;
             const r = risk[n.id]?.score ?? 0;
@@ -211,7 +217,7 @@ export default function SupplyGraph({ stressData = {}, gaugesData = {}, exposure
               style={{ fontSize: 14, fontWeight: 800, color: "#e2e8f0", cursor: selNode.type !== "external" ? "pointer" : "default" }}>
               {selNode.label}
             </span>
-            <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em" }}>{LAYERS[selNode.layer]}</span>
+            <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em" }}>{layers[selNode.layer]}</span>
             {(strength[selected] ?? 0) >= 40 && (
               <span style={{ fontSize: 10, fontWeight: 700, color: nodeColor(strength[selected], 0), border: `1px solid ${nodeColor(strength[selected], 0)}`, background: nodeColor(strength[selected], 0) + "1c", padding: "1px 7px", borderRadius: 3 }}>
                 BOTTLENECK {strength[selected].toFixed(0)}

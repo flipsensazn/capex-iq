@@ -108,25 +108,42 @@ DEFAULT_MAP_TICKERS = [
 TRANSCRIPT_ALIAS = {"GOOG": "GOOGL"}
 
 
-def get_universe():
-    """Live capex-map tickers from /capex (falls back to the embedded list)."""
-    tickers = list(DEFAULT_MAP_TICKERS)
-    if WATCHLIST_BASE_URL:
-        try:
-            res = requests.get(f"{WATCHLIST_BASE_URL}/capex", timeout=20)
-            res.raise_for_status()
-            data = res.json().get("capexData")
-            if data and data.get("tracks"):
-                live = [t for track in data["tracks"]
-                        for sub in track.get("subsectors", [])
-                        for t in sub.get("tickers", [])]
-                if live:
-                    tickers = live
-                    print(f"Loaded {len(set(live))} tickers from live /capex endpoint.")
-        except Exception as e:
-            print(f"WARN: /capex fetch failed ({e}) — using embedded default list.")
+# Fallback for Musk-map tickers not already covered above (see
+# src/components/capex-map/muskData.js — the live /musk-capex endpoint wins).
+MUSK_DEFAULT_TICKERS = [
+    "TSLA", "ALB", "SQM", "PLL", "PCRFY", "APTV", "ATI", "CRS", "HWM",
+    "CAT", "GEV", "URI", "ON", "STM", "WOLF", "QRVO", "FLTCF", "RDW",
+]
 
-    universe = list(dict.fromkeys(HYPERSCALERS + tickers))  # dedupe, keep order
+
+def _map_tickers(path):
+    """Tickers from a KV-backed capex-map endpoint, or None on failure/empty."""
+    try:
+        res = requests.get(f"{WATCHLIST_BASE_URL}{path}", timeout=20)
+        res.raise_for_status()
+        data = res.json().get("capexData")
+        if data and data.get("tracks"):
+            live = [t for track in data["tracks"]
+                    for sub in track.get("subsectors", [])
+                    for t in sub.get("tickers", [])]
+            if live:
+                print(f"Loaded {len(set(live))} tickers from live {path} endpoint.")
+                return live
+    except Exception as e:
+        print(f"WARN: {path} fetch failed ({e}) — using embedded defaults.")
+    return None
+
+
+def get_universe():
+    """Union of the AI capex map and the Musk Galaxy map (live endpoints with
+    embedded fallbacks) plus the hyperscalers."""
+    tickers = list(DEFAULT_MAP_TICKERS)
+    musk = list(MUSK_DEFAULT_TICKERS)
+    if WATCHLIST_BASE_URL:
+        tickers = _map_tickers("/capex") or tickers
+        musk = _map_tickers("/musk-capex") or musk
+
+    universe = list(dict.fromkeys(HYPERSCALERS + tickers + musk))  # dedupe, keep order
     if TICKER_LIMIT > 0:
         universe = universe[:TICKER_LIMIT]
         print(f"TICKER_LIMIT={TICKER_LIMIT} — restricting run to {universe}")

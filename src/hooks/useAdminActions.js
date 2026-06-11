@@ -7,6 +7,7 @@ export function useAdminActions({
   setScannerPool,
   setShortList,
   setCapexData,
+  setMuskCapexData,
   shortListRef,
   showNotice,
   refresh,
@@ -109,10 +110,36 @@ export function useAdminActions({
     }
   }, [adminPassword, refresh, setAdminPassword, setCapexData, setIsAdmin, showNotice]);
 
+  const saveGlobalMuskCapex = useCallback(async (newData) => {
+    try {
+      const res = await fetch("/musk-capex", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ capexData: newData, password: adminPassword }),
+      });
+      const json = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        setMuskCapexData(newData);
+        showNotice("Musk capex map updated.", "success");
+        refresh();
+      } else {
+        showNotice(json.error || "Musk capex update failed.");
+        if (res.status === 401) {
+          setIsAdmin(false);
+          setAdminPassword("");
+        }
+      }
+    } catch {
+      showNotice("Network error while updating Musk capex data.");
+    }
+  }, [adminPassword, refresh, setAdminPassword, setIsAdmin, setMuskCapexData, showNotice]);
+
   return {
     verifyAdminPassword,
     saveGlobalScanner,
     saveGlobalShortlist,
     saveGlobalCapex,
+    saveGlobalMuskCapex,
   };
 }
