@@ -12,6 +12,8 @@ export default function TrackPane({
   onAddSubsector,
   onRemoveSubsector,
   onRenameSubsector,
+  onRenameSector,
+  onClose,
   EditableLabel,
 }) {
   return (
@@ -19,11 +21,24 @@ export default function TrackPane({
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 10, height: 10, borderRadius: "50%", background: track.color, boxShadow: `0 0 8px ${track.color}` }} />
-          <h3 style={{ fontSize: 15, fontWeight: 700, color: track.color }}>{track.label}</h3>
+          {/* Sector renaming moved here from the removed track cards */}
+          <h3 style={{ fontSize: 15, fontWeight: 700, color: track.color }}>
+            {isAdmin && EditableLabel && onRenameSector
+              ? <EditableLabel text={track.label} isAdmin={isAdmin} onSave={onRenameSector} textStyles={{ fontSize: 15, fontWeight: 700, color: track.color }} />
+              : track.label}
+          </h3>
         </div>
-        <span style={{ fontSize: 11, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-          {track.subsectors.length} sub-sectors · {track.subsectors.flatMap(s => s.tickers).length} tickers
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 11, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+            {track.subsectors.length} sub-sectors · {track.subsectors.flatMap(s => s.tickers).length} tickers
+          </span>
+          {onClose && (
+            <button onClick={onClose} title="Collapse track"
+              style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#64748b", width: 24, height: 24, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>
+              ×
+            </button>
+          )}
+        </div>
       </div>
       <div className="subsector-grid" style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(track.subsectors.length + (isAdmin ? 1 : 0), 4)}, minmax(0,1fr))`, gap: 12 }}>
         {track.subsectors.map(sub => (

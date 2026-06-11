@@ -48,7 +48,7 @@ function Sparkline({ history }) {
 }
 
 export default function CapexSankey({
-  total, live, byCompany, tracks, marketData, history, onTrackClick,
+  total, live, byCompany, tracks, marketData, history, onTrackClick, activeTrack,
   companyConfig = AI_COMPANIES,
   subtitle = "Hyperscaler AI Capex",
 }) {
@@ -78,7 +78,8 @@ export default function CapexSankey({
     y = TOP_PAD;
     const trackNodes = tracks.map(t => {
       const h = (t.capex || 0) * tScale;
-      const node = { id: t.id, label: t.label, value: t.value, capex: t.capex || 0, color: t.color, y, h };
+      const tickerCount = [...new Set((t.subsectors ?? []).flatMap(s => s.tickers))].length;
+      const node = { id: t.id, label: t.label, value: t.value, capex: t.capex || 0, color: t.color, tickerCount, y, h };
       y += h + tGap;
       return node;
     });
@@ -206,22 +207,31 @@ export default function CapexSankey({
             );
           })}
 
-          {/* track nodes */}
-          {trackNodes.map(t => (
-            <g key={t.id} style={{ cursor: "pointer" }}
-              onClick={() => onTrackClick?.(t.id)}
-              onMouseEnter={() => setHover(t.id)} onMouseLeave={() => setHover(null)}
-              opacity={hover && hover !== t.id && !ribbons.some(r => r.company === hover) ? 0.45 : 1}>
-              <rect x={RIGHT_X} y={t.y} width={BAR_W} height={Math.max(t.h, 2)} rx={2} fill={t.color} />
-              {Math.abs(t.labelY - (t.y + t.h / 2)) > 8 && (
-                <path d={`M ${RIGHT_X + BAR_W + 2} ${t.y + t.h / 2} L ${RIGHT_X + BAR_W + 7} ${t.labelY}`}
-                  stroke="rgba(148,163,184,0.35)" strokeWidth="1" fill="none" />
-              )}
-              <text x={RIGHT_X + BAR_W + 10} y={t.labelY - 2} style={{ fill: t.color, fontSize: 12, fontWeight: 700 }}>{t.label}</text>
-              <text x={RIGHT_X + BAR_W + 10} y={t.labelY + 12} style={{ fill: "#94a3b8", fontSize: 10.5, fontWeight: 700 }}>{t.value || fmtB(t.capex)}</text>
-              <title>{`${t.label}: ${t.value || fmtB(t.capex)} — click to open track`}</title>
-            </g>
-          ))}
+          {/* track nodes — the click targets that expand into sub-sectors */}
+          {trackNodes.map(t => {
+            const isActive = activeTrack === t.id;
+            return (
+              <g key={t.id} style={{ cursor: "pointer" }}
+                onClick={() => onTrackClick?.(t.id)}
+                onMouseEnter={() => setHover(t.id)} onMouseLeave={() => setHover(null)}
+                opacity={hover && hover !== t.id && !ribbons.some(r => r.company === hover) ? 0.45 : 1}>
+                <rect x={RIGHT_X - (isActive ? 2 : 0)} y={t.y} width={BAR_W + (isActive ? 4 : 0)} height={Math.max(t.h, 2)} rx={2}
+                  fill={t.color} stroke={isActive ? "#e2e8f0" : "none"} strokeWidth={isActive ? 1.4 : 0} />
+                {Math.abs(t.labelY - (t.y + t.h / 2)) > 8 && (
+                  <path d={`M ${RIGHT_X + BAR_W + 2} ${t.y + t.h / 2} L ${RIGHT_X + BAR_W + 7} ${t.labelY}`}
+                    stroke="rgba(148,163,184,0.35)" strokeWidth="1" fill="none" />
+                )}
+                <text x={RIGHT_X + BAR_W + 10} y={t.labelY - 2} style={{ fill: t.color, fontSize: 12, fontWeight: isActive ? 800 : 700 }}>
+                  {t.label}{isActive ? " ▾" : ""}
+                </text>
+                <text x={RIGHT_X + BAR_W + 10} y={t.labelY + 12} style={{ fill: "#94a3b8", fontSize: 10.5, fontWeight: 700 }}>
+                  {t.value || fmtB(t.capex)}
+                  {t.tickerCount > 0 && <tspan style={{ fill: "#475569", fontWeight: 400 }}> · {t.tickerCount} tickers</tspan>}
+                </text>
+                <title>{`${t.label}: ${t.value || fmtB(t.capex)} · ${t.tickerCount} tickers — click to ${isActive ? "collapse" : "expand"} sub-sectors`}</title>
+              </g>
+            );
+          })}
         </svg>
       </div>
 

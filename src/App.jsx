@@ -7,7 +7,6 @@ import FearGreedGauge from "./components/FearGreedGauge";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
 import SupplyGraph from "./components/capex-map/SupplyGraph";
-import TrackCard from "./components/capex-map/TrackCard";
 import TrackPane from "./components/capex-map/TrackPane";
 import { MUSK_CAPEX_DATA, MUSK_COMPANIES, MUSK_GRAPH_NODES, MUSK_GRAPH_EDGES, MUSK_LAYERS } from "./components/capex-map/muskData";
 import { useAdminActions } from "./hooks/useAdminActions";
@@ -1758,33 +1757,21 @@ export default function App() {
             history={isMusk ? [] : capexHistory}
             companyConfig={isMusk ? MUSK_COMPANIES : undefined}
             subtitle={isMusk ? "Musk Companies Capex" : undefined}
+            activeTrack={activeTrack}
             onTrackClick={trackId => setActiveTrack(p => p === trackId ? null : trackId)}
           />
-
-          <div className="track-grid" style={{ display: "grid", gridTemplateColumns: "repeat(6,minmax(0,1fr))", gap: 10, paddingTop: 8 }}>
-            {activeLiveData.tracks.map(track => (
-              <div key={track.id} style={{ paddingTop: activeTrack === track.id ? 14 : 0 }}>
-                <TrackCard 
-                  track={track} 
-                  isActive={activeTrack === track.id} 
-                  onClick={() => setActiveTrack(p => p === track.id ? null : track.id)} 
-                  isAdmin={isAdmin}
-                  onRenameSector={(newName) => renameSector(track.id, newName)}
-                  EditableLabel={EditableLabel}
-                />
-              </div>
-            ))}
-          </div>
 
           {activeData && (
             <TrackPane
               track={activeData} prices={prices} isAdmin={isAdmin}
               stressBySub={subsectorStress}
               gauges={gaugesData}
-              onAddTicker={addTickerToSubsector} onRemoveTicker={removeTickerFromSubsector} onTickerClick={openPopup} 
+              onAddTicker={addTickerToSubsector} onRemoveTicker={removeTickerFromSubsector} onTickerClick={openPopup}
               onAddSubsector={addSubsector}
               onRemoveSubsector={removeSubsector}
               onRenameSubsector={renameSubsector}
+              onRenameSector={newName => renameSector(activeData.id, newName)}
+              onClose={() => setActiveTrack(null)}
               EditableLabel={EditableLabel}
             />
           )}
