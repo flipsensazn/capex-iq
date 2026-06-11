@@ -244,10 +244,35 @@ export const GRAPH_EDGES = [
   { from: "IREN", to: "MSFT", what: "GPU cloud capacity", criticality: 1 },
 ];
 
+// ── FILED EXPOSURE (GET /exposure) ───────────────────────
+// Customer-concentration disclosures: pct = % of SUPPLIER's revenue from
+// that customer. Where a disclosed, NAMED customer matches an edge, the
+// edge carries the filed fact and the propagation weight upgrades from
+// curated criticality to a disclosure-derived weight: ≥30% of a supplier's
+// revenue is treated as a fully critical relationship.
+
+export function enrichEdges(edges, exposureData = {}) {
+  if (!exposureData || !Object.keys(exposureData).length) return edges;
+  return edges.map(e => {
+    const match = exposureData[e.from]?.customers?.find(
+      c => c.ticker === e.to && c.basis === "revenue" && c.pct != null
+    );
+    return match
+      ? { ...e, exposurePct: match.pct, exposurePeriod: match.period, exposureForm: match.form, exposureQuote: match.quote }
+      : e;
+  });
+}
+
+function edgeWeight(e) {
+  const curated = e.criticality / 3;
+  if (e.exposurePct == null) return curated;
+  return Math.max(curated, Math.min(1, e.exposurePct / 30));
+}
+
 // ── PROPAGATION ENGINE ────────────────────────────────────
 
 const PROPAGATE_THRESHOLD = 40; // a node must be this stressed to radiate
-const HOP_DECAY = 0.65;         // stress retained per hop (× criticality/3)
+const HOP_DECAY = 0.65;         // stress retained per hop (× edge weight)
 const MIN_RISK = 8;             // stop propagating below this
 
 // Intrinsic bottleneck strength per node, 0-100.
@@ -290,7 +315,7 @@ export function propagate(nodes, edges, strength) {
     while (queue.length) {
       const [cur, s, hops] = queue.shift();
       for (const e of edgesFrom[cur] ?? []) {
-        const ns = s * HOP_DECAY * (e.criticality / 3);
+        const ns = s * HOP_DECAY * edgeWeight(e);
         if (ns < MIN_RISK) continue;
         if (ns <= (bestFromRoot[e.to] ?? 0)) continue;
         bestFromRoot[e.to] = ns;

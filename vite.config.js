@@ -18,6 +18,7 @@ export default defineConfig({
       '/cnn-fear-greed': 'http://localhost:8788',
       '/stress':      'http://localhost:8788',
       '/gauges':      'http://localhost:8788',
+      '/exposure':    'http://localhost:8788',
     },
   },
 })

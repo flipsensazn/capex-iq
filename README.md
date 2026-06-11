@@ -23,6 +23,22 @@ Configure these Cloudflare environment variables as needed:
 - `GEMINI_API_KEY`
 - `SHARED_DATA` KV binding
 
+## Customer-exposure extraction (filed edge weights)
+
+`src/customer_exposure.py` (run monthly by
+`.github/workflows/customer-exposure.yml`) reads each company's latest 10-K /
+20-F and 10-Q from EDGAR, isolates the customer-concentration passages, and
+has Gemini extract structured rows: customer name exactly as printed (or the
+anonymous "Customer A" label — identities are never guessed), percent of
+revenue or receivables, period, and a verbatim quote. Named customers are
+mapped to tickers via an alias table and stored in Neon `customer_exposure`,
+served by `GET /exposure`. Where a filed disclosure matches a supply-graph
+edge, the edge upgrades from curated criticality to the filed revenue-exposure
+percentage (shown in cyan as "(filed)" in tooltips and the detail panel), and
+the propagation engine treats ≥30%-of-revenue relationships as fully
+critical. Needs `DATABASE_URL` + `GEMINI_API_KEY` secrets and the
+`WATCHLIST_BASE_URL` variable — all already configured.
+
 ## Supply-chain dependency graph
 
 `src/components/capex-map/supplyGraphData.js` encodes the supplier → customer
