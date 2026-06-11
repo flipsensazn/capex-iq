@@ -6,6 +6,7 @@ import CapexSankey from "./components/CapexSankey";
 import FearGreedGauge from "./components/FearGreedGauge";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
+import EarningsWeek from "./components/EarningsWeek";
 import SupplyGraph from "./components/capex-map/SupplyGraph";
 import TrackPane from "./components/capex-map/TrackPane";
 import { MUSK_CAPEX_DATA, MUSK_COMPANIES, MUSK_GRAPH_NODES, MUSK_GRAPH_EDGES, MUSK_LAYERS } from "./components/capex-map/muskData";
@@ -1318,6 +1319,7 @@ const GLOBAL_STYLES = `
     .top-node-center > div:first-child { width: 100% !important; box-sizing: border-box !important; }
     .capex-number { font-size: 44px !important; }
     .subsector-grid { grid-template-columns: 1fr !important; }
+    .earnings-week-grid { grid-template-columns: 1fr !important; }
     .main-content { padding: 12px 8px !important; max-width: 100vw !important; }
     .header-controls { gap: 8px !important; }
     .panel-wrapper { min-height: 400px; }
@@ -1787,6 +1789,12 @@ export default function App() {
             graphEdges={isMusk ? MUSK_GRAPH_EDGES : undefined}
             layers={isMusk ? MUSK_LAYERS : undefined}
             title={isMusk ? "Musk Galaxy Dependency Graph" : undefined}
+          />
+
+          <EarningsWeek
+            tickers={watchlistTickers}
+            prices={prices}
+            onTickerClick={openPopup}
           />
 
           <BottleneckScout
