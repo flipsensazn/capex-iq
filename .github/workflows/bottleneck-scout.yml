@@ -1,0 +1,51 @@
+name: Weekly Bottleneck Scout
+
+on:
+  schedule:
+    # Sunday 14:00 UTC — after the gauges/scanner runs, fresh queue for the week
+    - cron: '0 14 * * 0'
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: 'Max new candidates this run'
+        required: false
+        default: '12'
+
+jobs:
+  run-bottleneck-scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install requests psycopg2-binary defeatbeta-api yfinance
+
+      - name: Run Bottleneck Scout
+        env:
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          WATCHLIST_BASE_URL: ${{ vars.WATCHLIST_BASE_URL }}
+          MAX_NEW_CANDIDATES: ${{ github.event.inputs.max_candidates }}
+        run: python src/bottleneck_scout.py
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -s -X POST "$SLACK_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d '{"text":"⚠️ Wizzles Watchlist bottleneck scout failed — check the GitHub Actions log for details."}'
+          fi

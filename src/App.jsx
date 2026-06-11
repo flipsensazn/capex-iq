@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
 import AdminModal from "./components/AdminModal";
 import AnalysisDrawer from "./components/AnalysisDrawer";
+import BottleneckScout from "./components/BottleneckScout";
 import CapexSankey from "./components/CapexSankey";
 import FearGreedGauge from "./components/FearGreedGauge";
 import StatusBanner from "./components/StatusBanner";
@@ -1351,6 +1352,8 @@ export default function App() {
     stressData,
     gaugesData,
     exposureData,
+    candidates,
+    setCandidates,
     prices,
     pricesRef,
     marketData,
@@ -1442,6 +1445,56 @@ export default function App() {
       ),
     };
     saveGlobalCapex(newData);
+  }
+
+  // Bottleneck Scout review: mark the candidate in the DB; on approval also
+  // insert the ticker into the capex map (find-or-create the suggested
+  // subsector) via the existing admin save flow — that automatically enrolls
+  // it in the heat map and the weekly transcript/XBRL scans.
+  async function reviewCandidate(candidate, action) {
+    try {
+      const res = await fetch("/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: adminPassword, ticker: candidate.ticker, action }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        showNotice(json.error || "Review failed");
+        return;
+      }
+      if (action === "approved") {
+        const trackId = capexData.tracks.some(t => t.id === candidate.trackId) ? candidate.trackId : "frontier";
+        const label = (candidate.suggestedSubsector || "Scout Additions").trim();
+        const newData = {
+          ...capexData,
+          tracks: capexData.tracks.map(t => {
+            if (t.id !== trackId) return t;
+            const existing = t.subsectors.find(s => s.label.toLowerCase() === label.toLowerCase());
+            if (existing) {
+              return {
+                ...t,
+                subsectors: t.subsectors.map(s => s.id !== existing.id ? s : {
+                  ...s,
+                  tickers: s.tickers.includes(candidate.ticker) ? s.tickers : [...s.tickers, candidate.ticker],
+                }),
+              };
+            }
+            return {
+              ...t,
+              subsectors: [...t.subsectors, { id: `scout-${Date.now()}`, label, tickers: [candidate.ticker], materials: [] }],
+            };
+          }),
+        };
+        saveGlobalCapex(newData);
+      }
+      setCandidates(prev => prev.map(c => c.ticker === candidate.ticker
+        ? { ...c, status: action, reviewedAt: new Date().toISOString() }
+        : c));
+      showNotice(`${candidate.ticker} ${action}${action === "approved" ? " — added to the map" : ""}`, "success");
+    } catch (err) {
+      showNotice(err.message || "Review failed");
+    }
   }
 
   function addSubsector(trackId) {
@@ -1678,6 +1731,13 @@ export default function App() {
             gaugesData={gaugesData}
             exposureData={exposureData}
             prices={prices}
+            onTickerClick={openPopup}
+          />
+
+          <BottleneckScout
+            candidates={candidates}
+            isAdmin={isAdmin}
+            onReview={reviewCandidate}
             onTickerClick={openPopup}
           />
 

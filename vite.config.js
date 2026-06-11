@@ -20,6 +20,7 @@ export default defineConfig({
       '/gauges':      'http://localhost:8788',
       '/exposure':    'http://localhost:8788',
       '/capex-history': 'http://localhost:8788',
+      '/candidates':  'http://localhost:8788',
     },
   },
 })

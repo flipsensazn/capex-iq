@@ -23,6 +23,22 @@ Configure these Cloudflare environment variables as needed:
 - `GEMINI_API_KEY`
 - `SHARED_DATA` KV binding
 
+## Bottleneck Scout (AI candidate discovery)
+
+`src/bottleneck_scout.py` (run weekly by `.github/workflows/bottleneck-scout.yml`)
+uses search-grounded Gemini to hunt recent bottleneck news per capex track
+(shortages, allocation, lead times, sole-source suppliers) and proposes
+public companies not already on the map — US listings preferred, OTC ADRs
+accepted. Every proposed ticker is identity-verified against Yahoo (claimed
+company name must match the symbol — hallucinated tickers are dropped), then
+enriched with a one-shot stress snapshot using the same transcript + XBRL
+code the map runs on. Candidates land in Neon `bottleneck_candidates`
+(status pending), served by `GET /candidates`, and surface in the dashboard's
+Bottleneck Scout panel where the admin reviews each with the signals in
+view: Approve adds the ticker to the capex map (auto-enrolling it in the
+weekly signal scans), Reject suppresses it permanently. Needs the existing
+`DATABASE_URL` + `GEMINI_API_KEY` secrets and `WATCHLIST_BASE_URL` variable.
+
 ## Capex guidance: grounded intel, history, Sankey hero
 
 `/capex-intel` now runs its total-capex prompt with Google Search grounding,
