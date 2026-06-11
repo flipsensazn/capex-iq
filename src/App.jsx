@@ -141,20 +141,25 @@ async function fetchQuoteSummary(ticker) {
 }
 
 // ── DEFAULT CAPEX DATA ────────────────────────────────────
+// version 3: full ticker-placement audit (2026-06). Every ticker identity
+// verified against live quote data; misfiled names moved; invalid tickers
+// removed (COR = Cencora, not CoreSite). Supersedes the v2 map saved in KV.
 const CAPEX_DATA = {
-  version: 2,
+  version: 3,
   companies: ["AMZN", "MSFT", "GOOG", "META", "ORCL"],
   tracks: [
     {
       id: "compute", label: "Compute & Silicon", value: "~$180B", capex: 180,
       color: "#60a5fa", borderColor: "#3b82f6",
       subsectors: [
-        { id: "gpu", label: "GPU & AI Accelerators", tickers: ["NVDA","AMD","INTC"], materials: ["Cobalt","Tungsten","Silicon Wafer 300mm","HBM DRAM"] },
-        { id: "memory", label: "Memory & Storage", tickers: ["MU","WDC","STX"], materials: ["HBM3e Stacks","LPDDR5","3D NAND Flash","Silicon Wafer 300mm"] },
-        { id: "asic", label: "Custom ASICs & TPUs", tickers: ["AVGO","MRVL","QCOM"], materials: ["Advanced Packaging CoWoS","HBM","EUV Photomasks"] },
-        { id: "foundry", label: "Leading-Edge Foundry", tickers: ["TSM"], materials: ["Silicon Carbide","Neon Gas","EUV Resist","Cobalt"] },
-        { id: "equip", label: "Semiconductor Equipment", tickers: ["AMAT","LRCX","ASML"], materials: ["Rare Earth Magnets","Fluorine Gas","Quartz"] },
-        { id: "packaging", label: "Advanced Packaging", tickers: ["AMKR","ASX","CAMT","ONTO","KLAC"], materials: ["Advanced Packaging CoWoS","HBM","Fan-Out Wafer"] },
+        { id: "gpu", label: "GPU & AI Accelerators", tickers: ["NVDA","AMD"], materials: ["Cobalt","Tungsten","Silicon Wafer 300mm","HBM DRAM"] },
+        { id: "memory", label: "Memory & Storage", tickers: ["MU","PSTG","NTAP","SNDK","RMBS","DRAM"], materials: ["HBM3e Stacks","LPDDR5","3D NAND Flash","Silicon Wafer 300mm"] },
+        { id: "asic", label: "Custom ASICs & TPUs", tickers: ["AVGO","MRVL"], materials: ["Advanced Packaging CoWoS","HBM","EUV Photomasks"] },
+        { id: "foundry", label: "Foundry", tickers: ["TSM","INTC","UMC"], materials: ["Silicon Carbide","Neon Gas","EUV Resist","Cobalt"] },
+        { id: "equip", label: "Semiconductor Equipment", tickers: ["AMAT","LRCX","ASML","KLAC","PLAB","EUV"], materials: ["Rare Earth Magnets","Fluorine Gas","Quartz"] },
+        { id: "packaging", label: "Advanced Packaging", tickers: ["AMKR","ASX","CAMT","ONTO"], materials: ["Advanced Packaging CoWoS","HBM","Fan-Out Wafer"] },
+        { id: "testing", label: "Chip Testing", tickers: ["FORM","AEHR","TER","TRT"], materials: ["Probe Cards","Test Sockets","Burn-in Boards"] },
+        { id: "eda", label: "EDA & Chip Design IP", tickers: ["CDNS","SNPS","ARM"], materials: ["IP Cores","Compute Licenses","Cloud Simulation"] },
       ],
     },
     {
@@ -162,51 +167,58 @@ const CAPEX_DATA = {
       color: "#34d399", borderColor: "#10b981",
       subsectors: [
         { id: "eth", label: "Ethernet Switching", tickers: ["ANET","CSCO","HPE"], materials: ["Copper Cat8","PCB Laminate","Silicon"] },
-        { id: "cable", label: "Cables & Connectors", tickers: ["GLW"], materials: ["Copper","Optical Fiber SiO2","Polymer Cladding"] },
+        { id: "cable", label: "Cables & Connectors", tickers: ["GLW","TEL","APH"], materials: ["Copper","Optical Fiber SiO2","Polymer Cladding"] },
         { id: "cyber", label: "Cybersecurity", tickers: ["PANW","CRWD","ZS"], materials: ["Secure Enclaves","HSM Hardware","Zero Trust Infrastructure"] },
+        { id: "testmeas", label: "Test & Measurement", tickers: ["KEYS","VIAV"], materials: ["RF Instruments","Optical Test Heads","Calibration Standards"] },
       ],
     },
     {
       id: "photonics", label: "Photonics & Interconnects", value: "~$40B", capex: 35,
       color: "#fbbf24", borderColor: "#f59e0b",
       subsectors: [
-        { id: "engine", label: "Optical Engine & Transceiver L1", tickers: ["LITE","COHR","AAOI","ALMU","MTSI","FN","POET","SIVE"], materials: ["InP Chips","Silicon Photonics Dies","Single-Mode Fiber"] },
-        { id: "inp", label: "InP Substrate & Epiwafer L2", tickers: ["AXTI","IQEPF","SLOIF"], materials: [ { name: "Indium", constraint: "CRITICAL — 70% supply from China", color: "#ef4444" }, { name: "Phosphorus", constraint: "Moderate supply risk", color: "#f59e0b" }, { name: "InP Wafer 2-4\"", constraint: "Capacity severely limited", color: "#ef4444" }, { name: "Gallium", constraint: "China export controls active", color: "#ef4444" }, ] },
+        { id: "engine", label: "Optical Engine & Transceiver L1", tickers: ["LITE","COHR","AAOI","MTSI","SIVEF","SMTC"], materials: ["InP Chips","Silicon Photonics Dies","Single-Mode Fiber"] },
+        { id: "inp", label: "InP Substrate & Epiwafer L2", tickers: ["AXTI","IQEPF"], materials: [ { name: "Indium", constraint: "CRITICAL — 70% supply from China", color: "#ef4444" }, { name: "Phosphorus", constraint: "Moderate supply risk", color: "#f59e0b" }, { name: "InP Wafer 2-4\"", constraint: "Capacity severely limited", color: "#ef4444" }, { name: "Gallium", constraint: "China export controls active", color: "#ef4444" }, ] },
         { id: "epitaxy", label: "Epitaxy Equipment L3", tickers: ["VECO"], materials: ["Trimethylindium TMIn","Phosphine PH3","Quartz Chambers"] },
-        { id: "siph", label: "SiPh Foundry L4", tickers: ["TSEM","GFS"], materials: ["Silicon-on-Insulator Wafers","Germanium","TiN Electrodes"] },
-        { id: "interconnects", label: "High-Speed Interconnects", tickers: ["APH","TEL","ALAB"], materials: ["High-Speed Copper","Differential Pair PCB","Signal Integrity"] },
+        { id: "siph", label: "SiPh Foundry & SOI Substrates L4", tickers: ["TSEM","GFS","SLOIF"], materials: ["Silicon-on-Insulator Wafers","Germanium","TiN Electrodes"] },
+        { id: "retimers", label: "Connectivity Silicon (Retimers & AECs)", tickers: ["ALAB","CRDO"], materials: ["High-Speed Copper","Differential Pair PCB","Signal Integrity"] },
+        { id: "optnet", label: "Optical Networking & Transport", tickers: ["CIEN","NOK","ADTN"], materials: ["Coherent DSPs","ROADM Modules","Line Cards"] },
+        { id: "pkgtest", label: "Optical Manufacturing & EMS", tickers: ["FN","SANM"], materials: ["Optical Subassemblies","Precision Optics","Cleanroom Capacity"] },
+        { id: "cpo", label: "CPO / Optical Packaging", tickers: ["HIMX","POET","LWLG"], materials: ["Wafer-Level Optics","EO Polymers","Glass Substrates"] },
       ],
     },
     {
       id: "neoclouds", label: "Neoclouds & Data Centers", value: "~$120B", capex: 120,
       color: "#c084fc", borderColor: "#a855f7",
       subsectors: [
-        { id: "reit", label: "Hyperscale REITs", tickers: ["EQIX","DLR","AMT","IRM"], materials: ["Structural Steel","Concrete","Copper Busbar","Fiber"] },
-        { id: "neocloud", label: "GPU Cloud Operators", tickers: ["CIFR","IREN","CORZ","APLD","CRWV","NBIS"], materials: ["Power Infrastructure","Cooling Systems","High-density Racks"] },
-        { id: "servers", label: "AI Server Infrastructure", tickers: ["SMCI","DELL"], materials: ["Copper Heat Pipes","PCB","Aluminum Extrusions"] },
-        { id: "mep", label: "Mechanical, Electrical & Plumbing", tickers: ["FIX","EME","MTZ"], materials: ["Electrical Conduit","HVAC Systems","Industrial Piping"] },
+        { id: "reit", label: "Hyperscale REITs", tickers: ["EQIX","DLR","AMT"], materials: ["Structural Steel","Concrete","Copper Busbar","Fiber"] },
+        { id: "neocloud", label: "GPU Cloud Operators", tickers: ["CIFR","IREN","CORZ","APLD","CRWV","NBIS","DGXX"], materials: ["Power Infrastructure","Cooling Systems","High-density Racks"] },
+        { id: "servers", label: "AI Server & Modular Infrastructure", tickers: ["SMCI","DELL","TSSI","JBL","CLS"], materials: ["Copper Heat Pipes","PCB","Aluminum Extrusions"] },
+        { id: "mep", label: "Mechanical, Electrical & Plumbing", tickers: ["FIX","EME","MTZ","PWR"], materials: ["Electrical Conduit","HVAC Systems","Industrial Piping"] },
       ],
     },
     {
       id: "power", label: "Power & Cooling", value: "~$45B", capex: 45,
       color: "#fb923c", borderColor: "#f97316",
       subsectors: [
-        { id: "grid", label: "Power Generation & Utilities", tickers: ["VST","NEE","BE"], materials: ["Copper Grid","Silicon Steel Transformers","Lithium Storage"] },
-        { id: "nuclear", label: "Nuclear", tickers: ["OKLO","SMR","LEU","ASPI"], materials: ["Enriched Uranium","Zirconium Cladding","Boron Control Rods"] },
-        { id: "ups", label: "Power Management & UPS", tickers: ["ETN","VRT","PLPC","ENS"], materials: ["Silicon Carbide SiC","Electrolytic Capacitors","Copper Winding"] },
-        { id: "cooling", label: "Liquid & Immersion Cooling", tickers: ["NVT","MOD"], materials: ["Dielectric Fluid","Copper Cold Plates","Deionized Water"] },
+        { id: "grid", label: "Power Generation & Utilities", tickers: ["VST","NEE","BE","GEV","POW"], materials: ["Copper Grid","Silicon Steel Transformers","Lithium Storage"] },
+        { id: "nuclear", label: "Nuclear", tickers: ["OKLO","SMR","LEU","ASPI","NNE","IMSR","BWXT"], materials: ["Enriched Uranium","Zirconium Cladding","Boron Control Rods"] },
+        { id: "ups", label: "Power Management & UPS", tickers: ["ETN","VRT","PLPC","ENS","HUBB","POWL","FPS","FLNC"], materials: ["Silicon Carbide SiC","Electrolytic Capacitors","Copper Winding"] },
+        { id: "cooling", label: "Liquid & Immersion Cooling", tickers: ["MOD","NVT","TT"], materials: ["Dielectric Fluid","Copper Cold Plates","Deionized Water"] },
+        { id: "powersemi", label: "Power Semiconductors (SiC / GaN)", tickers: ["WOLF","STM","ON","NVTS"], materials: ["SiC Boules","GaN-on-Si Epiwafers","200mm SiC Wafers"] },
+        { id: "passives", label: "Passives & Power Delivery", tickers: ["MRAAY","TTDKY"], materials: [ { name: "MLCC Capacity", constraint: "AI server demand straining supply", color: "#f59e0b" }, "Ferrite Cores", "Power Inductors" ] },
       ],
     },
     {
       id: "frontier", label: "Frontier / Speculative", value: "Early", capex: 15,
       color: "#f472b6", borderColor: "#ec4899",
       subsectors: [
-        { id: "quantum", label: "Quantum Computing", tickers: ["IONQ","RGTI","QUBT","ARQQ"], materials: [ { name: "Helium-3", constraint: "CRITICAL — extremely scarce", color: "#ef4444" }, { name: "Niobium", constraint: "Limited processing capacity", color: "#f59e0b" }, { name: "Sapphire Substrate", constraint: "Moderate availability", color: "#60a5fa" }, ] },
-        { id: "neuro", label: "Neuromorphic & Edge AI", tickers: ["ARM","OSS"], materials: ["Phase-Change Materials","Memristive Oxides","Hafnium Oxide"] },
-        { id: "space", label: "Space", tickers: ["RKLB","ASTS"], materials: ["Phase-Change Materials","Memristive Oxides","Hafnium Oxide"] },
-        { id: "saas", label: "SaaS", tickers: ["PLTR","SNOW","NOW"], materials: ["Cloud Infrastructure","API Gateways","Multi-tenant Architecture"] },
-        { id: "robotics", label: "Robotics", tickers: ["TER","SYM","TSLA"], materials: ["Servo Motors","LiDAR Sensors","Carbon Fiber Composites"] },
+        { id: "quantum", label: "Quantum Computing", tickers: ["IONQ","RGTI","QUBT","ARQQ","QTUM"], materials: [ { name: "Helium-3", constraint: "CRITICAL — extremely scarce", color: "#ef4444" }, { name: "Niobium", constraint: "Limited processing capacity", color: "#f59e0b" }, { name: "Sapphire Substrate", constraint: "Moderate availability", color: "#60a5fa" }, ] },
+        { id: "edge", label: "Edge AI & IoT Connectivity", tickers: ["OSS","QCOM","SYNA"], materials: ["NPU IP","LPDDR","RF Front-Ends"] },
+        { id: "space", label: "Space", tickers: ["RKLB","ASTS","NASA","SIDU","SATL","PL","RDW","MNTS","FLTCF"], materials: ["Radiation-Hardened Chips","Composites","RF Amplifiers"] },
+        { id: "saas", label: "SaaS", tickers: ["PLTR","SNOW","NOW","CRM","DDOG"], materials: ["Cloud Infrastructure","API Gateways","Multi-tenant Architecture"] },
+        { id: "robotics", label: "Robotics", tickers: ["SYM","TSLA","KRKNF","ONDS","LIDR","UMAC","AVAV","CTS"], materials: ["Servo Motors","LiDAR Sensors","Carbon Fiber Composites"] },
         { id: "metals", label: "Precious Metals & Commodities", tickers: ["USAS","COPX","SLV","GLD","NEM"], materials: [ { name: "Gold", constraint: "Safe haven demand rising", color: "#f59e0b" }, { name: "Silver", constraint: "Industrial + monetary demand", color: "#94a3b8" }, { name: "Copper", constraint: "CRITICAL — AI grid buildout demand", color: "#fb923c" }, ] },
+        { id: "minerals", label: "Critical Minerals & Rare Earths", tickers: ["UUUU","MP","USAR","CRML","RIO","NB","REMX"], materials: [ { name: "Rare Earth Magnets", constraint: "China processing dominance", color: "#ef4444" }, "Uranium", "Niobium" ] },
       ],
     },
   ],
