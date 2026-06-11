@@ -9,7 +9,14 @@ import { useMemo, useState } from "react";
 
 // Fallback split if the grounded byCompany isn't available yet (rough shares
 // of recent hyperscaler guidance) — replaced by live intel on first refresh.
-const DEFAULT_SPLIT = { AMZN: 0.28, MSFT: 0.26, GOOG: 0.19, META: 0.17, ORCL: 0.10 };
+// A different view (e.g. the Musk Galaxy) passes its own companyConfig.
+const AI_COMPANIES = [
+  { id: "AMZN", share: 0.28, isPublic: true },
+  { id: "MSFT", share: 0.26, isPublic: true },
+  { id: "GOOG", share: 0.19, isPublic: true },
+  { id: "META", share: 0.17, isPublic: true },
+  { id: "ORCL", share: 0.10, isPublic: true },
+];
 
 const W = 980, BAR_W = 8, LEFT_X = 150, RIGHT_X = 800, FLOW_H = 290, TOP_PAD = 8;
 
@@ -40,14 +47,17 @@ function Sparkline({ history }) {
   );
 }
 
-export default function CapexSankey({ total, live, byCompany, tracks, marketData, history, onTrackClick }) {
+export default function CapexSankey({
+  total, live, byCompany, tracks, marketData, history, onTrackClick,
+  companyConfig = AI_COMPANIES,
+  subtitle = "Hyperscaler AI Capex",
+}) {
   const [hover, setHover] = useState(null); // company id | track id | null
 
   const { companies, trackNodes, ribbons, height } = useMemo(() => {
-    const ids = Object.keys(DEFAULT_SPLIT);
-    const companyCapex = ids.map(id => ({
-      id,
-      capex: byCompany?.[id] ?? DEFAULT_SPLIT[id] * total,
+    const companyCapex = companyConfig.map(cfg => ({
+      ...cfg,
+      capex: byCompany?.[cfg.id] ?? cfg.share * total,
     }));
     const companyTotal = companyCapex.reduce((s, c) => s + c.capex, 0) || 1;
 
@@ -92,7 +102,7 @@ export default function CapexSankey({ total, live, byCompany, tracks, marketData
     });
 
     return { companies, trackNodes, ribbons, height: TOP_PAD + FLOW_H + 12 };
-  }, [byCompany, total, tracks]);
+  }, [byCompany, total, tracks, companyConfig]);
 
   const x1 = LEFT_X + BAR_W, x2 = RIGHT_X, mx = (x1 + x2) / 2;
 
@@ -119,7 +129,7 @@ export default function CapexSankey({ total, live, byCompany, tracks, marketData
               ~${total}B{live ? "" : "+"}
             </span>
             <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: live ? "#34d399" : "#d97706" }}>
-              Hyperscaler AI Capex {live ? "(live, search-grounded)" : "(2026 est.)"}
+              {subtitle} {live ? "(live, search-grounded)" : "(2026 est.)"}
             </span>
           </div>
         </div>
@@ -146,21 +156,28 @@ export default function CapexSankey({ total, live, byCompany, tracks, marketData
 
           {/* company nodes */}
           {companies.map(c => {
-            const entry = marketData?.[c.id];
+            const entry = c.isPublic !== false ? marketData?.[c.id] : null;
             const pos = (entry?.change ?? 0) >= 0;
             return (
               <g key={c.id} style={{ cursor: "default" }}
                 onMouseEnter={() => setHover(c.id)} onMouseLeave={() => setHover(null)}
                 opacity={hover && hover !== c.id && !ribbons.some(r => r.track === hover) ? 0.45 : 1}>
                 <rect x={LEFT_X} y={c.y} width={BAR_W} height={Math.max(c.h, 2)} rx={2} fill="#fbbf24" opacity={0.85} />
-                <text x={LEFT_X - 10} y={c.y + c.h / 2 - 8} textAnchor="end" style={{ fill: "#f8fafc", fontSize: 13, fontWeight: 800 }}>{c.id}</text>
+                <text x={LEFT_X - 10} y={c.y + c.h / 2 - 8} textAnchor="end" style={{ fill: "#f8fafc", fontSize: 13, fontWeight: 800 }}>{c.label || c.id}</text>
                 <text x={LEFT_X - 10} y={c.y + c.h / 2 + 6} textAnchor="end" style={{ fill: "#fbbf24", fontSize: 11, fontWeight: 700 }}>{fmtB(c.capex)}</text>
-                <text x={LEFT_X - 10} y={c.y + c.h / 2 + 19} textAnchor="end"
-                  style={{ fill: entry?.change != null ? (pos ? "#10b981" : "#ef4444") : "#475569", fontSize: 10, fontWeight: 700 }}>
-                  {entry?.price ? `$${entry.price.toLocaleString("en-US", { maximumFractionDigits: 2 })} ` : ""}
-                  {entry?.change != null ? `${pos ? "+" : ""}${entry.change.toFixed(2)}%` : ""}
-                </text>
-                <title>{`${c.id}: ~${fmtB(c.capex)} AI capex${byCompany ? " (grounded intel)" : " (est. split)"}`}</title>
+                {entry ? (
+                  <text x={LEFT_X - 10} y={c.y + c.h / 2 + 19} textAnchor="end"
+                    style={{ fill: entry?.change != null ? (pos ? "#10b981" : "#ef4444") : "#475569", fontSize: 10, fontWeight: 700 }}>
+                    {entry?.price ? `$${entry.price.toLocaleString("en-US", { maximumFractionDigits: 2 })} ` : ""}
+                    {entry?.change != null ? `${pos ? "+" : ""}${entry.change.toFixed(2)}%` : ""}
+                  </text>
+                ) : c.isPublic === false ? (
+                  <text x={LEFT_X - 10} y={c.y + c.h / 2 + 19} textAnchor="end"
+                    style={{ fill: "#475569", fontSize: 9, fontWeight: 700, letterSpacing: "0.08em" }}>
+                    PRIVATE
+                  </text>
+                ) : null}
+                <title>{`${c.label || c.id}: ~${fmtB(c.capex)} capex${byCompany ? " (grounded intel)" : " (est. split)"}`}</title>
               </g>
             );
           })}

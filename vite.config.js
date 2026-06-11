@@ -21,6 +21,8 @@ export default defineConfig({
       '/exposure':    'http://localhost:8788',
       '/capex-history': 'http://localhost:8788',
       '/candidates':  'http://localhost:8788',
+      '/musk-capex':  'http://localhost:8788',
+      '/musk-intel':  'http://localhost:8788',
     },
   },
 })
