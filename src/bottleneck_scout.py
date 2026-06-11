@@ -39,7 +39,7 @@ import yfinance as yf
 # Reuse the proven signal machinery from the sibling ETLs
 from transcript_stress import (
     get_universe, lexicon_scan, lexicon_score, classify_with_gemini,
-    defeatbeta_transcripts, defeatbeta_text, MIN_TRANSCRIPT_WORDS,
+    defeatbeta_transcripts, defeatbeta_text, connect_db, MIN_TRANSCRIPT_WORDS,
     GEMINI_API_KEY, GEMINI_PAUSE, DEFEATBETA_OK,
 )
 from xbrl_gauges import get_cik_map, fetch_companyfacts, compute_gauges
@@ -266,7 +266,7 @@ if __name__ == "__main__":
     if not GEMINI_API_KEY:
         raise SystemExit("GEMINI_API_KEY not set — discovery requires it.")
 
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = connect_db(DATABASE_URL)
     try:
         with conn.cursor() as cur:
             cur.execute(BOOTSTRAP_SQL)

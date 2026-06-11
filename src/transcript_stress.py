@@ -417,6 +417,27 @@ def classify_with_gemini(ticker, year, quarter, excerpts):
 
 # ── DATABASE ──────────────────────────────────────────────
 
+def connect_db(url, max_retries=3):
+    """
+    psycopg2.connect with a fast timeout and retries. GitHub runner → Neon
+    connections occasionally hit a network blackout (TCP timeout on every
+    pooler IP); the default OS timeout burns ~2 min per IP and then the job
+    dies. A 20s cap plus fresh attempts usually lands on a healthy path.
+    """
+    delay = 10
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return psycopg2.connect(url, connect_timeout=20)
+        except psycopg2.OperationalError as e:
+            last_err = e
+            print(f"DB connect failed (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 2
+    raise last_err
+
+
 BOOTSTRAP_SQL = """
     CREATE TABLE IF NOT EXISTS transcript_stress (
         ticker          TEXT    NOT NULL,
@@ -562,7 +583,7 @@ if __name__ == "__main__":
     print(f"Universe: {len(universe)} tickers · quarters: "
           + ", ".join(f"{y}Q{q}" for y, q in quarters))
 
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = connect_db(DATABASE_URL)
     try:
         with conn.cursor() as cur:
             cur.execute(BOOTSTRAP_SQL)

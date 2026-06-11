@@ -34,8 +34,8 @@ import psycopg2
 import psycopg2.extras
 import requests
 
-# Universe helpers are shared with the transcript ETL (same directory).
-from transcript_stress import get_universe
+# Universe + DB helpers are shared with the transcript ETL (same directory).
+from transcript_stress import get_universe, connect_db
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SEC_HEADERS  = {"User-Agent": "WizzlesWatchlist flipsensazn@gmail.com"}
@@ -330,7 +330,7 @@ if __name__ == "__main__":
     cik_map = get_cik_map()
     today = date.today()
 
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = connect_db(DATABASE_URL)
     try:
         with conn.cursor() as cur:
             cur.execute(BOOTSTRAP_SQL)

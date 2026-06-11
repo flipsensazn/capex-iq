@@ -39,7 +39,7 @@ import psycopg2.extras
 import requests
 
 # Shared helpers from the sibling ETLs
-from transcript_stress import get_universe, call_gemini, GEMINI_API_KEY
+from transcript_stress import get_universe, call_gemini, connect_db, GEMINI_API_KEY
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SEC_HEADERS  = {"User-Agent": "WizzlesWatchlist flipsensazn@gmail.com"}
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     universe = get_universe()
     cik_map = get_cik_map()
 
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = connect_db(DATABASE_URL)
     try:
         with conn.cursor() as cur:
             cur.execute(BOOTSTRAP_SQL)
