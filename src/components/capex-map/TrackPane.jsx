@@ -13,7 +13,6 @@ export default function TrackPane({
   onRemoveSubsector,
   onRenameSubsector,
   EditableLabel,
-  Badge,
 }) {
   return (
     <div style={{ borderRadius: 18, border: `1px solid ${track.borderColor}44`, background: "rgba(24,24,24,0.92)", padding: 22, marginTop: 8, animation: "fadeSlideIn .25s ease-out" }}>
@@ -41,7 +40,6 @@ export default function TrackPane({
             onRemoveSubsector={() => onRemoveSubsector(track.id, sub.id)}
             onRenameSubsector={newName => onRenameSubsector(track.id, sub.id, newName)}
             EditableLabel={EditableLabel}
-            Badge={Badge}
           />
         ))}
 

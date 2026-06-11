@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, memo, useMemo, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
 import AdminModal from "./components/AdminModal";
 import AnalysisDrawer from "./components/AnalysisDrawer";
 import CapexSankey from "./components/CapexSankey";
@@ -149,64 +149,64 @@ const CAPEX_DATA = {
       id: "compute", label: "Compute & Silicon", value: "~$180B", capex: 180,
       color: "#60a5fa", borderColor: "#3b82f6",
       subsectors: [
-        { id: "gpu", label: "GPU & AI Accelerators", badge: null, tickers: ["NVDA","AMD","INTC"], materials: ["Cobalt","Tungsten","Silicon Wafer 300mm","HBM DRAM"] },
-        { id: "memory", label: "Memory & Storage", badge: "HBM CRITICAL", badgeColor: "#f59e0b", tickers: ["MU","WDC","STX"], materials: ["HBM3e Stacks","LPDDR5","3D NAND Flash","Silicon Wafer 300mm"] },
-        { id: "asic", label: "Custom ASICs & TPUs", badge: null, tickers: ["AVGO","MRVL","QCOM"], materials: ["Advanced Packaging CoWoS","HBM","EUV Photomasks"] },
-        { id: "foundry", label: "Leading-Edge Foundry", badge: "CAPACITY CONSTRAINED", badgeColor: "#f59e0b", tickers: ["TSM"], materials: ["Silicon Carbide","Neon Gas","EUV Resist","Cobalt"] },
-        { id: "equip", label: "Semiconductor Equipment", badge: null, tickers: ["AMAT","LRCX","ASML"], materials: ["Rare Earth Magnets","Fluorine Gas","Quartz"] },
-        { id: "packaging", label: "Advanced Packaging", badge: null, tickers: ["AMKR","ASX","CAMT","ONTO","KLAC"], materials: ["Advanced Packaging CoWoS","HBM","Fan-Out Wafer"] },
+        { id: "gpu", label: "GPU & AI Accelerators", tickers: ["NVDA","AMD","INTC"], materials: ["Cobalt","Tungsten","Silicon Wafer 300mm","HBM DRAM"] },
+        { id: "memory", label: "Memory & Storage", tickers: ["MU","WDC","STX"], materials: ["HBM3e Stacks","LPDDR5","3D NAND Flash","Silicon Wafer 300mm"] },
+        { id: "asic", label: "Custom ASICs & TPUs", tickers: ["AVGO","MRVL","QCOM"], materials: ["Advanced Packaging CoWoS","HBM","EUV Photomasks"] },
+        { id: "foundry", label: "Leading-Edge Foundry", tickers: ["TSM"], materials: ["Silicon Carbide","Neon Gas","EUV Resist","Cobalt"] },
+        { id: "equip", label: "Semiconductor Equipment", tickers: ["AMAT","LRCX","ASML"], materials: ["Rare Earth Magnets","Fluorine Gas","Quartz"] },
+        { id: "packaging", label: "Advanced Packaging", tickers: ["AMKR","ASX","CAMT","ONTO","KLAC"], materials: ["Advanced Packaging CoWoS","HBM","Fan-Out Wafer"] },
       ],
     },
     {
       id: "networking", label: "Networking & Connectivity", value: "~$50B", capex: 50,
       color: "#34d399", borderColor: "#10b981",
       subsectors: [
-        { id: "eth", label: "Ethernet Switching", badge: null, tickers: ["ANET","CSCO","HPE"], materials: ["Copper Cat8","PCB Laminate","Silicon"] },
-        { id: "cable", label: "Cables & Connectors", badge: null, tickers: ["GLW"], materials: ["Copper","Optical Fiber SiO2","Polymer Cladding"] },
-        { id: "cyber", label: "Cybersecurity", badge: null, tickers: ["PANW","CRWD","ZS"], materials: ["Secure Enclaves","HSM Hardware","Zero Trust Infrastructure"] },
+        { id: "eth", label: "Ethernet Switching", tickers: ["ANET","CSCO","HPE"], materials: ["Copper Cat8","PCB Laminate","Silicon"] },
+        { id: "cable", label: "Cables & Connectors", tickers: ["GLW"], materials: ["Copper","Optical Fiber SiO2","Polymer Cladding"] },
+        { id: "cyber", label: "Cybersecurity", tickers: ["PANW","CRWD","ZS"], materials: ["Secure Enclaves","HSM Hardware","Zero Trust Infrastructure"] },
       ],
     },
     {
       id: "photonics", label: "Photonics & Interconnects", value: "~$40B", capex: 35,
       color: "#fbbf24", borderColor: "#f59e0b",
       subsectors: [
-        { id: "engine", label: "Optical Engine & Transceiver L1", badge: null, tickers: ["LITE","COHR","AAOI","ALMU","MTSI","FN","POET","SIVE"], materials: ["InP Chips","Silicon Photonics Dies","Single-Mode Fiber"] },
-        { id: "inp", label: "InP Substrate & Epiwafer L2", badge: "EXTREME BOTTLENECK", badgeColor: "#ef4444", tickers: ["AXTI","IQEPF","SLOIF"], materials: [ { name: "Indium", constraint: "CRITICAL — 70% supply from China", color: "#ef4444" }, { name: "Phosphorus", constraint: "Moderate supply risk", color: "#f59e0b" }, { name: "InP Wafer 2-4\"", constraint: "Capacity severely limited", color: "#ef4444" }, { name: "Gallium", constraint: "China export controls active", color: "#ef4444" }, ] },
-        { id: "epitaxy", label: "Epitaxy Equipment L3", badge: null, tickers: ["VECO"], materials: ["Trimethylindium TMIn","Phosphine PH3","Quartz Chambers"] },
-        { id: "siph", label: "SiPh Foundry L4", badge: null, tickers: ["TSEM","GFS"], materials: ["Silicon-on-Insulator Wafers","Germanium","TiN Electrodes"] },
-        { id: "interconnects", label: "High-Speed Interconnects", badge: null, tickers: ["APH","TEL","ALAB"], materials: ["High-Speed Copper","Differential Pair PCB","Signal Integrity"] },
+        { id: "engine", label: "Optical Engine & Transceiver L1", tickers: ["LITE","COHR","AAOI","ALMU","MTSI","FN","POET","SIVE"], materials: ["InP Chips","Silicon Photonics Dies","Single-Mode Fiber"] },
+        { id: "inp", label: "InP Substrate & Epiwafer L2", tickers: ["AXTI","IQEPF","SLOIF"], materials: [ { name: "Indium", constraint: "CRITICAL — 70% supply from China", color: "#ef4444" }, { name: "Phosphorus", constraint: "Moderate supply risk", color: "#f59e0b" }, { name: "InP Wafer 2-4\"", constraint: "Capacity severely limited", color: "#ef4444" }, { name: "Gallium", constraint: "China export controls active", color: "#ef4444" }, ] },
+        { id: "epitaxy", label: "Epitaxy Equipment L3", tickers: ["VECO"], materials: ["Trimethylindium TMIn","Phosphine PH3","Quartz Chambers"] },
+        { id: "siph", label: "SiPh Foundry L4", tickers: ["TSEM","GFS"], materials: ["Silicon-on-Insulator Wafers","Germanium","TiN Electrodes"] },
+        { id: "interconnects", label: "High-Speed Interconnects", tickers: ["APH","TEL","ALAB"], materials: ["High-Speed Copper","Differential Pair PCB","Signal Integrity"] },
       ],
     },
     {
       id: "neoclouds", label: "Neoclouds & Data Centers", value: "~$120B", capex: 120,
       color: "#c084fc", borderColor: "#a855f7",
       subsectors: [
-        { id: "reit", label: "Hyperscale REITs", badge: null, tickers: ["EQIX","DLR","AMT","IRM"], materials: ["Structural Steel","Concrete","Copper Busbar","Fiber"] },
-        { id: "neocloud", label: "GPU Cloud Operators", badge: "RAPID GROWTH", badgeColor: "#34d399", tickers: ["CIFR","IREN","CORZ","APLD","CRWV","NBIS"], materials: ["Power Infrastructure","Cooling Systems","High-density Racks"] },
-        { id: "servers", label: "AI Server Infrastructure", badge: null, tickers: ["SMCI","DELL"], materials: ["Copper Heat Pipes","PCB","Aluminum Extrusions"] },
-        { id: "mep", label: "Mechanical, Electrical & Plumbing", badge: null, tickers: ["FIX","EME","MTZ"], materials: ["Electrical Conduit","HVAC Systems","Industrial Piping"] },
+        { id: "reit", label: "Hyperscale REITs", tickers: ["EQIX","DLR","AMT","IRM"], materials: ["Structural Steel","Concrete","Copper Busbar","Fiber"] },
+        { id: "neocloud", label: "GPU Cloud Operators", tickers: ["CIFR","IREN","CORZ","APLD","CRWV","NBIS"], materials: ["Power Infrastructure","Cooling Systems","High-density Racks"] },
+        { id: "servers", label: "AI Server Infrastructure", tickers: ["SMCI","DELL"], materials: ["Copper Heat Pipes","PCB","Aluminum Extrusions"] },
+        { id: "mep", label: "Mechanical, Electrical & Plumbing", tickers: ["FIX","EME","MTZ"], materials: ["Electrical Conduit","HVAC Systems","Industrial Piping"] },
       ],
     },
     {
       id: "power", label: "Power & Cooling", value: "~$45B", capex: 45,
       color: "#fb923c", borderColor: "#f97316",
       subsectors: [
-        { id: "grid", label: "Power Generation & Utilities", badge: "GRID BOTTLENECK", badgeColor: "#ef4444", tickers: ["VST","NEE","BE"], materials: ["Copper Grid","Silicon Steel Transformers","Lithium Storage"] },
-        { id: "nuclear", label: "Nuclear", badge: "EMERGING", badgeColor: "#fb923c", tickers: ["OKLO","SMR","LEU","ASPI"], materials: ["Enriched Uranium","Zirconium Cladding","Boron Control Rods"] },
-        { id: "ups", label: "Power Management & UPS", badge: null, tickers: ["ETN","VRT","PLPC","ENS"], materials: ["Silicon Carbide SiC","Electrolytic Capacitors","Copper Winding"] },
-        { id: "cooling", label: "Liquid & Immersion Cooling", badge: "EMERGING", badgeColor: "#60a5fa", tickers: ["NVT","MOD"], materials: ["Dielectric Fluid","Copper Cold Plates","Deionized Water"] },
+        { id: "grid", label: "Power Generation & Utilities", tickers: ["VST","NEE","BE"], materials: ["Copper Grid","Silicon Steel Transformers","Lithium Storage"] },
+        { id: "nuclear", label: "Nuclear", tickers: ["OKLO","SMR","LEU","ASPI"], materials: ["Enriched Uranium","Zirconium Cladding","Boron Control Rods"] },
+        { id: "ups", label: "Power Management & UPS", tickers: ["ETN","VRT","PLPC","ENS"], materials: ["Silicon Carbide SiC","Electrolytic Capacitors","Copper Winding"] },
+        { id: "cooling", label: "Liquid & Immersion Cooling", tickers: ["NVT","MOD"], materials: ["Dielectric Fluid","Copper Cold Plates","Deionized Water"] },
       ],
     },
     {
       id: "frontier", label: "Frontier / Speculative", value: "Early", capex: 15,
       color: "#f472b6", borderColor: "#ec4899",
       subsectors: [
-        { id: "quantum", label: "Quantum Computing", badge: "SPECULATIVE", badgeColor: "#f472b6", tickers: ["IONQ","RGTI","QUBT","ARQQ"], materials: [ { name: "Helium-3", constraint: "CRITICAL — extremely scarce", color: "#ef4444" }, { name: "Niobium", constraint: "Limited processing capacity", color: "#f59e0b" }, { name: "Sapphire Substrate", constraint: "Moderate availability", color: "#60a5fa" }, ] },
-        { id: "neuro", label: "Neuromorphic & Edge AI", badge: "EARLY STAGE", badgeColor: "#c084fc", tickers: ["ARM","OSS"], materials: ["Phase-Change Materials","Memristive Oxides","Hafnium Oxide"] },
-        { id: "space", label: "Space", badge: "EARLY STAGE", badgeColor: "#c084fc", tickers: ["RKLB","ASTS"], materials: ["Phase-Change Materials","Memristive Oxides","Hafnium Oxide"] },
-        { id: "saas", label: "SaaS", badge: null, tickers: ["PLTR","SNOW","NOW"], materials: ["Cloud Infrastructure","API Gateways","Multi-tenant Architecture"] },
-        { id: "robotics", label: "Robotics", badge: "EMERGING", badgeColor: "#c084fc", tickers: ["TER","SYM","TSLA"], materials: ["Servo Motors","LiDAR Sensors","Carbon Fiber Composites"] },
-        { id: "metals", label: "Precious Metals & Commodities", badge: "MACRO HEDGE", badgeColor: "#f59e0b", tickers: ["USAS","COPX","SLV","GLD","NEM"], materials: [ { name: "Gold", constraint: "Safe haven demand rising", color: "#f59e0b" }, { name: "Silver", constraint: "Industrial + monetary demand", color: "#94a3b8" }, { name: "Copper", constraint: "CRITICAL — AI grid buildout demand", color: "#fb923c" }, ] },
+        { id: "quantum", label: "Quantum Computing", tickers: ["IONQ","RGTI","QUBT","ARQQ"], materials: [ { name: "Helium-3", constraint: "CRITICAL — extremely scarce", color: "#ef4444" }, { name: "Niobium", constraint: "Limited processing capacity", color: "#f59e0b" }, { name: "Sapphire Substrate", constraint: "Moderate availability", color: "#60a5fa" }, ] },
+        { id: "neuro", label: "Neuromorphic & Edge AI", tickers: ["ARM","OSS"], materials: ["Phase-Change Materials","Memristive Oxides","Hafnium Oxide"] },
+        { id: "space", label: "Space", tickers: ["RKLB","ASTS"], materials: ["Phase-Change Materials","Memristive Oxides","Hafnium Oxide"] },
+        { id: "saas", label: "SaaS", tickers: ["PLTR","SNOW","NOW"], materials: ["Cloud Infrastructure","API Gateways","Multi-tenant Architecture"] },
+        { id: "robotics", label: "Robotics", tickers: ["TER","SYM","TSLA"], materials: ["Servo Motors","LiDAR Sensors","Carbon Fiber Composites"] },
+        { id: "metals", label: "Precious Metals & Commodities", tickers: ["USAS","COPX","SLV","GLD","NEM"], materials: [ { name: "Gold", constraint: "Safe haven demand rising", color: "#f59e0b" }, { name: "Silver", constraint: "Industrial + monetary demand", color: "#94a3b8" }, { name: "Copper", constraint: "CRITICAL — AI grid buildout demand", color: "#fb923c" }, ] },
       ],
     },
   ],
@@ -257,16 +257,6 @@ function EditableLabel({ text, onSave, isAdmin, style, textStyles }) {
     />
   );
 }
-
-const Badge = memo(function Badge({ text, color }) {
-  return (
-    <span style={{
-      background: color + "22", border: `1px solid ${color}`, color,
-      fontSize: 10, fontWeight: 700, letterSpacing: "0.15em",
-      padding: "2px 7px", borderRadius: 3, textTransform: "uppercase", whiteSpace: "nowrap",
-    }}>{text}</span>
-  );
-});
 
 function MiniChart({ data, dates, color, ticker }) {
   if (!data || data.length < 2) return null;
@@ -1444,7 +1434,7 @@ export default function App() {
 
   function addSubsector(trackId) {
     const newId = `sub-${Date.now()}`;
-    const newSub = { id: newId, label: "New Sub-Sector", badge: null, tickers: [], materials: [] };
+    const newSub = { id: newId, label: "New Sub-Sector", tickers: [], materials: [] };
     const newData = {
       ...capexData,
       tracks: capexData.tracks.map(t => t.id === trackId ? { ...t, subsectors: [...t.subsectors, newSub] } : t)
@@ -1668,7 +1658,6 @@ export default function App() {
               onRemoveSubsector={removeSubsector}
               onRenameSubsector={renameSubsector}
               EditableLabel={EditableLabel}
-              Badge={Badge}
             />
           )}
 

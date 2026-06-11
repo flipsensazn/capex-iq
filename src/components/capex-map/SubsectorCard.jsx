@@ -14,15 +14,15 @@ export default function SubsectorCard({
   onRemoveSubsector,
   onRenameSubsector,
   EditableLabel,
-  Badge,
 }) {
   const [open, setOpen] = useState(false);
   const [stressOpen, setStressOpen] = useState(false);
   const [addingTicker, setAddingTicker] = useState(false);
   const [newTicker, setNewTicker] = useState("");
-  // Bottleneck styling fires from the hand-curated badge OR live transcript stress
-  const isBottleneck = sub.badge === "EXTREME BOTTLENECK" || sub.badge === "GRID BOTTLENECK" || (stress?.score ?? 0) >= 70;
-  const isHot = sub.badge === "HIGH DEMAND" || sub.badge === "RAPID GROWTH";
+  // Card styling is purely data-driven: live transcript/XBRL stress only
+  const stressScore = stress?.score ?? 0;
+  const isBottleneck = stressScore >= 70;
+  const isHot = stressScore >= 40 && stressScore < 70;
 
   function handleAdd() {
     if (newTicker.trim()) {
@@ -55,7 +55,6 @@ export default function SubsectorCard({
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <StressBadge stress={stress} open={stressOpen} onClick={() => setStressOpen(v => !v)} />
           <GaugeChip tickers={sub.tickers} gauges={gauges} open={stressOpen} onClick={() => setStressOpen(v => !v)} />
-          {sub.badge && <Badge text={sub.badge} color={sub.badgeColor} />}
           {isAdmin && (
             <button
               onClick={e => {
