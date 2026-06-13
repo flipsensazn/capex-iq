@@ -445,7 +445,15 @@ def connect_db(url, max_retries=3):
     last_err = None
     for attempt in range(max_retries):
         try:
-            return psycopg2.connect(url, connect_timeout=20)
+            # TCP keepalives keep the socket warm through the long idle gaps
+            # between upserts (Gemini calls + GEMINI_PAUSE sleeps). Without
+            # them Neon's pooler drops the idle connection and the next
+            # cur.execute dies with "SSL connection has been closed".
+            return psycopg2.connect(
+                url, connect_timeout=20,
+                keepalives=1, keepalives_idle=30,
+                keepalives_interval=10, keepalives_count=5,
+            )
         except psycopg2.OperationalError as e:
             last_err = e
             print(f"DB connect failed (attempt {attempt + 1}/{max_retries}): {e}")
@@ -613,8 +621,25 @@ if __name__ == "__main__":
             print(f"[{n}/{len(universe)}] {ticker}")
             try:
                 analyze_ticker(conn, ticker, quarters, existing)
+            except psycopg2.OperationalError as e:
+                # A dropped connection (idle timeout / network blip) is
+                # recoverable: everything before it is already committed, and
+                # the upsert is idempotent. Reconnect and retry this ticker
+                # once before giving up.
+                print(f"  {ticker}: DB connection lost ({e}) — reconnecting...")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = connect_db(DATABASE_URL)
+                try:
+                    analyze_ticker(conn, ticker, quarters, existing)
+                except psycopg2.Error:
+                    raise  # still failing after a fresh connection — fatal
+                except Exception as e:
+                    print(f"  {ticker}: skipped — {e}")
             except psycopg2.Error:
-                raise  # DB problems are fatal — don't grind through the whole list
+                raise  # other DB problems are fatal — don't grind through the list
             except Exception as e:
                 print(f"  {ticker}: skipped — {e}")
     finally:
