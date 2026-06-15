@@ -42,6 +42,10 @@ jobs:
           EARNINGSCALL_API_KEY: ${{ secrets.EARNINGSCALL_API_KEY }}
           WATCHLIST_BASE_URL:   ${{ vars.WATCHLIST_BASE_URL }}
           TICKER_LIMIT:         ${{ github.event.inputs.ticker_limit }}
+          # Telegram digest of supply-chain graph stress changes (optional —
+          # the same secrets the premarket scanner uses)
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python src/transcript_stress.py
 
       - name: Notify on failure

@@ -522,6 +522,129 @@ def get_existing_keys(conn):
         return {(t, y, q) for t, y, q in cur.fetchall()}
 
 
+# ── SUPPLY-CHAIN GRAPH CHANGE ALERTS ──────────────────────
+# Telegram digest of weekly stress changes for tickers that are NODES on the
+# dependency graphs. Keep these sets in sync with the graph data files
+# (src/components/capex-map/supplyGraphData.js and muskData.js); external
+# chokepoints and private companies are excluded — they have no transcripts.
+AI_GRAPH_TICKERS = {
+    "ASML", "AMAT", "LRCX", "KLAC", "VECO", "AXTI", "IQEPF", "TSM", "GFS",
+    "TSEM", "INTC", "MU", "NVDA", "AMD", "AVGO", "MRVL", "ARM", "LITE", "COHR",
+    "AAOI", "FN", "MTSI", "ALAB", "APH", "GLW", "SMCI", "DELL", "ANET", "CSCO",
+    "VRT", "ETN", "NVT", "MOD", "EQIX", "DLR", "CRWV", "NBIS", "IREN", "APLD",
+    "CORZ", "VST", "NEE", "LEU", "OKLO", "SMR", "AMZN", "MSFT", "GOOG", "META", "ORCL",
+}
+MUSK_GRAPH_TICKERS = {
+    "TSLA", "ALB", "SQM", "ELVR", "ATI", "CRS", "AMAT", "LRCX", "KLAC", "ASML",
+    "TSM", "NVDA", "ON", "STM", "WOLF", "MU", "QRVO", "FLTCF", "SMCI", "DELL",
+    "VRT", "PCRFF", "APTV", "HWM", "RDW", "CAT", "GEV", "ETN",
+}
+GRAPH_NODE_TICKERS = AI_GRAPH_TICKERS | MUSK_GRAPH_TICKERS
+
+ALERT_DELTA     = 15  # min |score move| to alert
+ALERT_NEW_MIN   = 40  # a first-ever score must reach this to be noteworthy
+BOTTLENECK_LINE = 70  # crossing this either way always alerts (red-node line)
+
+DIR_LABEL = {
+    "constrained_supplier": "bottleneck owner",
+    "constrained_buyer":    "input-constrained",
+    "both":                 "owner + input-constrained",
+    "neutral":              "routine",
+}
+
+
+def send_telegram(text):
+    """Markdown message to the configured chat. Never raises — a notification
+    failure must not fail the ETL."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        print("telegram: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set — skipping alert")
+        return
+    try:
+        res = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown",
+                  "disable_web_page_preview": True},
+            timeout=30,
+        )
+        ok = res.ok and res.json().get("ok")
+        print("telegram: sent" if ok else f"telegram: failed ({res.status_code}) {res.text[:200]}")
+    except Exception as e:
+        print(f"telegram: send error — {e}")
+
+
+def snapshot_graph_stress(conn):
+    """Latest transcript stress per graph-node ticker → {ticker: {...}}."""
+    out = {}
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT ON (ticker)
+                ticker, fiscal_year, fiscal_quarter, stress_score, direction, summary
+            FROM transcript_stress
+            ORDER BY ticker, fiscal_year DESC, fiscal_quarter DESC
+        """)
+        for ticker, fy, fq, score, direction, summary in cur.fetchall():
+            if ticker in GRAPH_NODE_TICKERS:
+                out[ticker] = {
+                    "fy": fy, "fq": fq,
+                    "score": float(score) if score is not None else None,
+                    "direction": direction, "summary": summary,
+                }
+    return out
+
+
+def _graphs_for(ticker):
+    tags = [t for t, s in (("AI", AI_GRAPH_TICKERS), ("Musk", MUSK_GRAPH_TICKERS)) if ticker in s]
+    return " + ".join(tags) + (" graphs" if len(tags) > 1 else " graph")
+
+
+def _score_emoji(score):
+    if score is None:    return "⚪"
+    if score >= 70:      return "🔴"
+    if score >= 40:      return "🟠"
+    if score >= 15:      return "🔵"
+    return "🟢"
+
+
+def build_change_blocks(before, after):
+    """Meaningful graph-stress changes between two snapshots → list of (score, block)."""
+    md_strip = lambda s: re.sub(r"[_*`\[\]]", "", s or "")
+    blocks = []
+    for ticker, a in after.items():
+        if a["score"] is None:
+            continue
+        b = before.get(ticker)
+        new = a["score"]
+
+        if b is None or b["score"] is None:
+            if new < ALERT_NEW_MIN:
+                continue  # a fresh node, but not stressed enough to flag
+            delta_txt = f"— → {new:.0f}  (new signal)"
+        else:
+            old = b["score"]
+            delta = new - old
+            crossed = (old < BOTTLENECK_LINE <= new) or (new < BOTTLENECK_LINE <= old)
+            dir_changed = a["direction"] != b["direction"]
+            unchanged_quarter = (a["fy"], a["fq"]) == (b["fy"], b["fq"])
+            if unchanged_quarter and abs(delta) < 0.5 and not dir_changed:
+                continue  # node untouched this run
+            if abs(delta) < ALERT_DELTA and not crossed and not dir_changed:
+                continue  # moved, but not by enough to matter
+            sign = "+" if delta >= 0 else ""
+            delta_txt = f"{old:.0f} → {new:.0f}  ({sign}{delta:.0f})"
+
+        dlabel = DIR_LABEL.get(a["direction"], a["direction"] or "—")
+        block = (f"{_score_emoji(new)} *{ticker}*  {delta_txt}\n"
+                 f"_{dlabel} · {_graphs_for(ticker)} · {a['fy']}Q{a['fq']}_")
+        if a["summary"]:
+            block += f"\n{md_strip(a['summary'])[:240]}"
+        blocks.append((new, block))
+
+    blocks.sort(key=lambda x: -x[0])  # most-stressed first
+    return [blk for _, blk in blocks]
+
+
 # ── MAIN ─────────────────────────────────────────────────
 
 def analyze_ticker(conn, ticker, calendar_quarters, existing):
@@ -617,6 +740,9 @@ if __name__ == "__main__":
         existing = get_existing_keys(conn)
         print(f"{len(existing)} transcript analyses already on file.")
 
+        # Snapshot graph-node stress BEFORE processing so we can diff after.
+        before = snapshot_graph_stress(conn)
+
         for n, ticker in enumerate(universe, 1):
             print(f"[{n}/{len(universe)}] {ticker}")
             try:
@@ -642,6 +768,18 @@ if __name__ == "__main__":
                 raise  # other DB problems are fatal — don't grind through the list
             except Exception as e:
                 print(f"  {ticker}: skipped — {e}")
+
+        # Diff and alert on supply-chain graph stress changes.
+        after = snapshot_graph_stress(conn)
+        changes = build_change_blocks(before, after)
+        if changes:
+            print(f"\n{len(changes)} graph stress change(s) — sending Telegram alert.")
+            header = (f"🕸 *Supply Chain Graph — {len(changes)} stress "
+                      f"change{'s' if len(changes) != 1 else ''}*\n"
+                      f"_week of {date.today().isoformat()}_")
+            send_telegram(header + "\n\n" + "\n\n".join(changes))
+        else:
+            print("\nNo meaningful graph stress changes this run — no alert sent.")
     finally:
         conn.close()
 
