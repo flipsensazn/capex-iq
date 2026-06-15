@@ -43,6 +43,7 @@ export function useDashboardData({
   indexTickers,
   cryptoTickers,
   hyperscalerTickers,
+  pinnedTickers = [],
   fetchAllPrices,
   getAllTickers,
 }) {
@@ -64,6 +65,9 @@ export function useDashboardData({
   const pricesRef = useRef({});
   const capexDataRef = useRef(defaultCapexData);
   const muskDataRef = useRef(defaultMuskData);
+  // Which view is showing — refresh fetches only that view's map, not both
+  // (fetching both doubled the per-cycle ticker count and broke the cache).
+  const activeViewRef = useRef("ai");
   const scannerPoolRef = useRef(defaultScannerPool);
   const shortListRef = useRef([]);
   const [marketData, setMarketData] = useState({});
@@ -221,12 +225,18 @@ export function useDashboardData({
   const refresh = useCallback(async () => {
     setRefreshing(true);
     const marketTickers = [...indexTickers, ...cryptoTickers, ...hyperscalerTickers];
+    // Only the ACTIVE view's map is on screen, so only fetch its tickers —
+    // the heat map, watchlist, Sankey, graph and earnings panels all read the
+    // active view. The inactive view's prices are fetched when you switch to it.
+    const activeMap = activeViewRef.current === "musk" && muskDataRef.current
+      ? muskDataRef.current
+      : capexDataRef.current;
     const allTickers = [...new Set([
-      ...getAllTickers(capexDataRef.current),
-      ...(muskDataRef.current ? getAllTickers(muskDataRef.current) : []),
+      ...getAllTickers(activeMap),
       ...scannerPoolRef.current,
       ...shortListRef.current,
       ...marketTickers,
+      ...pinnedTickers,  // public hub companies not in a map (e.g. TSLA for the Musk Sankey)
     ])];
 
     const allData = await fetchAllPrices(allTickers);
@@ -247,7 +257,7 @@ export function useDashboardData({
     });
     setLastUpdated(new Date().toLocaleTimeString());
     setRefreshing(false);
-  }, [cryptoTickers, fetchAllPrices, getAllTickers, hyperscalerTickers, indexTickers]);
+  }, [cryptoTickers, fetchAllPrices, getAllTickers, hyperscalerTickers, indexTickers, pinnedTickers]);
 
   useEffect(() => {
     refresh();
@@ -306,6 +316,8 @@ export function useDashboardData({
     refreshing,
     refresh,
     capexDataRef,
+    muskDataRef,
+    activeViewRef,
     scannerPoolRef,
     shortListRef,
   };

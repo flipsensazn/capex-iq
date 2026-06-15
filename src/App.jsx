@@ -22,6 +22,9 @@ function useMobile() { return useContext(MobileCtx); }
 const INDEX_TICKERS = ["^GSPC", "^DJI", "^IXIC"];
 const CRYPTO_TICKERS = ["BTC-USD", "ETH-USD", "XRP-USD"];
 const HYPERSCALER_TICKERS = ["AMZN", "MSFT", "GOOG", "META", "ORCL"];
+// Public hub companies shown on a Sankey but not present as suppliers in a
+// capex map — always fetched so their price renders (TSLA on the Musk view).
+const PINNED_TICKERS = MUSK_COMPANIES.filter(c => c.isPublic).map(c => c.id);
 
 // The default Multibagger Scanner list
 const DEFAULT_MULTIBAGGER = [
@@ -1384,6 +1387,7 @@ export default function App() {
     refreshing,
     refresh,
     capexDataRef,
+    activeViewRef,
     scannerPoolRef,
     shortListRef,
   } = useDashboardData({
@@ -1393,11 +1397,19 @@ export default function App() {
     indexTickers: INDEX_TICKERS,
     cryptoTickers: CRYPTO_TICKERS,
     hyperscalerTickers: HYPERSCALER_TICKERS,
+    pinnedTickers: PINNED_TICKERS,
     fetchAllPrices,
     getAllTickers,
   });
 
   const { onlineCount } = usePresence();
+
+  // Keep the price-refresh scope in sync with the active view, and pull the
+  // newly-shown view's prices immediately on switch (don't wait for the 30s tick).
+  useEffect(() => {
+    activeViewRef.current = view;
+    refresh();
+  }, [view, activeViewRef, refresh]);
 
   const showNotice = useCallback((message, type = "error") => {
     setAppNotice({ message, type });
