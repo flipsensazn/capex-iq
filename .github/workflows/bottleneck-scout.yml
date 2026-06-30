@@ -17,7 +17,7 @@ on:
         required: false
         type: choice
         default: 'both'
-        options: [both, ai, musk]
+        options: [both, ai, musk, robotics]
 
 jobs:
   run-bottleneck-scout:

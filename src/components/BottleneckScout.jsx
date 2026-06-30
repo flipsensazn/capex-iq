@@ -17,6 +17,17 @@ const TRACK_LABELS = {
     space: "Launch & Starlink (SpaceX)", energy: "Energy & Storage",
     infra: "Build-out, Power & Tunnels", frontier: "Neuralink & Robotics",
   },
+  robotics: {
+    brain: "Brain & Edge AI", sensors: "Sensors & Perception",
+    motors: "Motors & Motion", joints: "Joints & Precision Motion",
+    power: "Power Electronics", materials: "Rare Earth & Energy",
+  },
+};
+
+// Per-view chip shown on candidate cards (AI candidates get no chip).
+const VIEW_CHIP = {
+  musk:     { text: "🚀 MUSK",     color: "#c084fc", hint: "Musk Galaxy supply-chain candidate" },
+  robotics: { text: "🦾 ROBOTICS", color: "#34d399", hint: "Humanoid-robotics supply-chain candidate" },
 };
 
 const DIR_LABELS = {
@@ -64,8 +75,8 @@ function CandidateCard({ c, isAdmin, onReview, onTickerClick }) {
         {c.isOtc && (
           <span style={{ fontSize: 9, fontWeight: 800, color: "#fbbf24", border: "1px solid #fbbf2466", background: "#fbbf2414", borderRadius: 3, padding: "1px 5px" }}>OTC</span>
         )}
-        {c.view === "musk" && (
-          <span title="Musk Galaxy supply-chain candidate" style={{ fontSize: 9, fontWeight: 800, color: "#c084fc", border: "1px solid #c084fc66", background: "#c084fc14", borderRadius: 3, padding: "1px 5px" }}>🚀 MUSK</span>
+        {VIEW_CHIP[c.view] && (
+          <span title={VIEW_CHIP[c.view].hint} style={{ fontSize: 9, fontWeight: 800, color: VIEW_CHIP[c.view].color, border: `1px solid ${VIEW_CHIP[c.view].color}66`, background: VIEW_CHIP[c.view].color + "14", borderRadius: 3, padding: "1px 5px" }}>{VIEW_CHIP[c.view].text}</span>
         )}
         <span style={{ fontSize: 10, color: "#475569", marginLeft: "auto" }}>
           {fmtCap(c.marketCap)}{c.price != null && ` · $${c.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}`}
@@ -77,7 +88,7 @@ function CandidateCard({ c, isAdmin, onReview, onTickerClick }) {
           {c.chokepoint || "bottleneck candidate"}
         </span>
         <span style={{ fontSize: 10, color: "#64748b" }}>
-          → {TRACK_LABELS[c.view === "musk" ? "musk" : "ai"][c.trackId] || c.trackId}{c.suggestedSubsector ? ` · ${c.suggestedSubsector}` : ""}
+          → {(TRACK_LABELS[c.view] || TRACK_LABELS.ai)[c.trackId] || c.trackId}{c.suggestedSubsector ? ` · ${c.suggestedSubsector}` : ""}
         </span>
       </div>
 

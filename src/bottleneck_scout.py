@@ -51,11 +51,17 @@ GEMINI_MODEL       = "gemini-2.5-flash"
 
 # Discovery themes — one grounded search per track, per view. The "ai" view
 # hunts the hyperscaler capex chain; the "musk" view hunts the supply chains
-# of Elon Musk's companies. SCOUT_VIEW env: "ai" | "musk" | "both" (default).
+# of Elon Musk's companies; the "robotics" view hunts the humanoid-robot
+# component chain. SCOUT_VIEW env: "ai" | "musk" | "robotics" | "all"
+# (default "both"/"all" = every view).
 AI_CONTEXT = "AI infrastructure (the hyperscaler capex build-out)"
 MUSK_CONTEXT = ("the supply chains of Elon Musk's companies — Tesla, SpaceX/"
                 "Starlink, xAI (Colossus datacenters), the Terafab chip fab "
                 "project, The Boring Company, and Neuralink")
+ROBOTICS_CONTEXT = ("the humanoid-robot supply chain — the component makers "
+                    "supplying robot makers like Tesla Optimus, Figure, Agility, "
+                    "Unitree, 1X and XPeng (the value is in the repeating parts, "
+                    "not the robot)")
 
 THEMES = [
     ("compute", "Compute & Silicon",
@@ -99,6 +105,28 @@ MUSK_THEMES = [
     ("frontier", "Neuralink & Robotics",
      "humanoid robot (Optimus) actuators, harmonic drives, sensors; "
      "implant-grade components and surgical robotics"),
+]
+
+# Track ids must match ROBOTICS_CAPEX_DATA in src/components/capex-map/roboticsData.js
+ROBOTICS_THEMES = [
+    ("joints", "Joints & Precision Motion",
+     "harmonic / strain-wave reduction gears, planetary roller screws, linear "
+     "actuators and precision bearings for robot joints — the supply bottleneck"),
+    ("motors", "Motors & Motion",
+     "coreless and frameless torque motors, servo drives, precision motion for "
+     "humanoid actuators"),
+    ("sensors", "Sensors & Perception",
+     "joint position / magnetic encoders, 6-axis force-torque and tactile "
+     "sensors, vision and LiDAR for humanoids"),
+    ("joints", "Dexterous Hands & Tactile",
+     "dexterous robotic hand modules, finger drive units, tactile skin and "
+     "fingertip force sensing"),
+    ("power", "Power Electronics for Robots",
+     "GaN/SiC power stages, motor-control MCUs and gate drivers sized for "
+     "compact high-torque robot actuators"),
+    ("materials", "Rare-Earth Magnets & Materials",
+     "NdFeB and high-temperature rare-earth magnets, magnet-grade alloy supply "
+     "for robot motors — the scarce input"),
 ]
 
 DISCOVER_PROMPT = """You are a supply-chain analyst hunting for PUBLIC companies exposed to CURRENT bottlenecks in {context}.
@@ -322,10 +350,12 @@ if __name__ == "__main__":
         cik_map = get_cik_map()
         total_added = 0
 
+        # SCOUT_VIEW: "all"/"both" (every view) or a single view id.
         view_plans = [v for v in (
             ("ai", AI_CONTEXT, THEMES),
             ("musk", MUSK_CONTEXT, MUSK_THEMES),
-        ) if SCOUT_VIEW in ("both", v[0])]
+            ("robotics", ROBOTICS_CONTEXT, ROBOTICS_THEMES),
+        ) if SCOUT_VIEW in ("all", "both", v[0])]
 
         for view, context, themes in view_plans:
             added = 0
