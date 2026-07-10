@@ -26,6 +26,7 @@ export default defineConfig({
       '/robotics-capex': 'http://localhost:8788',
       '/robotics-intel': 'http://localhost:8788',
       '/composite':   'http://localhost:8788',
+      '/scoreboard':  'http://localhost:8788',
     },
   },
 })

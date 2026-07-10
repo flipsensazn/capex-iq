@@ -52,6 +52,22 @@ fires on meaningful weekly moves (Δ ≥ 15 or crossing 70). Graph-inherited
 risk is deliberately not blended in — CBS measures intrinsic heat; the graph
 radiates it.
 
+## Signal Performance Scoreboard
+
+`src/signal_scoreboard.py` (runs each Sunday after the CBS step, same
+workflow) is the feedback loop that tests whether the signals actually have
+edge. Every time the system fires — CBS crossing 70, CBS jumping +15 in a
+week, transcript stress crossing 70, XBRL order gap breaching +50pp, or a
+scout candidate being approved — the event is logged to Neon `signal_events`
+with the first close after the event date, and 1w/1m/3m forward returns vs
+QQQ are filled in as each window matures. Transcript events are backfilled to
+their earnings-call dates, so the scoreboard seeds with history immediately.
+A 90-day per-ticker refractory stops threshold oscillation from double
+counting. `GET /scoreboard` aggregates median excess return and hit rate per
+signal type (plus an all-signals rollup); the ⚖ Signal Scoreboard panel below
+the Bottleneck Scout renders the verdict and the most recent signal chips.
+No alerting — this layer is passive measurement.
+
 ## Robotics view
 
 A third view (tab, or `#robotics` in the URL) tracking the humanoid-robot
