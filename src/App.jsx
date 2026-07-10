@@ -5,6 +5,7 @@ import BottleneckScout from "./components/BottleneckScout";
 import CapexSankey from "./components/CapexSankey";
 import CompositeMovers from "./components/CompositeMovers";
 import FearGreedGauge from "./components/FearGreedGauge";
+import SignalScoreboard from "./components/SignalScoreboard";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
 import EarningsWeek from "./components/EarningsWeek";
@@ -1384,6 +1385,7 @@ export default function App() {
     gaugesData,
     exposureData,
     compositeData,
+    scoreboardData,
     candidates,
     setCandidates,
     muskCapexData,
@@ -1840,6 +1842,11 @@ export default function App() {
             candidates={candidates}
             isAdmin={isAdmin}
             onReview={reviewCandidate}
+            onTickerClick={openPopup}
+          />
+
+          <SignalScoreboard
+            data={scoreboardData}
             onTickerClick={openPopup}
           />
 
