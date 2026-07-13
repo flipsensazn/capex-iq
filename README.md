@@ -68,6 +68,21 @@ signal type (plus an all-signals rollup); the ⚖ Signal Scoreboard panel below
 the Bottleneck Scout renders the verdict and the most recent signal chips.
 No alerting — this layer is passive measurement.
 
+## Obsidian weekly digest (local)
+
+`src/obsidian_digest.py` writes a weekly markdown digest into an Obsidian
+vault — the thesis/journal layer that lives outside the dashboard. It runs
+LOCALLY (Windows Task Scheduler task `WatchlistObsidianDigest`, Sundays
+6:00 PM, after the cloud ETLs) and reads only the deployed site's public
+endpoints (`/composite`, `/scoreboard`, `/stress`, `/candidates`) — no DB
+credentials on the machine. Each digest lands in `Journal/` with CBS movers,
+hottest composites with call evidence, new signal events, the scoreboard
+verdict, and the pending scout queue, all as `[[TICKER]]` links. Anything
+written under the note's `## My Notes` heading survives regeneration.
+Sections degrade gracefully if an endpoint is down; every run appends to
+`~/watchlist-digest.log`. Vault path via `OBSIDIAN_VAULT`, site root via
+`WATCHLIST_BASE_URL`.
+
 ## Robotics view
 
 A third view (tab, or `#robotics` in the URL) tracking the humanoid-robot
