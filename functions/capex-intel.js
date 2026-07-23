@@ -13,6 +13,12 @@ const CACHE_KEY = "capexIntel";
 // treated as a stale prior-year answer rather than current guidance. See the
 // staleness tripwire in the handler.
 const STALE_TOTAL_FLOOR = 400;
+
+// Ceiling on any single company's AI share of its own total capex. These
+// companies all carry material non-AI capex (Amazon fulfilment and logistics,
+// Meta Reality Labs, Google's non-AI infrastructure), so a reading claiming
+// ~all of total capex is AI is an attribution failure, not a finding.
+const MAX_AI_SHARE = 0.80;
 const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours in ms
 const MODEL     = "gemini-2.5-flash";
 
@@ -391,6 +397,19 @@ export async function onRequest(context) {
           if (conflated.length) {
             console.warn("capex-intel: AI capex conflated with total capex for",
               conflated.join(", "), "— discarding this reading");
+            byCompany = null;
+          }
+        }
+
+        // Attribution-plausibility ceiling. Softer failure than outright
+        // conflation: the model concedes AI < total but assigns ~90-96% of
+        // every company's capex to AI, which no hyperscaler's mix supports.
+        if (byCompany && byCompanyTotalCapex) {
+          const implausible = COMPANY_IDS.filter(
+            id => byCompany[id] / byCompanyTotalCapex[id] > MAX_AI_SHARE);
+          if (implausible.length) {
+            console.warn("capex-intel: implausible AI share (>", MAX_AI_SHARE, ") for",
+              implausible.join(", "), "— discarding this reading");
             byCompany = null;
           }
         }
