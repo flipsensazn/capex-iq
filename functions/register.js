@@ -18,7 +18,7 @@
 // record instead of adding to the group, and let the payment webhook do
 // the group add. The Access policy doesn't change at all.
 
-const MEMBERS_GROUP_NAME = "Members";
+const MEMBERS_GROUP_NAME = "Capex IQ Members";
 const GROUP_ID_KV_KEY = "accessMembersGroupId_v1";
 const REGISTRY_KV_KEY = "membersRegistry_v1";
 const RATE_KV_PREFIX = "regRate_";

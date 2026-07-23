@@ -28,11 +28,9 @@
   "vars": {
     // CORS allowlist origin — the canonical custom domain.
     "ALLOWED_ORIGIN": "https://capex-iq.us",
-    // Cloudflare Access (Zero Trust) — filled in once the Access app exists.
-    // Team domain like "yourteam.cloudflareaccess.com"; AUD from the Access
-    // application's overview tab. Empty = auth features disabled gracefully.
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": "",
+    // Cloudflare Access (Zero Trust) — the Access app protecting /app.
+    "ACCESS_TEAM_DOMAIN": "ibat-performance.cloudflareaccess.com",
+    "ACCESS_AUD": "cc43952569fb0b60e51729bdd3724f3f7c944cb53a567fd16d2ed6a5696c198e",
     // Comma-separated admin emails (mirrors the Zero Trust Admins group).
     "ADMIN_EMAILS": "flipsensazn@gmail.com"
   },
