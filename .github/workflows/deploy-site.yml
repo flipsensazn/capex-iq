@@ -32,17 +32,18 @@ jobs:
       - name: Build Frontend
         run: npx vite build
 
+      # Plain wrangler instead of cloudflare/wrangler-action: the action's
+      # bundled-wrangler bootstrap breaks under current runner npm (npx
+      # refuses its install) and its secrets uploader can't read
+      # wrangler.jsonc. Two explicit steps are simpler and debuggable.
       - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          workingDirectory: workers/site
-          wranglerVersion: "4.113.0"
+        working-directory: workers/site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes wrangler@4.113.0 deploy
 
       # Sync the Worker's runtime secrets from the repo secrets the ETL
       # workflows already use — rotate once in GitHub, next deploy syncs.
-      # Done explicitly (jq-built JSON + `secret bulk --name`) because the
-      # action's own secrets uploader fails to read wrangler.jsonc.
       # (env FINNHUB_KEY maps from the repo's FINNHUB_API_KEY name.)
       - name: Sync Worker Secrets
         working-directory: workers/site
