@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
-import AdminModal from "./components/AdminModal";
 import AnalysisDrawer from "./components/AnalysisDrawer";
 import BottleneckScout from "./components/BottleneckScout";
 import CapexSankey from "./components/CapexSankey";
@@ -990,7 +989,7 @@ function Watchlist({ prices, capexData, onTickerClick, isAdmin, shortList, onSav
         !isAdmin ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)", borderRadius: 8, padding: "10px 14px" }}>
             <span style={{ fontSize: 14 }}>🔒</span>
-            <span style={{ fontSize: 12, color: "#64748b" }}>Login to add or remove tickers from the Shortlist</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>The Shortlist is editable by administrators only</span>
           </div>
         ) : (
           <div style={{ display: "flex", gap: 8 }}>
@@ -1347,13 +1346,13 @@ export default function App() {
   }, []);
   
   const [isAdmin, setIsAdmin] = useState(false);
-  const [adminPassword, setAdminPassword] = useState("");
-  const [showAdminModal, setShowAdminModal] = useState(false);
   const [appNotice, setAppNotice] = useState(null);
 
-  // Cloudflare Access identity: signed-in admins (Zero Trust Admins list)
-  // get editing automatically — the server accepts their Access JWT in
-  // place of the admin password, so no password prompt is needed.
+  // Admin identity comes entirely from Cloudflare Access now: the whole /app
+  // route is behind Access OTP, so anyone here has already authenticated.
+  // /me verifies the Access JWT and reports whether this email is on the
+  // Admins list — if so, editing turns on automatically (the admin-gated
+  // endpoints accept the same JWT cookie, sent with every same-origin POST).
   useEffect(() => {
     fetch("/me")
       .then(res => res.json())
@@ -1445,15 +1444,12 @@ export default function App() {
   }, []);
 
   const {
-    verifyAdminPassword,
     saveGlobalScanner,
     saveGlobalShortlist,
     saveGlobalCapex,
     saveGlobalMuskCapex,
     saveGlobalRoboticsCapex,
   } = useAdminActions({
-    adminPassword,
-    setAdminPassword,
     setIsAdmin,
     setScannerPool,
     setShortList,
@@ -1479,8 +1475,6 @@ export default function App() {
     const change = pricesRef.current[ticker]?.change ?? pricesRef.current[ticker];
     setPopup(prev => (prev?.ticker === ticker ? null : { ticker, change, rect }));
   }, []);
-
-  const handleUnlock = () => setShowAdminModal(true);
 
   function addTickerToSubsector(trackId, subsectorId, ticker) {
     const sym = ticker.trim().toUpperCase();
@@ -1529,7 +1523,7 @@ export default function App() {
       const res = await fetch("/candidates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: adminPassword, ticker: candidate.ticker, action }),
+        body: JSON.stringify({ ticker: candidate.ticker, action }),
       });
       const json = await res.json();
       if (!json.success) {
@@ -1727,11 +1721,7 @@ export default function App() {
 </div>
 
             <div className="header-controls" style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-              {!isAdmin ? (
-                <button onClick={handleUnlock} style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "#64748b", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
-                  🔒 Login
-                </button>
-              ) : (
+              {isAdmin && (
                 <span style={{ fontSize: 10, background: "rgba(52,211,153,0.1)", color: "#34d399", border: "1px solid rgba(52,211,153,0.3)", padding: "4px 10px", borderRadius: 6, fontWeight: 700 }}>
                   🔓 EDITING ACTIVE
                 </span>
@@ -1930,12 +1920,6 @@ export default function App() {
           ticker={analysis.ticker}
           analysis={analysis}
           onClose={() => setAnalysis(null)}
-        />
-      )}
-      {showAdminModal && (
-        <AdminModal
-          onClose={() => setShowAdminModal(false)}
-          onSubmit={verifyAdminPassword}
         />
       )}
     </MobileCtx.Provider>

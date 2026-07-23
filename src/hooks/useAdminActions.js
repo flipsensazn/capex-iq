@@ -1,8 +1,11 @@
 import { useCallback } from "react";
 
+// Admin mutations. Auth is handled entirely by Cloudflare Access: the admin's
+// CF_Authorization cookie is sent automatically with these same-origin POSTs,
+// and the endpoints verify that Access JWT (see functions/access-lib.js). No
+// password is sent from the client anymore. A 401 means the Access session
+// lapsed — drop the editing flag so the UI reflects read-only until reload.
 export function useAdminActions({
-  adminPassword,
-  setAdminPassword,
   setIsAdmin,
   setScannerPool,
   setShortList,
@@ -13,34 +16,12 @@ export function useAdminActions({
   showNotice,
   refresh,
 }) {
-  const verifyAdminPassword = useCallback(async (password) => {
-    try {
-      const res = await fetch("/scanner", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password, verifyOnly: true }),
-      });
-
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        return { ok: false, error: json.error || "Verification failed." };
-      }
-
-      setAdminPassword(password);
-      setIsAdmin(true);
-      showNotice("Editing unlocked.", "success");
-      return { ok: true };
-    } catch {
-      return { ok: false, error: "Network error. Try again." };
-    }
-  }, [setAdminPassword, setIsAdmin, showNotice]);
-
   const saveGlobalScanner = useCallback(async (newList) => {
     try {
       const res = await fetch("/scanner", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickers: newList, password: adminPassword }),
+        body: JSON.stringify({ tickers: newList }),
       });
       const json = await res.json().catch(() => ({}));
 
@@ -50,22 +31,19 @@ export function useAdminActions({
         refresh();
       } else {
         showNotice(json.error || "Scanner update failed.");
-        if (res.status === 401) {
-          setIsAdmin(false);
-          setAdminPassword("");
-        }
+        if (res.status === 401) setIsAdmin(false);
       }
     } catch {
       showNotice("Network error while updating the scanner.");
     }
-  }, [adminPassword, refresh, setAdminPassword, setIsAdmin, setScannerPool, showNotice]);
+  }, [refresh, setIsAdmin, setScannerPool, showNotice]);
 
   const saveGlobalShortlist = useCallback(async (newList) => {
     try {
       const res = await fetch("/shortlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickers: newList, password: adminPassword }),
+        body: JSON.stringify({ tickers: newList }),
       });
       const json = await res.json().catch(() => ({}));
 
@@ -76,22 +54,19 @@ export function useAdminActions({
         refresh();
       } else {
         showNotice(json.error || "Shortlist update failed.");
-        if (res.status === 401) {
-          setIsAdmin(false);
-          setAdminPassword("");
-        }
+        if (res.status === 401) setIsAdmin(false);
       }
     } catch {
       showNotice("Network error while updating the shortlist.");
     }
-  }, [adminPassword, refresh, setAdminPassword, setIsAdmin, setShortList, shortListRef, showNotice]);
+  }, [refresh, setIsAdmin, setShortList, shortListRef, showNotice]);
 
   const saveGlobalCapex = useCallback(async (newData) => {
     try {
       const res = await fetch("/capex", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ capexData: newData, password: adminPassword }),
+        body: JSON.stringify({ capexData: newData }),
       });
       const json = await res.json().catch(() => ({}));
 
@@ -101,22 +76,19 @@ export function useAdminActions({
         refresh();
       } else {
         showNotice(json.error || "Capex update failed.");
-        if (res.status === 401) {
-          setIsAdmin(false);
-          setAdminPassword("");
-        }
+        if (res.status === 401) setIsAdmin(false);
       }
     } catch {
       showNotice("Network error while updating capex data.");
     }
-  }, [adminPassword, refresh, setAdminPassword, setCapexData, setIsAdmin, showNotice]);
+  }, [refresh, setCapexData, setIsAdmin, showNotice]);
 
   const saveGlobalMuskCapex = useCallback(async (newData) => {
     try {
       const res = await fetch("/musk-capex", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ capexData: newData, password: adminPassword }),
+        body: JSON.stringify({ capexData: newData }),
       });
       const json = await res.json().catch(() => ({}));
 
@@ -126,22 +98,19 @@ export function useAdminActions({
         refresh();
       } else {
         showNotice(json.error || "Musk capex update failed.");
-        if (res.status === 401) {
-          setIsAdmin(false);
-          setAdminPassword("");
-        }
+        if (res.status === 401) setIsAdmin(false);
       }
     } catch {
       showNotice("Network error while updating Musk capex data.");
     }
-  }, [adminPassword, refresh, setAdminPassword, setIsAdmin, setMuskCapexData, showNotice]);
+  }, [refresh, setIsAdmin, setMuskCapexData, showNotice]);
 
   const saveGlobalRoboticsCapex = useCallback(async (newData) => {
     try {
       const res = await fetch("/robotics-capex", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ capexData: newData, password: adminPassword }),
+        body: JSON.stringify({ capexData: newData }),
       });
       const json = await res.json().catch(() => ({}));
 
@@ -151,18 +120,14 @@ export function useAdminActions({
         refresh();
       } else {
         showNotice(json.error || "Robotics capex update failed.");
-        if (res.status === 401) {
-          setIsAdmin(false);
-          setAdminPassword("");
-        }
+        if (res.status === 401) setIsAdmin(false);
       }
     } catch {
       showNotice("Network error while updating Robotics capex data.");
     }
-  }, [adminPassword, refresh, setAdminPassword, setIsAdmin, setRoboticsCapexData, showNotice]);
+  }, [refresh, setIsAdmin, setRoboticsCapexData, showNotice]);
 
   return {
-    verifyAdminPassword,
     saveGlobalScanner,
     saveGlobalShortlist,
     saveGlobalCapex,
