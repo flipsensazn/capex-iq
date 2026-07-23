@@ -8,6 +8,11 @@
 // POST /capex-intel   → admin-only force-refresh (busts the cache)
 
 const CACHE_KEY = "capexIntel";
+
+// Combined TOTAL capex across the five hyperscalers below which a reading is
+// treated as a stale prior-year answer rather than current guidance. See the
+// staleness tripwire in the handler.
+const STALE_TOTAL_FLOOR = 400;
 const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours in ms
 const MODEL     = "gemini-2.5-flash";
 
@@ -52,6 +57,13 @@ function buildPrompt1() {
 
 Search for the most recent capex guidance, earnings-call statements, and credible reporting for the five primary hyperscalers: Amazon (AWS), Microsoft (Azure), Alphabet/Google, Meta, and Oracle.
 
+RECENCY IS MANDATORY. Report the CURRENT fiscal-year (2026) guidance as most recently revised —
+not a prior-year actual. Hyperscaler capex has grown several-fold since 2023, so a figure that
+looks like a 2022-2024 actual is wrong for this question. As calibration: each of these companies
+now guides annual TOTAL capex in the high tens to low hundreds of billions. If your total-capex
+figure for Amazon, Microsoft, Alphabet or Meta is below $80B, you are almost certainly quoting a
+historical year — search again for the latest guidance and use that instead.
+
 For EACH company, report two distinct figures for its current fiscal year (2026-era guidance):
   1. totalCapex — the company's total announced/guided capital expenditure.
   2. aiCapex — ONLY the portion attributable to AI infrastructure.
@@ -88,7 +100,8 @@ Respond with ONLY a valid JSON object — no markdown fences, no preamble, no ex
     "META": <integer billions, total capex>,
     "ORCL": <integer billions, total capex>
   },
-  "aiShareNote": "<one sentence: how the AI-attributable share was derived>"
+  "fiscalYear": "<the fiscal year these figures cover, e.g. 2026>",
+  "aiShareNote": "<one sentence: how the AI-attributable share was derived, and the share applied>"
 }`;
 }
 
@@ -378,6 +391,20 @@ export async function onRequest(context) {
           if (conflated.length) {
             console.warn("capex-intel: AI capex conflated with total capex for",
               conflated.join(", "), "— discarding this reading");
+            byCompany = null;
+          }
+        }
+
+        // Staleness tripwire. The opposite failure to conflation: the model
+        // answers with a prior-year actual instead of current guidance (a 2023
+        // reading lands near $200B across the five, versus the ~$700B+ these
+        // companies now guide). This is a floor for detecting obviously-stale
+        // data, NOT a target — a genuine reading well above it is untouched.
+        if (byCompany && byCompanyTotalCapex) {
+          const totalSum = Object.values(byCompanyTotalCapex).reduce((s, v) => s + v, 0);
+          if (totalSum < STALE_TOTAL_FLOOR) {
+            console.warn("capex-intel: total capex sum", totalSum,
+              "is below the staleness floor", STALE_TOTAL_FLOOR, "— discarding this reading");
             byCompany = null;
           }
         }
