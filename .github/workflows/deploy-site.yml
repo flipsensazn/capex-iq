@@ -60,5 +60,5 @@ jobs:
             --arg g "$GEMINI_API_KEY" \
             --arg f "$FINNHUB_KEY" \
             '{ADMIN_PASSWORD: $a, DATABASE_URL: $d, GEMINI_API_KEY: $g, FINNHUB_KEY: $f}' > .secrets.json
-          npx --yes wrangler@4.113.0 secret bulk .secrets.json --name wizzles-watchlist
+          npx --yes wrangler@4.113.0 secret bulk .secrets.json --name capex-iq
           rm .secrets.json

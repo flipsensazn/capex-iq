@@ -5,7 +5,7 @@
 // Secrets (set once, dashboard or `npx wrangler secret put <NAME>` here):
 //   ADMIN_PASSWORD, DATABASE_URL, GEMINI_API_KEY, FINNHUB_KEY
 {
-  "name": "wizzles-watchlist",
+  "name": "capex-iq",
   "account_id": "0e727bf4fae81b99443d3150ca244484",
   "main": "index.js",
   "compatibility_date": "2026-07-01",

@@ -6,8 +6,7 @@ news, and scanner APIs.
 ## Deployment
 
 This project is deployed on Cloudflare Workers (static assets) at
-https://capex-iq.us (custom domain; wizzles-watchlist.flipsensazn.workers.dev
-is the underlying Worker URL).
+https://capex-iq.us (custom domain on the `capex-iq` Worker).
 
 - Frontend: Vite build output from `dist/`, served as Worker static assets
   (SPA fallback enabled)
@@ -26,9 +25,8 @@ is the underlying Worker URL).
   `npx wrangler deploy`) warms the `/prices` KV cache every 2 minutes during
   US market hours by requesting the full ticker universe through the public
   site, so visitor loads hit a warm cache.
-- The legacy Cloudflare Pages deployment (wizzles-watchlist.pages.dev) can be
-  retired once the Workers URL is confirmed healthy; both share the same KV
-  and Neon data in the meantime.
+- The legacy Cloudflare Pages deployment has been deleted; capex-iq.us is
+  the only deployment.
 
 ### /prices caching model
 
