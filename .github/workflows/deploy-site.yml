@@ -37,3 +37,16 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: workers/site
+          # Sync the Worker's runtime secrets from the repo secrets the ETL
+          # workflows already use — rotate once in GitHub, next deploy syncs.
+          # (env FINNHUB_KEY maps from the repo's FINNHUB_API_KEY name.)
+          secrets: |
+            ADMIN_PASSWORD
+            DATABASE_URL
+            GEMINI_API_KEY
+            FINNHUB_KEY
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_API_KEY }}
