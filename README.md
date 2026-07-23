@@ -6,7 +6,8 @@ news, and scanner APIs.
 ## Deployment
 
 This project is deployed on Cloudflare Workers (static assets) at
-https://wizzles-watchlist.flipsensazn.workers.dev.
+https://capex-iq.us (custom domain; wizzles-watchlist.flipsensazn.workers.dev
+is the underlying Worker URL).
 
 - Frontend: Vite build output from `dist/`, served as Worker static assets
   (SPA fallback enabled)

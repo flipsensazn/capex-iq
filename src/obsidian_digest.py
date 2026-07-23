@@ -35,7 +35,7 @@ VAULT = Path(os.environ.get(
     "OBSIDIAN_VAULT",
     r"C:\Users\Wizzle\iCloudDrive\iCloud~md~obsidian\AI Hyperscaler Capex"))
 BASE_URL = os.environ.get(
-    "WATCHLIST_BASE_URL", "https://wizzles-watchlist.flipsensazn.workers.dev").rstrip("/")
+    "WATCHLIST_BASE_URL", "https://capex-iq.us").rstrip("/")
 LOG_FILE = Path.home() / "watchlist-digest.log"
 
 NOTES_MARKER = "## My Notes"

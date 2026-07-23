@@ -10,7 +10,10 @@
 // frontend uses, so cache keys, TTLs, and fallback logic stay in one place
 // (functions/prices.js).
 
-const BASE = "https://wizzles-watchlist.flipsensazn.workers.dev";
+// The custom domain, NOT the workers.dev URL: a Worker cannot fetch()
+// same-account workers.dev hostnames (error 1042), but Custom Domains are
+// explicitly supported for worker-to-worker addressing.
+const BASE = "https://capex-iq.us";
 
 // Mirrors App.jsx — keep in sync if those constants change.
 const MARKET_TICKERS = [

@@ -23,8 +23,8 @@
     }
   ],
   "vars": {
-    // CORS allowlist origin — the workers.dev URL once known.
-    "ALLOWED_ORIGIN": "https://wizzles-watchlist.flipsensazn.workers.dev"
+    // CORS allowlist origin — the canonical custom domain.
+    "ALLOWED_ORIGIN": "https://capex-iq.us"
   },
   "observability": {
     "enabled": true
