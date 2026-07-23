@@ -651,15 +651,21 @@ footer{border-top:1px solid var(--border-hairline)}
 
   /* ── Real numbers from our own public endpoints (no fabricated "live" stats).
        Each block degrades silently: the static copy already reads correctly. ── */
+  function setCapexTotal(total, live){
+    if (!(total > 0)) return;
+    var str = "~$" + Math.round(total) + "B";
+    document.getElementById("capexEyebrow").textContent =
+      (live ? "◇ LIVE · TRACKING " : "◇ TRACKING ") + str + " OF 2026 HYPERSCALER AI CAPEX";
+    document.getElementById("capexInline").textContent = str;
+  }
+
+  // Track labels/colours come from the capex map; the headline dollar figure
+  // comes from the same search-grounded intel the dashboard headlines, so both
+  // surfaces always show the same number. The map's curated totals are the
+  // fallback when the grounded reading is unavailable.
   fetch("/capex").then(function(r){ return r.json(); }).then(function(d){
     var tracks = (d && d.capexData && d.capexData.tracks) || [];
     if (!tracks.length) return;
-    var total = tracks.reduce(function(s, t){ return s + (Number(t.capex) || 0); }, 0);
-    if (total > 0){
-      var str = "~$" + Math.round(total) + "B";
-      document.getElementById("capexEyebrow").textContent = "◇ LIVE · TRACKING " + str + " OF 2026 HYPERSCALER CAPEX";
-      document.getElementById("capexInline").textContent = str;
-    }
     var mapped = tracks.slice(0, 6).map(function(t){
       return [String(t.label || "").toUpperCase(), t.color || "#00F0FF"];
     }).filter(function(t){ return t[0]; });
@@ -669,6 +675,15 @@ footer{border-top:1px solid var(--border-hairline)}
       if (heroCv && heroCv._redraw) heroCv._redraw();
       if (miniCv && miniCv._redraw) miniCv._redraw();
     }
+    return tracks.reduce(function(s, t){ return s + (Number(t.capex) || 0); }, 0);
+  }).then(function(mapTotal){
+    return fetch("/capex-intel").then(function(r){ return r.json(); }).then(function(intel){
+      if (intel && !intel.error && intel.totalCapexDerived > 0){
+        setCapexTotal(intel.totalCapexDerived, true);
+      } else {
+        setCapexTotal(mapTotal, false);
+      }
+    }).catch(function(){ setCapexTotal(mapTotal, false); });
   }).catch(function(){});
 
   fetch("/scoreboard").then(function(r){ return r.json(); }).then(function(d){
