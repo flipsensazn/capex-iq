@@ -89,13 +89,20 @@ export async function onRequest(context) {
     // Resolve the Members group id (cached in KV after first lookup).
     let groupId = env.SHARED_DATA ? await env.SHARED_DATA.get(GROUP_ID_KV_KEY) : null;
     if (!groupId) {
-      // List and match exactly — the name may contain spaces, and matching
-      // client-side avoids any API filter quirks.
+      // List and match client-side — exact first, then a whitespace/case
+      // tolerant pass, then a capex+member heuristic (scoped so another
+      // project's "Members" group can never be picked up by accident).
       const listRes = await fetch(`${api}?per_page=50`, { headers: apiHeaders });
       const list = await listRes.json();
-      groupId = list?.result?.find(g => g.name === MEMBERS_GROUP_NAME)?.id;
+      const groups = list?.result || [];
+      const norm = s => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+      groupId =
+        groups.find(g => g.name === MEMBERS_GROUP_NAME)?.id
+        ?? groups.find(g => norm(g.name) === norm(MEMBERS_GROUP_NAME))?.id
+        ?? groups.find(g => /capex/i.test(g.name) && /member/i.test(g.name))?.id;
       if (!groupId) {
-        console.error("register: Members group not found", list?.errors);
+        console.error("register: Members group not found; groups visible:",
+          JSON.stringify(groups.map(g => g.name)), "errors:", JSON.stringify(list?.errors));
         return reply(503, { success: false, message: "Registration is being set up — check back soon." });
       }
       if (env.SHARED_DATA) {
