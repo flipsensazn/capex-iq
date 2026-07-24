@@ -5,7 +5,6 @@ import CapexSankey from "./components/CapexSankey";
 import CompositeMovers from "./components/CompositeMovers";
 import FearGreedGauge from "./components/FearGreedGauge";
 import SignalScoreboard from "./components/SignalScoreboard";
-import { TabNav } from "./components/ds";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
 import EarningsCalendar from "./components/EarningsCalendar";
@@ -1294,11 +1293,41 @@ const GLOBAL_STYLES = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: var(--void-800); font-family: var(--font-ui); max-width: 100vw; overflow-x: hidden; }
   img, svg, video, table { max-width: 100%; }
-  :root { --topbar-h: 72px; }
+  :root { --topbar-h: 72px; --nav-h: 44px; }
   /* The mobile bar used to wrap its pills onto two grid rows (172px). The
-     handoff turns them into one horizontal swipe row, so it is ~93px now —
-     reserving the old height left a dead band under the chrome. */
-  @media (max-width: 767px) { :root { --topbar-h: 96px; } }
+     handoff turns them into one horizontal swipe row, ~93px now. This value is
+     also where the fixed view-tab nav pins, so it must equal the bar's real
+     height or a seam shows between them. */
+  @media (max-width: 767px) { :root { --topbar-h: 93px; } }
+
+  /* Fixed view-tab nav (design "1b"), pinned directly under the market pills.
+     Underline-indicator tabs on the left, compact Fear & Greed on the right. */
+  .dash-nav {
+    position: fixed; top: var(--topbar-h, 72px); left: 0; right: 0; z-index: 999;
+    background: var(--bg-chrome); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-hairline);
+  }
+  .dash-nav-inner {
+    display: flex; align-items: stretch; justify-content: space-between;
+    gap: clamp(8px, 1.5vw, 16px); padding: 0 clamp(12px, 2vw, 24px); height: var(--nav-h, 44px);
+  }
+  .dash-tabs { display: flex; align-items: stretch; gap: clamp(0px, 0.4vw, 4px); min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .dash-tabs::-webkit-scrollbar { display: none; }
+  /* Active colour is driven by an inline style from React state, not a
+     .active cascade — the class-based colour didn't reliably follow the
+     selected tab on switch. Base + hover here are for the inactive tabs. */
+  .dash-tab {
+    position: relative; display: inline-flex; align-items: center; gap: 7px;
+    padding: 0 clamp(6px, 1vw, 14px); font-family: inherit; font-size: 11.5px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap;
+    color: var(--ink-400); background: none; border: none; cursor: pointer;
+    transition: background .15s var(--ease-out);
+  }
+  .dash-tab:not(.active):hover { color: var(--ink-100); background: rgba(255,255,255,0.03); }
+  .dash-tab-ind { position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); box-shadow: 0 0 8px rgba(0,240,255,0.6); }
+  .dash-nav-right { display: flex; align-items: center; gap: clamp(6px, 0.8vw, 10px); flex-shrink: 0; }
+  /* On a phone the tabs need the whole row to scroll — drop the supplementary gauge. */
+  @media (max-width: 767px) { .dash-nav-right { display: none; } }
   
   html.light-mode { filter: invert(1) hue-rotate(180deg); }
   
@@ -1772,30 +1801,48 @@ export default function App() {
       {/* The top bar is fixed, so the page clears it here. This used to live on
           the utility strip below it, which meant a status banner — rendered
           above that strip — sat underneath the fixed bar and was unreadable. */}
-      <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", color: "var(--ink-100)", paddingTop: "var(--topbar-h, 72px)" }}>
+      {/* Page clears both fixed chrome rows: the market-pill top bar plus the
+          pinned view-tab nav below it. */}
+      <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", color: "var(--ink-100)", paddingTop: "calc(var(--topbar-h, 72px) + var(--nav-h, 44px))" }}>
 
         <TopBar marketData={marketData} onlineCount={onlineCount} />
-        <StatusBanner notice={appNotice} onDismiss={() => setAppNotice(null)} />
 
-        <div className="main-content" style={{ maxWidth: 1480, margin: "0 auto", padding: "32px 20px 64px", display: "flex", flexDirection: "column", gap: 28, overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
-          
-          {/* VIEW SWITCHER + market sentiment, per the design's header row */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-            <TabNav
-              value={view}
-              onChange={switchView}
-              tabs={[
+        {/* Redesigned view tabs, fixed directly under the market pills. */}
+        <nav className="dash-nav">
+          <div className="dash-nav-inner">
+            <div className="dash-tabs" role="tablist" aria-label="Dashboard views">
+              {[
                 { value: "ai", label: "AI Capex", icon: "⚡" },
                 { value: "musk", label: "Musk Galaxy", icon: "🚀" },
                 { value: "robotics", label: "Robotics", icon: "🦾" },
                 { value: "earnings", label: "Earnings", icon: "🗓" },
                 { value: "scanner", label: "Scanner", icon: "🔍" },
-              ]}
-            />
-            <div style={{ width: 280, maxWidth: "100%" }}>
+              ].map(t => {
+                const on = view === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    role="tab"
+                    aria-selected={on}
+                    className={"dash-tab" + (on ? " active" : "")}
+                    style={{ color: on ? "var(--accent)" : undefined }}
+                    onClick={() => switchView(t.value)}
+                  >
+                    <span style={{ fontSize: 13 }}>{t.icon}</span>{t.label}
+                    {on && <span className="dash-tab-ind" aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="dash-nav-right">
               <FearGreedGauge />
             </div>
           </div>
+        </nav>
+
+        <StatusBanner notice={appNotice} onDismiss={() => setAppNotice(null)} />
+
+        <div className="main-content" style={{ maxWidth: 1480, margin: "0 auto", padding: "32px 20px 64px", display: "flex", flexDirection: "column", gap: 28, overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
 
           {/* Earnings is its own view: just the week's calendar, full width. */}
           {isEarnings && (
