@@ -8,7 +8,7 @@ import SignalScoreboard from "./components/SignalScoreboard";
 import { TabNav } from "./components/ds";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
-import EarningsWeek from "./components/EarningsWeek";
+import EarningsCalendar from "./components/EarningsCalendar";
 import SupplyGraph from "./components/capex-map/SupplyGraph";
 import TrackPane from "./components/capex-map/TrackPane";
 import { MUSK_CAPEX_DATA, MUSK_COMPANIES, MUSK_GRAPH_NODES, MUSK_GRAPH_EDGES, MUSK_LAYERS } from "./components/capex-map/muskData";
@@ -1318,7 +1318,7 @@ const GLOBAL_STYLES = `
      hooks map onto this app's own elements:
        .hm-grid → .bottom-grid-all · .wl-wrap → .watchlist-wrapper
        .dash-wrap → .main-content · .tb-pills → TopBar pill row
-       .ec-scroll / .ec-inner → EarningsWeek scroll container
+       .ec-scroll / .ec-inner → EarningsCalendar scroll container
      Several targets carry inline styles, so these declarations need
      !important to win — the same reason the design prototype used it. */
   @media (max-width: 1100px) {
@@ -1829,7 +1829,7 @@ export default function App() {
 
           {/* Earnings is its own view: just the week's calendar, full width. */}
           {isEarnings && (
-            <EarningsWeek
+            <EarningsCalendar
               tickers={watchlistTickers}
               prices={prices}
               onTickerClick={openPopup}
