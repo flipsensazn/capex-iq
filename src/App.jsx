@@ -624,6 +624,20 @@ function HeatMap({ prices, capexData, onTickerClick, timeline, setTimeline, isAd
     })).filter(({ cells }) => cells.length > 0),
   [capexData]);
 
+  // Breadth across the cells actually on the map, measured over the SELECTED
+  // timeline rather than always 1D — otherwise the counts would contradict the
+  // colours right beside them whenever the timeline isn't 1D.
+  const breadth = useMemo(() => {
+    let up = 0, down = 0;
+    for (const ticker of new Set(trackCells.flatMap(({ cells }) => cells))) {
+      const change = getChangeForTimeline(prices[ticker], timeline);
+      if (typeof change !== "number") continue;
+      if (change > 0) up++;
+      else if (change < 0) down++;
+    }
+    return { up, down };
+  }, [trackCells, prices, timeline]);
+
   function getHeatColor(change) {
     if (typeof change !== 'number') return "rgba(255,255,255,0.04)";
     if (change >= 15) return "#064e3b";
@@ -639,10 +653,13 @@ function HeatMap({ prices, capexData, onTickerClick, timeline, setTimeline, isAd
 
   return (
     <div style={{ borderRadius: "var(--radius-2xl)", border: "1px solid var(--border-hairline)", background: "var(--bg-raised)", padding: isMobile ? "12px 8px" : 20, height: "100%", overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+      {/* Header is two stacked rows, not two side-by-side columns: the filter
+          legend is wide enough that a side-by-side layout wraps the breadth
+          counts underneath it instead of holding them in the top-right. */}
+      <div style={{ marginBottom: 16 }}>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--ink-100)", margin: 0 }}>Portfolio Heat Map</h3>
             <div style={{ display: "flex", background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: 2 }}>
               {["1D", "5D", "1M", "6M", "YTD", "1Y"].map(t => (
@@ -657,12 +674,23 @@ function HeatMap({ prices, capexData, onTickerClick, timeline, setTimeline, isAd
                 </button>
               ))}
             </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginLeft: "auto", flexShrink: 0 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ink-400)" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--pos)", display: "inline-block", flexShrink: 0 }} />
+                {breadth.up} advancing
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ink-400)" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--down-300)", display: "inline-block", flexShrink: 0 }} />
+                {breadth.down} declining
+              </span>
+            </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 10, color: "var(--ink-400)" }}>
             {[
-              { id: "near52WLow", label: "within 25% of 52W low", icon: <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "rgba(251,191,36,0.25)", border: "1px solid #f59e0b", boxShadow: "0 0 6px #f59e0b88", flexShrink: 0 }} /> },
-              { id: "near52WHigh", label: "within 10% of 52W high", icon: <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "rgba(52,211,153,0.25)", border: "1px solid #34d399", boxShadow: "0 0 6px #34d39988", flexShrink: 0 }} /> },
+              { id: "near52WLow", label: "within 25% of 52W low", icon: <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "rgba(251,191,36,0.25)", border: "1px solid #f59e0b", flexShrink: 0 }} /> },
+              { id: "near52WHigh", label: "within 10% of 52W high", icon: <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "rgba(52,211,153,0.25)", border: "1px solid #34d399", flexShrink: 0 }} /> },
               { id: "ath", label: "All Time High (ATH)", icon: <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "rgba(52,211,153,0.35)", border: "2.5px solid #34d399", boxShadow: "0 0 8px #34d399cc", flexShrink: 0 }} /> },
               { id: "earnings", label: "Earnings in 3 Days", icon: <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 10, height: 10, borderRadius: 2, background: "rgba(192,132,252,0.25)", border: "1px solid #c084fc", color: "var(--event)", fontSize: 7, fontWeight: 800, flexShrink: 0 }}>E</span> },
               { id: "starred", label: "Wizzle's Holdings", icon: <span style={{ display: "inline-block", color: "var(--star-400)", fontSize: 11, lineHeight: 1, textShadow: "0 0 6px #facc1588", flexShrink: 0 }}>★</span> }
@@ -767,19 +795,13 @@ function HeatMap({ prices, capexData, onTickerClick, timeline, setTimeline, isAd
                         : near52WH
                         ? "1px solid #34d399"
                         : `1px solid ${bg === "rgba(255,255,255,0.04)" ? "rgba(255,255,255,0.06)" : bg}`,
-                      boxShadow: near52W
-                        ? "0 0 10px rgba(245,158,11,0.45), inset 0 0 12px rgba(245,158,11,0.08)"
-                        : athInfo
+                      // 52W low/high cells keep their border and corner tag but
+                      // no longer glow or pulse — only ATH still earns that.
+                      boxShadow: athInfo
                         ? "0 0 14px rgba(52,211,153,0.65), inset 0 0 16px rgba(52,211,153,0.12)"
-                        : near52WH
-                        ? "0 0 10px rgba(52,211,153,0.45), inset 0 0 12px rgba(52,211,153,0.08)"
                         : "none",
-                      animation: near52W
-                        ? "glowPulse52W 2.4s ease-in-out infinite"
-                        : athInfo
+                      animation: athInfo
                         ? "glowPulseATH 2.4s ease-in-out infinite"
-                        : near52WH
-                        ? "glowPulse52WH 2.4s ease-in-out infinite"
                         : "none",
                       minWidth: 52,
                       textAlign: "center",
@@ -1286,14 +1308,6 @@ const GLOBAL_STYLES = `
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 4px; }
   @keyframes scroll-left { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
   @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
-  @keyframes glowPulse52W {
-    0%, 100% { box-shadow: 0 0 10px rgba(245,158,11,0.45), inset 0 0 12px rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.7); }
-    50% { box-shadow: 0 0 18px rgba(245,158,11,0.75), 0 0 32px rgba(245,158,11,0.25), inset 0 0 16px rgba(245,158,11,0.14); border-color: #f59e0b; }
-  }
-  @keyframes glowPulse52WH {
-    0%, 100% { box-shadow: 0 0 10px rgba(52,211,153,0.45), inset 0 0 12px rgba(52,211,153,0.08); border-color: rgba(52,211,153,0.7); }
-    50% { box-shadow: 0 0 18px rgba(52,211,153,0.75), 0 0 32px rgba(52,211,153,0.25), inset 0 0 16px rgba(52,211,153,0.14); border-color: #34d399; }
-  }
   @keyframes glowPulseATH {
     0%, 100% { box-shadow: 0 0 14px rgba(52,211,153,0.65), inset 0 0 16px rgba(52,211,153,0.12); border-color: rgba(52,211,153,0.85); }
     50% { box-shadow: 0 0 24px rgba(52,211,153,0.9), 0 0 40px rgba(52,211,153,0.35), inset 0 0 20px rgba(52,211,153,0.18); border-color: #34d399; }
@@ -1450,7 +1464,6 @@ export default function App() {
     prices,
     pricesRef,
     marketData,
-    lastUpdated,
     refreshing,
     refresh,
     capexDataRef,
@@ -1730,8 +1743,6 @@ export default function App() {
   }, [activeLiveData, activeIntel, activeIntelStatus]);
 
   const watchlistTickers = useMemo(() => getAllTickers(activeMapData), [activeMapData]);
-  const gainers = watchlistTickers.filter(t => (prices[t]?.change ?? prices[t]) > 0).length;
-  const losers  = watchlistTickers.filter(t => (prices[t]?.change ?? prices[t]) < 0).length;
   const activeData = activeLiveData.tracks.find(t => t.id === activeTrack);
   const tickerEntries = Object.entries(prices);
 
@@ -1746,66 +1757,19 @@ export default function App() {
       }} />
       <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", color: "var(--ink-100)" }}>
 
-        <TopBar marketData={marketData} />
+        <TopBar marketData={marketData} onlineCount={onlineCount} />
         <StatusBanner notice={appNotice} onDismiss={() => setAppNotice(null)} />
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", marginTop: "var(--topbar-h, 72px)", borderBottom: "1px solid rgba(255,255,255,.04)", background: "var(--bg-raised)", flexWrap: "wrap", gap: 12 }}>
-          
-          {/* LEFT SIDE: Title & Controls Stacked */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-  <div style={{ fontSize: 19, fontWeight: 800, color: "var(--ink-100)", letterSpacing: "-0.01em" }}>
-    AI Capex Flow Intelligence
-  </div>
-  <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.25)", padding: "3px 8px", borderRadius: 6 }}>
-    <span style={{ 
-      width: 6, height: 6, borderRadius: "50%", background: "var(--pos)", 
-      display: "inline-block", boxShadow: "0 0 8px #34d399",
-      animation: "pulseDot 2s infinite" 
-    }} />
-    <span style={{ fontSize: 10, fontWeight: 700, color: "var(--pos)", letterSpacing: "0.05em", fontFamily: "'DM Mono', monospace" }}>
-      {onlineCount} ONLINE
-    </span>
-  </div>
-</div>
-
-            <div className="header-controls" style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-              {isAdmin && (
-                <span style={{ fontSize: 10, background: "rgba(52,211,153,0.1)", color: "var(--pos)", border: "1px solid rgba(52,211,153,0.3)", padding: "4px 10px", borderRadius: 6, fontWeight: 700 }}>
-                  🔓 EDITING ACTIVE
-                </span>
-              )}
-
-              <span className="pulse" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ink-400)" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--pos)", display: "inline-block", boxShadow: "0 0 6px #34d399" }} />{gainers} advancing
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ink-400)" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--down-300)", display: "inline-block", boxShadow: "0 0 6px #f87171" }} />{losers} declining
-              </span>
-              <span style={{ fontSize: 11, color: "var(--ink-700)" }}>{allTickerCount} tickers</span>
-              <button onClick={refresh} disabled={refreshing} style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, color: "var(--ink-400)", padding: "5px 12px", cursor: "pointer", fontSize: 11, fontFamily: "inherit", opacity: refreshing ? 0.5 : 1 }}>
-                {refreshing ? "↻" : `↻${lastUpdated ? " · " + lastUpdated : ""}`}
-              </button>
-              <a
-                href="https://wizzleswatchlist.substack.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  fontSize: 11, fontWeight: 700, color: "#f59e0b",
-                  background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.3)",
-                  borderRadius: 8, padding: "5px 13px", textDecoration: "none",
-                  letterSpacing: "0.04em", transition: "all .18s",
-                  fontFamily: "'DM Mono','Fira Code',monospace",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(245,158,11,0.16)"; e.currentTarget.style.borderColor = "rgba(245,158,11,0.6)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(245,158,11,0.08)"; e.currentTarget.style.borderColor = "rgba(245,158,11,0.3)"; }}
-              >
-                <span style={{ fontSize: 13 }}>✉</span> Wizzle's Watchlist ↗
-              </a>
-            </div>
+        {/* Thin utility strip. The wordmark and viewer count live in the top
+            bar; advancing/declining moved onto the heat map, which is what
+            they actually describe. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", marginTop: "var(--topbar-h, 72px)", borderBottom: "1px solid rgba(255,255,255,.04)", background: "var(--bg-raised)", flexWrap: "wrap", gap: 12 }}>
+          <div className="header-controls" style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "var(--ink-700)" }}>{allTickerCount} tickers</span>
+            <button onClick={refresh} disabled={refreshing} title="Refresh prices" style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, color: "var(--ink-400)", padding: "5px 12px", cursor: "pointer", fontSize: 11, fontFamily: "inherit", opacity: refreshing ? 0.5 : 1 }}>
+              ↻
+            </button>
           </div>
-
         </div>
 
         <div className="main-content" style={{ maxWidth: 1480, margin: "0 auto", padding: "32px 20px 64px", display: "flex", flexDirection: "column", gap: 28, overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>

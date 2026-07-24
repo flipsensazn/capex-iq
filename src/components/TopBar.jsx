@@ -257,7 +257,25 @@ function MarketClockCompact() {
   );
 }
 
-export default function TopBar({ marketData }) {
+// Live viewer count, rendered as a bare dot + label rather than a boxed pill —
+// it sits under the wordmark as chrome, not as a panel of its own.
+function OnlineDot({ count, compact = false }) {
+  if (count == null) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+      <span style={{
+        width: 5, height: 5, borderRadius: "50%", background: "var(--pos)",
+        display: "inline-block", boxShadow: "0 0 6px #34d399", animation: "pulseDot 2s infinite",
+      }} />
+      <span style={{
+        fontSize: compact ? 9 : 9.5, fontWeight: 700, color: "var(--pos)",
+        letterSpacing: "0.09em", fontFamily: "var(--font-mono)",
+      }}>{count} ONLINE</span>
+    </div>
+  );
+}
+
+export default function TopBar({ marketData, onlineCount }) {
   const barRef = useRef(null);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
@@ -332,8 +350,11 @@ export default function TopBar({ marketData }) {
             );
           })}
         </div>
+        {/* No wordmark on the mobile bar, so the viewer count rides alongside
+            the clock rather than being dropped entirely. */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "3px 8px 4px", gap: 10, borderTop: "1px solid var(--border-hairline)" }}>
           <MarketClockCompact />
+          <OnlineDot count={onlineCount} compact />
         </div>
       </div>
     );
@@ -359,8 +380,9 @@ export default function TopBar({ marketData }) {
         overflow: "hidden",
       }}
     >
-      <div style={{ flexShrink: 0, paddingRight: 14 }}>
+      <div style={{ flexShrink: 0, paddingRight: 14, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 5 }}>
         <Wordmark size={16} />
+        <OnlineDot count={onlineCount} />
       </div>
       {/* The pills flex to fill whatever room is left between the wordmark and
           the clock. They used to also carry a scaleX() transform, which shrank
