@@ -5,10 +5,21 @@
 // then synthesizes into a markdown report with a BUY/HOLD/SELL score and
 // 3-year price projection.  Results cached in KV for 24 hours.
 
+import { getAccessPayload } from "./access-lib.js";
+
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
 const MODEL_AGENT = "gemini-2.5-flash";
 const MODEL_SYNTH = "gemini-2.5-flash";
+const MAX_BODY_BYTES = 8 * 1024;
+const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
+
+function normalizeContextValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return "unknown";
+  const normalized = value.replace(/[\r\n]+/g, " ").trim().slice(0, 100);
+  return normalized || "unknown";
+}
 
 // ── JSON EXTRACTOR ────────────────────────────────────────────────────────────
 // Finds the first balanced { } or [ ] block in a string, ignoring surrounding
@@ -337,6 +348,7 @@ export async function onRequest(context) {
   const headers = {
     "Access-Control-Allow-Origin": corsOrigin,
     "Content-Type": "application/json",
+    "Cache-Control": "private, no-store",
     "Vary": "Origin",
   };
 
@@ -355,36 +367,63 @@ export async function onRequest(context) {
     return new Response(JSON.stringify({ error: "Method Not Allowed" }), { status: 405, headers });
   }
 
+  const accessPayload = await getAccessPayload(request, env);
+  const memberKey = accessPayload?.sub || accessPayload?.email?.toLowerCase();
+  if (!memberKey) {
+    return new Response(JSON.stringify({ error: "Authentication required" }), { status: 401, headers });
+  }
+
+  const contentLength = Number(request.headers.get("Content-Length") || 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return new Response(JSON.stringify({ error: "Request body too large" }), { status: 413, headers });
+  }
+
   const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) {
     return new Response(
-      JSON.stringify({ error: "GEMINI_API_KEY not configured. Add it as a Cloudflare Pages environment variable." }),
+      JSON.stringify({ error: "Analysis service is not configured" }),
       { status: 500, headers }
     );
   }
 
-  let body;
+  let rawBody;
   try {
-    body = await request.json();
+    rawBody = await request.text();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers });
   }
 
-  const ticker = (typeof body.ticker === "string" ? body.ticker.trim().toUpperCase() : "").replace(/[^A-Z0-9.\-^]/g, "").slice(0, 10);
-  if (!ticker) {
-    return new Response(JSON.stringify({ error: "ticker is required" }), { status: 400, headers });
+  if (rawBody.length > MAX_BODY_BYTES || new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
+    return new Response(JSON.stringify({ error: "Request body too large" }), { status: 413, headers });
   }
 
-  const currentPrice = typeof body.currentPrice === "number" ? body.currentPrice : null;
+  let body;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers });
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return new Response(JSON.stringify({ error: "JSON body must be an object" }), { status: 400, headers });
+  }
+
+  const ticker = typeof body.ticker === "string" ? body.ticker.trim().toUpperCase() : "";
+  if (!TICKER_PATTERN.test(ticker)) {
+    return new Response(JSON.stringify({ error: "A valid ticker is required" }), { status: 400, headers });
+  }
+
+  const currentPrice = typeof body.currentPrice === "number" && Number.isFinite(body.currentPrice)
+    ? body.currentPrice
+    : null;
   const contextData  = {
     ticker,
     currentPrice,
-    peRatio:    body.peRatio    ?? "unknown",
-    marketCap:  body.marketCap  ?? "unknown",
-    week52Low:  body.week52Low  ?? "unknown",
-    week52High: body.week52High ?? "unknown",
-    sector:     body.sector     ?? "unknown",
-    industry:   body.industry   ?? "unknown",
+    peRatio:    normalizeContextValue(body.peRatio),
+    marketCap:  normalizeContextValue(body.marketCap),
+    week52Low:  normalizeContextValue(body.week52Low),
+    week52High: normalizeContextValue(body.week52High),
+    sector:     normalizeContextValue(body.sector),
+    industry:   normalizeContextValue(body.industry),
   };
 
   // ── KV Cache check ────────────────────────────────────────
@@ -399,6 +438,31 @@ export async function onRequest(context) {
   }
 
   // ── Build shared user prompt ──────────────────────────────
+  // Cached reports are free to read, but each cache miss fans out to four
+  // Gemini requests. Rate-limit misses by the verified Access member ID.
+  if (!env.ANALYZE_RATE_LIMITER) {
+    return new Response(
+      JSON.stringify({ error: "Analysis service is temporarily unavailable" }),
+      { status: 503, headers }
+    );
+  }
+
+  try {
+    const { success } = await env.ANALYZE_RATE_LIMITER.limit({ key: String(memberKey) });
+    if (!success) {
+      return new Response(
+        JSON.stringify({ error: "Analysis limit reached. Try again in a minute." }),
+        { status: 429, headers: { ...headers, "Retry-After": "60" } }
+      );
+    }
+  } catch (err) {
+    console.error("[analyze] rate limit error:", err);
+    return new Response(
+      JSON.stringify({ error: "Analysis service is temporarily unavailable" }),
+      { status: 503, headers }
+    );
+  }
+
   const contextBlock = `TICKER: ${ticker}
 CURRENT PRICE: ${currentPrice ? "$" + currentPrice : "unknown"}
 P/E RATIO: ${contextData.peRatio}
