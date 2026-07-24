@@ -16,6 +16,9 @@ const QUOTE_STALE_SEC = 20 * 60;        // v7 quote older than this → live-pro
 const KV_CRUMB_KEY  = "yahooSession_v1";
 const CRUMB_TTL_MS  = 55 * 60 * 1000; // 55 minutes
 const USER_AGENT    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const MAX_TICKERS = 250;
+const MAX_TICKERS_QUERY_LENGTH = 2048;
+const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
 
 // ── COOKIE HELPER ────────────────────────────────────────────────────────────
 // Headers.get("set-cookie") collapses multiple cookies into one comma-joined
@@ -161,12 +164,38 @@ export async function onRequest(context) {
     });
   }
 
+  if (request.method !== "GET") {
+    return new Response(JSON.stringify({ error: "Method Not Allowed" }), { status: 405, headers });
+  }
+
   const { searchParams } = new URL(request.url);
   const tickersParam = searchParams.get("tickers");
-  const tickers = tickersParam ? [...new Set(tickersParam.split(",").filter(Boolean))] : [];
-
-  if (!tickers.length) {
+  if (!tickersParam) {
     return new Response(JSON.stringify({ error: "No tickers provided" }), { status: 400, headers });
+  }
+
+  if (tickersParam.length > MAX_TICKERS_QUERY_LENGTH) {
+    return new Response(
+      JSON.stringify({ error: `Ticker query exceeds ${MAX_TICKERS_QUERY_LENGTH} characters` }),
+      { status: 414, headers }
+    );
+  }
+
+  const requestedTickers = tickersParam.split(",").map(ticker => ticker.trim().toUpperCase());
+  const invalidTickers = requestedTickers.filter(ticker => !TICKER_PATTERN.test(ticker));
+  if (invalidTickers.length) {
+    return new Response(
+      JSON.stringify({ error: "Invalid ticker format", tickers: invalidTickers.slice(0, 5) }),
+      { status: 400, headers }
+    );
+  }
+
+  const tickers = [...new Set(requestedTickers)];
+  if (tickers.length > MAX_TICKERS) {
+    return new Response(
+      JSON.stringify({ error: `A maximum of ${MAX_TICKERS} tickers is allowed` }),
+      { status: 400, headers }
+    );
   }
 
   const allStrip = tickers.length > 0 && tickers.every(t => STRIP_TICKERS.has(t));

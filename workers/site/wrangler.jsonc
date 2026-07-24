@@ -25,6 +25,16 @@
       "id": "1dadc46e52b146bea2fbc4b8511c7d90"
     }
   ],
+  "ratelimits": [
+    {
+      "name": "ANALYZE_RATE_LIMITER",
+      "namespace_id": "39721",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    }
+  ],
   "vars": {
     // CORS allowlist origin — the canonical custom domain.
     "ALLOWED_ORIGIN": "https://capex-iq.us",
