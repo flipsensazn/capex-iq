@@ -64,7 +64,7 @@ export default function SubsectorCard({
                 onRemoveSubsector();
               }}
               title="Remove Sub-sector"
-              style={{ background: "none", border: "none", color: "#ef4444", fontSize: 14, cursor: "pointer", padding: "0 2px", lineHeight: 1, fontFamily: "inherit" }}
+              style={{ background: "none", border: "none", color: "var(--neg)", fontSize: 14, cursor: "pointer", padding: "0 2px", lineHeight: 1, fontFamily: "inherit" }}
             >
               ×
             </button>
@@ -149,7 +149,7 @@ export default function SubsectorCard({
                 placeholder="e.g. NVDA"
                 style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, padding: "5px 8px", color: "var(--ink-100)", fontSize: 12, fontFamily: "inherit", outline: "none" }}
               />
-              <button onClick={handleAdd} style={{ background: "rgba(96,165,250,0.15)", border: "1px solid rgba(96,165,250,0.3)", color: "#60a5fa", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
+              <button onClick={handleAdd} style={{ background: "rgba(96,165,250,0.15)", border: "1px solid rgba(96,165,250,0.3)", color: "var(--info)", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
                 ✓
               </button>
               <button onClick={() => {

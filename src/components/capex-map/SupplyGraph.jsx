@@ -14,9 +14,9 @@ const NODE_W = 118, NODE_H = 26, GAP_Y = 10, COL_W = 158, PAD_X = 16, PAD_Y = 46
 // Absolute color scale — used directly only when the chain has too few
 // scored nodes for a meaningful distribution (see colorFor in the component).
 function nodeColor(strength, risk) {
-  if (strength >= 70) return "#ef4444";
+  if (strength >= 70) return "var(--neg)";
   if (strength >= 40) return "#f59e0b";
-  if (risk >= 50) return "#fb923c";
+  if (risk >= 50) return "var(--orange-400)";
   if (risk >= 20) return "#fbbf24";
   return "var(--ink-600)";
 }
@@ -82,9 +82,9 @@ export default function SupplyGraph({
     return (s, r) => {
       const heat = Math.max(s, r);
       const own = s >= r; // own bottleneck vs inherited risk → warm vs yellow-orange
-      if (heat >= Math.max(p85, 60)) return own ? "#ef4444" : "#fb923c";
+      if (heat >= Math.max(p85, 60)) return own ? "var(--neg)" : "var(--orange-400)";
       if (heat >= Math.max(p60, 40)) return own ? "#f59e0b" : "#fbbf24";
-      if (heat >= Math.max(p35, 15)) return "#60a5fa";
+      if (heat >= Math.max(p35, 15)) return "var(--info)";
       return "var(--ink-600)";
     };
   }, [graphNodes, strength, risk]);
@@ -173,8 +173,8 @@ export default function SupplyGraph({
             const filed = e.exposurePct != null;
             const stroke =
               state === "active" ? "var(--ink-100)" :
-              state === "down" ? "#ef4444" :
-              state === "up" ? "#60a5fa" :
+              state === "down" ? "var(--neg)" :
+              state === "up" ? "var(--info)" :
               filed ? "rgba(125,211,252,0.22)" : "rgba(148,163,184,0.10)";
             const w = state === "idle" ? (filed ? 1.1 : 0.8) : state === "dim" ? 0.4 : e.criticality * 0.7 + 0.6;
             return (
@@ -213,7 +213,7 @@ export default function SupplyGraph({
                 )}
                 {!isBottleneck && r < 20 && chg && (
                   <text x={p.x + NODE_W - 8} y={p.y + 17} textAnchor="end"
-                    style={{ fill: chg.startsWith("+") ? "#34d399" : "#f87171", fontSize: 9 }}>
+                    style={{ fill: chg.startsWith("+") ? "var(--pos)" : "var(--down-300)", fontSize: 9 }}>
                     {chg}
                   </text>
                 )}
@@ -226,10 +226,10 @@ export default function SupplyGraph({
 
       {/* legend */}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 9.5, color: "var(--ink-400)", marginTop: 6 }}>
-        <span><span style={{ color: "#ef4444" }}>●</span> bottleneck (radiates downstream)</span>
+        <span><span style={{ color: "var(--neg)" }}>●</span> bottleneck (radiates downstream)</span>
         <span><span style={{ color: "#fbbf24" }}>⚠</span> inherited supply risk</span>
-        <span><span style={{ color: "#ef4444" }}>━</span> downstream of selection</span>
-        <span><span style={{ color: "#60a5fa" }}>━</span> upstream suppliers</span>
+        <span><span style={{ color: "var(--neg)" }}>━</span> downstream of selection</span>
+        <span><span style={{ color: "var(--info)" }}>━</span> upstream suppliers</span>
         <span><span style={{ color: "#7dd3fc" }}>━</span> filed revenue exposure (10-K/10-Q)</span>
         <span style={{ color: "var(--ink-500)" }}>· colors scale to this chain's heat distribution — red = hottest relative to peers</span>
       </div>
@@ -264,7 +264,7 @@ export default function SupplyGraph({
               <div>
                 ⬢ Composite Bottleneck Score: <span style={{ color: "var(--ink-100)", fontWeight: 700 }}>{compositeData[selected].score.toFixed(0)}</span>
                 {compositeData[selected].delta != null && (
-                  <span style={{ color: compositeData[selected].delta > 0 ? "#ef4444" : "#34d399" }}>
+                  <span style={{ color: compositeData[selected].delta > 0 ? "var(--neg)" : "var(--pos)" }}>
                     {" "}({compositeData[selected].delta > 0 ? "+" : ""}{compositeData[selected].delta.toFixed(0)} this week)
                   </span>
                 )}
@@ -332,7 +332,7 @@ export default function SupplyGraph({
                           <span title={`${e.exposureQuote || ""}\n(${e.exposureForm}${e.exposurePeriod ? `, ${e.exposurePeriod}` : ""})`}
                             style={{ color: "#7dd3fc", fontWeight: 700 }}> {e.exposurePct.toFixed(0)}% of {e.from} rev (filed)</span>
                         )}
-                        {e.exposurePct == null && e.criticality === 3 && <span style={{ color: "#ef4444" }}> ●●●</span>}
+                        {e.exposurePct == null && e.criticality === 3 && <span style={{ color: "var(--neg)" }}> ●●●</span>}
                         {e.exposurePct == null && e.criticality === 2 && <span style={{ color: "#f59e0b" }}> ●●</span>}
                       </div>
                     );

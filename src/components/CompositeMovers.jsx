@@ -34,7 +34,7 @@ export default function CompositeMovers({ tickers = [], composite = {}, onTicker
         }}>
         <span style={{ fontSize: 11.5, fontWeight: 800, color: "var(--ink-100)" }}>{c.ticker}</span>
         <span style={{ fontSize: 11, fontWeight: 700, color }}>⬢ {c.score.toFixed(0)}</span>
-        <span style={{ fontSize: 10, fontWeight: 700, color: heat ? "#ef4444" : "#34d399" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: heat ? "var(--neg)" : "var(--pos)" }}>
           {c.delta > 0 ? "+" : ""}{c.delta.toFixed(0)}
         </span>
         <CbsSparkline history={c.history} color={color} />
@@ -55,13 +55,13 @@ export default function CompositeMovers({ tickers = [], composite = {}, onTicker
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {heating.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "#ef4444", minWidth: 62 }}>HEATING</span>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "var(--neg)", minWidth: 62 }}>HEATING</span>
             {heating.map(c => <Chip key={c.ticker} c={c} heat />)}
           </div>
         )}
         {cooling.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "#34d399", minWidth: 62 }}>COOLING</span>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "var(--pos)", minWidth: 62 }}>COOLING</span>
             {cooling.map(c => <Chip key={c.ticker} c={c} heat={false} />)}
           </div>
         )}

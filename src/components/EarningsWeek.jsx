@@ -25,8 +25,8 @@ function etHour(epochSeconds) {
 
 function sessionTag(epochSeconds) {
   const h = etHour(epochSeconds);
-  if (h < 10) return { text: "BMO", color: "#60a5fa", hint: "Before market open" };
-  if (h >= 16) return { text: "AMC", color: "#c084fc", hint: "After market close" };
+  if (h < 10) return { text: "BMO", color: "var(--info)", hint: "Before market open" };
+  if (h >= 16) return { text: "AMC", color: "var(--event)", hint: "After market close" };
   return null; // mid-day timestamps are usually placeholder times — no tag
 }
 
@@ -76,7 +76,7 @@ export default function EarningsWeek({ tickers = [], prices = {}, onTickerClick 
           )}
         </div>
         <div style={{ fontSize: 10, color: "var(--ink-500)" }}>
-          tracked tickers only · <span style={{ color: "#60a5fa" }}>BMO</span> before open · <span style={{ color: "#c084fc" }}>AMC</span> after close
+          tracked tickers only · <span style={{ color: "var(--info)" }}>BMO</span> before open · <span style={{ color: "var(--event)" }}>AMC</span> after close
         </div>
       </div>
 
@@ -116,7 +116,7 @@ export default function EarningsWeek({ tickers = [], prices = {}, onTickerClick 
                           </span>
                         )}
                         {e.change != null && (
-                          <span style={{ fontSize: 10, fontWeight: 700, color: pos ? "#34d399" : "#f87171", marginLeft: "auto" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: pos ? "var(--pos)" : "var(--down-300)", marginLeft: "auto" }}>
                             {pos ? "+" : ""}{Number(e.change).toFixed(1)}%
                           </span>
                         )}

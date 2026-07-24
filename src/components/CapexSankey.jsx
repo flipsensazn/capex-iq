@@ -34,7 +34,7 @@ function Sparkline({ history }) {
   const pts = totals.map((t, i) => `${(i / (totals.length - 1)) * w},${h - 4 - ((t - min) / range) * (h - 8)}`).join(" ");
   const delta = totals[totals.length - 1] - totals[0];
   const days = Math.max(1, Math.round((new Date(history[history.length - 1].fetchedAt) - new Date(history[0].fetchedAt)) / 86400000));
-  const color = delta > 0 ? "#34d399" : delta < 0 ? "#ef4444" : "var(--ink-400)";
+  const color = delta > 0 ? "var(--pos)" : delta < 0 ? "var(--neg)" : "var(--ink-400)";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }} title={`${history.length} readings over ${days} day${days > 1 ? "s" : ""}`}>
       <svg width={w} height={h} style={{ display: "block" }}>
@@ -136,21 +136,21 @@ export default function CapexSankey({
     <div style={{
       width: "100%", borderRadius: "var(--radius-2xl)", padding: "22px 26px", boxSizing: "border-box",
       background: "var(--surface-card)", backdropFilter: "var(--glass-blur)",
-      WebkitBackdropFilter: "var(--glass-blur)", boxShadow: "var(--shadow-panel)",
-      border: "1px solid #27272a", borderTop: "3px solid #fbbf24",
-      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), 0 4px 12px rgba(0,0,0,0.6)",
+      WebkitBackdropFilter: "var(--glass-blur)",
+      border: "1px solid var(--border-hairline)",
+      boxShadow: "var(--shadow-panel)",
     }}>
       {/* header: total + live badge + guidance trend */}
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 11, color: "var(--ink-300)", letterSpacing: "0.3em", textTransform: "uppercase", marginBottom: 6, fontFamily: "'Roboto Condensed', sans-serif" }}>
+          <div style={{ fontSize: 11, color: "var(--ink-300)", letterSpacing: "0.3em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--font-condensed)" }}>
             Total Investment Flow
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-            <span className="capex-number" style={{ fontSize: 56, fontWeight: 800, color: "#fbbf24", lineHeight: 1, textShadow: "0 2px 4px rgba(0,0,0,0.5)" }}>
+            <span className="capex-number" style={{ fontSize: 56, fontWeight: 800, color: "var(--accent)", lineHeight: 1, textShadow: "var(--text-glow-cyan)" }}>
               ~${total}B{live ? "" : "+"}
             </span>
-            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: live ? "#34d399" : "#d97706" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: live ? "var(--pos)" : "var(--warn)" }}>
               {subtitle} {live ? "(live, search-grounded)" : "(2026 est.)"}
             </span>
           </div>
@@ -193,7 +193,7 @@ export default function CapexSankey({
                 <text x={LEFT_X - 10} y={c.labelY + 6} textAnchor="end" style={{ fill: "#fbbf24", fontSize: 11, fontWeight: 700 }}>{fmtB(c.capex)}</text>
                 {entry ? (
                   <text x={LEFT_X - 10} y={c.labelY + 19} textAnchor="end"
-                    style={{ fill: entry?.change != null ? (pos ? "#10b981" : "#ef4444") : "var(--ink-500)", fontSize: 10, fontWeight: 700 }}>
+                    style={{ fill: entry?.change != null ? (pos ? "var(--up-500)" : "var(--neg)") : "var(--ink-500)", fontSize: 10, fontWeight: 700 }}>
                     {entry?.price ? `$${entry.price.toLocaleString("en-US", { maximumFractionDigits: 2 })} ` : ""}
                     {entry?.change != null ? `${pos ? "+" : ""}${entry.change.toFixed(2)}%` : ""}
                   </text>

@@ -26,14 +26,14 @@ const TRACK_LABELS = {
 
 // Per-view chip shown on candidate cards (AI candidates get no chip).
 const VIEW_CHIP = {
-  musk:     { text: "🚀 MUSK",     color: "#c084fc", hint: "Musk Galaxy supply-chain candidate" },
-  robotics: { text: "🦾 ROBOTICS", color: "#34d399", hint: "Humanoid-robotics supply-chain candidate" },
+  musk:     { text: "🚀 MUSK",     color: "var(--event)", hint: "Musk Galaxy supply-chain candidate" },
+  robotics: { text: "🦾 ROBOTICS", color: "var(--pos)", hint: "Humanoid-robotics supply-chain candidate" },
 };
 
 const DIR_LABELS = {
-  constrained_supplier: { text: "BOTTLENECK OWNER", color: "#ef4444" },
+  constrained_supplier: { text: "BOTTLENECK OWNER", color: "var(--neg)" },
   constrained_buyer:    { text: "INPUT-CONSTRAINED", color: "#f59e0b" },
-  both:                 { text: "OWNER + CONSTRAINED", color: "#f472b6" },
+  both:                 { text: "OWNER + CONSTRAINED", color: "var(--frontier-400)" },
 };
 
 function fmtCap(n) {
@@ -84,7 +84,7 @@ function CandidateCard({ c, isAdmin, onReview, onTickerClick }) {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#f87171", border: "1px solid #f8717155", background: "#f8717112", borderRadius: 3, padding: "1px 7px", textTransform: "uppercase" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "var(--down-300)", border: "1px solid #f8717155", background: "#f8717112", borderRadius: 3, padding: "1px 7px", textTransform: "uppercase" }}>
           {c.chokepoint || "bottleneck candidate"}
         </span>
         <span style={{ fontSize: 10, color: "var(--ink-400)" }}>
@@ -126,17 +126,17 @@ function CandidateCard({ c, isAdmin, onReview, onTickerClick }) {
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
         {decided ? (
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: c.status === "approved" ? "#34d399" : "var(--ink-400)", textTransform: "uppercase" }}>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: c.status === "approved" ? "var(--pos)" : "var(--ink-400)", textTransform: "uppercase" }}>
             {c.status}
           </span>
         ) : isAdmin ? (
           <>
             <button disabled={busy} onClick={() => review("approved")}
-              style={{ background: "rgba(52,211,153,0.14)", border: "1px solid rgba(52,211,153,0.4)", color: "#34d399", borderRadius: 6, padding: "5px 14px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", opacity: busy ? 0.5 : 1 }}>
+              style={{ background: "rgba(52,211,153,0.14)", border: "1px solid rgba(52,211,153,0.4)", color: "var(--pos)", borderRadius: 6, padding: "5px 14px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", opacity: busy ? 0.5 : 1 }}>
               ✓ Add to map
             </button>
             <button disabled={busy} onClick={() => review("rejected")}
-              style={{ background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.35)", color: "#f87171", borderRadius: 6, padding: "5px 14px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", opacity: busy ? 0.5 : 1 }}>
+              style={{ background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.35)", color: "var(--down-300)", borderRadius: 6, padding: "5px 14px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", opacity: busy ? 0.5 : 1 }}>
               ✕ Reject
             </button>
           </>

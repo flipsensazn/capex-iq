@@ -36,9 +36,9 @@ export default function FearGreedGauge() {
   const { score, label } = cnnData;
 
   let color, emoji;
-  if (score <= 24)      { color = "#ef4444"; emoji = "😱"; }
+  if (score <= 24)      { color = "var(--neg)"; emoji = "😱"; }
   else if (score <= 44) { color = "#f97316"; emoji = "😰"; }
-  else if (score <= 55) { color = "#facc15"; emoji = "😐"; }
+  else if (score <= 55) { color = "var(--star-400)"; emoji = "😐"; }
   else if (score <= 75) { color = "#86efac"; emoji = "😄"; }
   else                  { color = "#22c55e"; emoji = "🤑"; }
 

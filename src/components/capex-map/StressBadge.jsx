@@ -5,22 +5,22 @@ import { memo } from "react";
 //   { score, trend, count, companies: [{ ticker, score, delta, direction, summary, quotes, fy, fq }] }
 
 export function stressColor(score) {
-  if (score >= 70) return "#ef4444"; // severe — allocation / sold-out language
+  if (score >= 70) return "var(--neg)"; // severe — allocation / sold-out language
   if (score >= 40) return "#f59e0b"; // clear constraint language
-  if (score >= 15) return "#60a5fa"; // mild tightness
-  return "#34d399";                  // routine
+  if (score >= 15) return "var(--info)"; // mild tightness
+  return "var(--pos)";                  // routine
 }
 
 const DIRECTION_LABELS = {
-  constrained_supplier: { text: "BOTTLENECK OWNER", color: "#ef4444", hint: "Cannot make enough of what it sells — pricing power" },
+  constrained_supplier: { text: "BOTTLENECK OWNER", color: "var(--neg)", hint: "Cannot make enough of what it sells — pricing power" },
   constrained_buyer:    { text: "INPUT-CONSTRAINED", color: "#f59e0b", hint: "Cannot get enough inputs — downstream of a bottleneck" },
-  both:                 { text: "OWNER + CONSTRAINED", color: "#f472b6", hint: "Supply-limited on both sides" },
+  both:                 { text: "OWNER + CONSTRAINED", color: "var(--frontier-400)", hint: "Supply-limited on both sides" },
 };
 
 function TrendArrow({ trend }) {
   if (trend == null) return null;
-  if (trend > 5)  return <span style={{ color: "#ef4444" }} title={`+${trend.toFixed(0)} QoQ`}>↑</span>;
-  if (trend < -5) return <span style={{ color: "#34d399" }} title={`${trend.toFixed(0)} QoQ`}>↓</span>;
+  if (trend > 5)  return <span style={{ color: "var(--neg)" }} title={`+${trend.toFixed(0)} QoQ`}>↑</span>;
+  if (trend < -5) return <span style={{ color: "var(--pos)" }} title={`${trend.toFixed(0)} QoQ`}>↓</span>;
   return <span style={{ color: "var(--ink-400)" }} title="flat QoQ">→</span>;
 }
 
@@ -71,7 +71,7 @@ export function gaugeSummary(tickers = [], gauges = {}) {
 export const GaugeChip = memo(function GaugeChip({ tickers, gauges, onClick, open }) {
   const sum = gaugeSummary(tickers, gauges);
   if (!sum || sum.avgGap < 10) return null;
-  const color = sum.avgGap >= 50 ? "#ef4444" : "#f59e0b";
+  const color = sum.avgGap >= 50 ? "var(--neg)" : "#f59e0b";
   return (
     <button
       onClick={e => { e.stopPropagation(); onClick?.(); }}
@@ -160,7 +160,7 @@ export function CompositeLine({ c }) {
     <div style={{ fontSize: 10.5, marginTop: 5, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <span style={{ color, fontWeight: 700 }}>⬢ CBS {c.score.toFixed(0)}</span>
       {c.delta != null && (
-        <span style={{ color: c.delta > 0 ? "#ef4444" : c.delta < 0 ? "#34d399" : "var(--ink-400)" }}>
+        <span style={{ color: c.delta > 0 ? "var(--neg)" : c.delta < 0 ? "var(--pos)" : "var(--ink-400)" }}>
           {c.delta > 0 ? "+" : ""}{c.delta.toFixed(0)} wk
         </span>
       )}
@@ -175,7 +175,7 @@ function GaugeLine({ g }) {
   const hasBacklog = g.rpoYoy != null;
   const hasInv = g.inventoryDays != null;
   if (!hasBacklog && !hasInv) return null;
-  const gapColor = g.orderGap > 50 ? "#ef4444" : g.orderGap > 10 ? "#f59e0b" : "var(--ink-400)";
+  const gapColor = g.orderGap > 50 ? "var(--neg)" : g.orderGap > 10 ? "#f59e0b" : "var(--ink-400)";
   return (
     <div style={{ fontSize: 10.5, color: "#7dd3fc", marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" }}>
       {hasBacklog && (
@@ -229,7 +229,7 @@ export function StressDetail({ stress, tickers = [], gauges = {}, composite = {}
               </span>
               {c && <span style={{ fontSize: 11, fontWeight: 700, color }}>{c.score.toFixed(0)}</span>}
               {c?.delta != null && (
-                <span style={{ fontSize: 10, color: c.delta > 0 ? "#ef4444" : c.delta < 0 ? "#34d399" : "var(--ink-400)" }}>
+                <span style={{ fontSize: 10, color: c.delta > 0 ? "var(--neg)" : c.delta < 0 ? "var(--pos)" : "var(--ink-400)" }}>
                   {c.delta > 0 ? "+" : ""}{c.delta.toFixed(0)} QoQ
                 </span>
               )}

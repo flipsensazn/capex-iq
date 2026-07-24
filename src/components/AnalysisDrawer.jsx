@@ -62,7 +62,7 @@ function MarkdownBody({ md }) {
     <div style={{ fontSize: 13, color: "var(--ink-300)", lineHeight: 1.65, fontFamily: "'Inter', sans-serif" }}>
       {blocks.map((b, i) => {
         if (b.type === "h2") return (
-          <h2 key={i} style={{ fontSize: 12, fontWeight: 800, color: "#60a5fa", letterSpacing: "0.12em", textTransform: "uppercase", marginTop: 22, marginBottom: 6 }}>{b.text}</h2>
+          <h2 key={i} style={{ fontSize: 12, fontWeight: 800, color: "var(--info)", letterSpacing: "0.12em", textTransform: "uppercase", marginTop: 22, marginBottom: 6 }}>{b.text}</h2>
         );
         if (b.type === "h3") return (
           <h3 key={i} style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-300)", letterSpacing: "0.08em", textTransform: "uppercase", marginTop: 14, marginBottom: 4 }}>{b.text}</h3>
@@ -111,9 +111,9 @@ function ProjectionTable({ projection }) {
     : "—";
 
   const rows = [
-    { label: "Bear Case",  value: projection.bear, color: "#f87171" },
+    { label: "Bear Case",  value: projection.bear, color: "var(--down-300)" },
     { label: "Base Case",  value: projection.base, color: "#fbbf24" },
-    { label: "Bull Case",  value: projection.bull, color: "#34d399" },
+    { label: "Bull Case",  value: projection.bull, color: "var(--pos)" },
   ];
 
   return (
@@ -163,7 +163,7 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
 
   const { fundamentals: F, technical: T, macro: M, report, weightedScore, verdict, projection, disclaimer, generatedAt, fromCache } = analysis;
 
-  const verdictColor = verdict === "BUY" ? "#34d399" : verdict === "HOLD" ? "#fbbf24" : "#f87171";
+  const verdictColor = verdict === "BUY" ? "var(--pos)" : verdict === "HOLD" ? "#fbbf24" : "var(--down-300)";
   const agentAge = generatedAt
     ? (() => {
         const diff = Math.floor((Date.now() - generatedAt) / 60000);
@@ -219,8 +219,8 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14 }}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-                <span style={{ fontSize: 18, fontWeight: 800, color: "#f1f5f9", fontFamily: "'DM Mono', monospace", letterSpacing: "0.04em" }}>{ticker}</span>
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", color: "#60a5fa" }}>DEEP ANALYSIS</span>
+                <span style={{ fontSize: 18, fontWeight: 800, color: "var(--ink-050)", fontFamily: "'DM Mono', monospace", letterSpacing: "0.04em" }}>{ticker}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", color: "var(--info)" }}>DEEP ANALYSIS</span>
               </div>
               <div style={{ fontSize: 10, color: "var(--ink-600)" }}>
                 {agentAge && <span>{fromCache ? "Cached" : "Generated"} {agentAge} · </span>}
@@ -245,8 +245,8 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
                 <div style={{ height: "100%", width: `${weightedScore}%`, background: `linear-gradient(90deg, ${verdictColor}66, ${verdictColor})`, borderRadius: 3, transition: "width 1s cubic-bezier(.4,0,.2,1)" }} />
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <Pill label={`F: ${F?.score ?? "—"}`} color="#60a5fa" />
-                <Pill label={`T: ${T?.score ?? "—"}`} color="#c084fc" />
+                <Pill label={`F: ${F?.score ?? "—"}`} color="var(--info)" />
+                <Pill label={`T: ${T?.score ?? "—"}`} color="var(--event)" />
                 <Pill label={`M: ${M?.score ?? "—"}`} color="#f59e0b" />
               </div>
             </div>
@@ -259,19 +259,19 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
           {/* Agent score bars */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-hairline)", borderRadius: 8 }}>
             <div style={{ fontSize: 9, color: "var(--ink-500)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4, fontWeight: 700 }}>Agent Scores · Weighted 40/30/30</div>
-            {F && <ScoreBar label="Fundamentals (40%)" score={F.score} color="#60a5fa" />}
-            {T && <ScoreBar label="Technical (30%)"    score={T.score} color="#c084fc" />}
+            {F && <ScoreBar label="Fundamentals (40%)" score={F.score} color="var(--info)" />}
+            {T && <ScoreBar label="Technical (30%)"    score={T.score} color="var(--event)" />}
             {M && <ScoreBar label="Macro / Qual (30%)" score={M.score} color="#f59e0b" />}
           </div>
 
           {/* Quick-glance tags */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {F?.financial_health && <Pill label={`Health: ${F.financial_health}`} color="#60a5fa" />}
-            {F?.valuation_signal && <Pill label={`Val: ${F.valuation_signal}`}    color="#60a5fa" />}
-            {F?.capex_trend      && <Pill label={`CapEx: ${F.capex_trend}`}       color="#60a5fa" />}
-            {T?.trend            && <Pill label={T.trend}                          color="#c084fc" />}
-            {T?.rsi_signal       && <Pill label={`RSI: ${T.rsi_signal}`}          color="#c084fc" />}
-            {T?.macd_signal      && <Pill label={`MACD: ${T.macd_signal}`}        color="#c084fc" />}
+            {F?.financial_health && <Pill label={`Health: ${F.financial_health}`} color="var(--info)" />}
+            {F?.valuation_signal && <Pill label={`Val: ${F.valuation_signal}`}    color="var(--info)" />}
+            {F?.capex_trend      && <Pill label={`CapEx: ${F.capex_trend}`}       color="var(--info)" />}
+            {T?.trend            && <Pill label={T.trend}                          color="var(--event)" />}
+            {T?.rsi_signal       && <Pill label={`RSI: ${T.rsi_signal}`}          color="var(--event)" />}
+            {T?.macd_signal      && <Pill label={`MACD: ${T.macd_signal}`}        color="var(--event)" />}
             {M?.ai_capex_exposure && <Pill label={M.ai_capex_exposure.replace("_", " ")} color="#f59e0b" />}
             {M?.competitive_moat && <Pill label={`Moat: ${M.competitive_moat}`}  color="#f59e0b" />}
             {M?.sector_tailwind  && <Pill label={`Sector: ${M.sector_tailwind}`} color="#f59e0b" />}
@@ -285,7 +285,7 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
           {/* 3-Year Projection */}
           {projection && (
             <div>
-              <div style={{ fontSize: 12, fontWeight: 800, color: "#60a5fa", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>3-Year Price Projection</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "var(--info)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>3-Year Price Projection</div>
               <ProjectionTable projection={projection} />
             </div>
           )}
@@ -293,7 +293,7 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
           {/* CapEx note */}
           {F?.capex_note && (
             <div style={{ padding: "10px 12px", background: "rgba(96,165,250,0.05)", border: "1px solid rgba(96,165,250,0.15)", borderRadius: 7 }}>
-              <div style={{ fontSize: 9, color: "#60a5fa", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>CapEx Strategy Note</div>
+              <div style={{ fontSize: 9, color: "var(--info)", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>CapEx Strategy Note</div>
               <div style={{ fontSize: 12, color: "var(--ink-300)", lineHeight: 1.5 }}>{F.capex_note}</div>
             </div>
           )}
@@ -315,11 +315,11 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
           {/* Sector catalysts */}
           {M?.sector_catalysts?.length > 0 && (
             <div style={{ padding: "10px 12px", background: "rgba(52,211,153,0.05)", border: "1px solid rgba(52,211,153,0.15)", borderRadius: 7 }}>
-              <div style={{ fontSize: 9, color: "#34d399", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Near-Term Catalysts</div>
+              <div style={{ fontSize: 9, color: "var(--pos)", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Near-Term Catalysts</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                 {M.sector_catalysts.map((c, i) => (
                   <div key={i} style={{ fontSize: 12, color: "var(--ink-300)", display: "flex", gap: 6 }}>
-                    <span style={{ color: "#34d399", flexShrink: 0 }}>▸</span>{c}
+                    <span style={{ color: "var(--pos)", flexShrink: 0 }}>▸</span>{c}
                   </div>
                 ))}
               </div>
@@ -330,12 +330,12 @@ export default function AnalysisDrawer({ ticker, analysis, onClose }) {
           {T?.estimated_support && T?.estimated_resistance && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <div style={{ padding: "8px 12px", background: "rgba(52,211,153,0.06)", border: "1px solid rgba(52,211,153,0.15)", borderRadius: 7, textAlign: "center" }}>
-                <div style={{ fontSize: 9, color: "#34d399", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>Est. Support</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#34d399" }}>${T.estimated_support}</div>
+                <div style={{ fontSize: 9, color: "var(--pos)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>Est. Support</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--pos)" }}>${T.estimated_support}</div>
               </div>
               <div style={{ padding: "8px 12px", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.15)", borderRadius: 7, textAlign: "center" }}>
-                <div style={{ fontSize: 9, color: "#f87171", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>Est. Resistance</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#f87171" }}>${T.estimated_resistance}</div>
+                <div style={{ fontSize: 9, color: "var(--down-300)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>Est. Resistance</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--down-300)" }}>${T.estimated_resistance}</div>
               </div>
             </div>
           )}

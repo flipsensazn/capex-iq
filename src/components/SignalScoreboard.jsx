@@ -14,7 +14,7 @@ const TYPE_LABELS = {
 
 const HORIZONS = ["1w", "1m", "3m"];
 
-const excessColor = v => (v == null ? "var(--ink-500)" : v > 0 ? "#34d399" : v < 0 ? "#ef4444" : "var(--ink-300)");
+const excessColor = v => (v == null ? "var(--ink-500)" : v > 0 ? "var(--pos)" : v < 0 ? "var(--neg)" : "var(--ink-300)");
 const fmtExcess = v => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
 
 function HorizonCell({ h }) {
