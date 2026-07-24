@@ -180,6 +180,10 @@ export async function onRequest(context) {
 
     return reply(200, {
       success: true,
+      // `already` lets the landing page skip the activation countdown for
+      // returning users — their list membership propagated long ago, so only a
+      // genuinely new append needs the ~60s gate before the first PIN can send.
+      already,
       message: already
         ? "You're already registered — click Sign In and a one-time PIN will be emailed to you."
         : "You're in! Click Sign In — a one-time PIN will be emailed to you.",
