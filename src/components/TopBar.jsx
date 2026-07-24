@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { Wordmark } from "./ds";
 
 const TOP_BAR_TICKERS = [
-  { ticker: "^GSPC", label: "S&P 500", color: "#60a5fa" },
-  { ticker: "^DJI", label: "DOW", color: "#34d399" },
-  { ticker: "^IXIC", label: "NASDAQ", color: "#c084fc" },
-  { ticker: "BTC-USD", label: "BTC", color: "#f59e0b" },
-  { ticker: "ETH-USD", label: "ETH", color: "#60a5fa" },
-  { ticker: "XRP-USD", label: "XRP", color: "#34d399" },
+  { ticker: "^GSPC", label: "S&P 500", color: "var(--info-400)" },
+  { ticker: "^DJI", label: "DOW", color: "var(--up-400)" },
+  { ticker: "^IXIC", label: "NASDAQ", color: "var(--event-400)" },
+  { ticker: "BTC-USD", label: "BTC", color: "var(--amber-400)" },
+  { ticker: "ETH-USD", label: "ETH", color: "var(--info-400)" },
+  { ticker: "XRP-USD", label: "XRP", color: "var(--up-400)" },
 ];
 
 // NYSE holiday calendar, currently covering 2025–2027. Extend this set before
@@ -101,7 +102,7 @@ function BloombergChart({ data, timestamps, color }) {
   if (!data || !timestamps || data.length < 2) {
     return (
       <div style={{ height: 24, marginTop: 4, display: "flex", alignItems: "center", justifyContent: "center", borderTop: "1px dashed rgba(255,255,255,0.2)" }}>
-        <span style={{ fontSize: 8, color: "#475569" }}>NO CHART DATA</span>
+        <span style={{ fontSize: 8, color: "var(--ink-500)" }}>NO CHART DATA</span>
       </div>
     );
   }
@@ -157,7 +158,7 @@ function BloombergChart({ data, timestamps, color }) {
         </defs>
         <g clipPath="url(#bloomberg-clip)">
           <line x1={splitX} y1={0} x2={splitX} y2={height} stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2,2" />
-          {path1 && <path d={path1} fill="none" stroke="#f8fafc" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />}
+          {path1 && <path d={path1} fill="none" stroke="var(--ink-050)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />}
           {path2 && <path d={path2} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />}
         </g>
       </svg>
@@ -185,8 +186,8 @@ function MarketClock() {
   const isPost = state === "post";
   const isExtended = isPre || isPost;
 
-  const dotColor = isOpen ? "#34d399" : isExtended ? "#f59e0b" : "#475569";
-  const labelColor = isOpen ? "#34d399" : isExtended ? "#f59e0b" : "#64748b";
+  const dotColor = isOpen ? "var(--pos)" : isExtended ? "var(--warn)" : "var(--ink-500)";
+  const labelColor = isOpen ? "var(--pos)" : isExtended ? "var(--warn)" : "var(--ink-400)";
   const label = isOpen ? "MARKET OPEN" : isPre ? "PRE-MARKET" : isPost ? "AFTER HOURS" : "MARKET CLOSED";
   const subLabel = isOpen ? "closes in" : isExtended ? (isPre ? "opens in" : "closes in") : "opens in";
 
@@ -207,14 +208,14 @@ function MarketClock() {
         <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.18em", color: labelColor, textTransform: "uppercase" }}>{label}</span>
       </div>
 
-      <div style={{ fontFamily: "'DM Mono','Fira Code',monospace" }}>
-        <span style={{ fontSize: 10, color: "#334155", letterSpacing: "0.05em" }}>{subLabel} </span>
-        <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.08em", color: isOpen ? "#34d399" : isExtended ? "#f59e0b" : "#475569" }}>
+      <div style={{ fontFamily: "var(--font-mono)" }}>
+        <span style={{ fontSize: 10, color: "var(--ink-600)", letterSpacing: "0.05em" }}>{subLabel} </span>
+        <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.08em", color: isOpen ? "var(--pos)" : isExtended ? "var(--warn)" : "var(--ink-500)" }}>
           {countdown}
         </span>
       </div>
 
-      <div style={{ fontSize: 9, color: "#2d3a52", fontFamily: "'DM Mono','Fira Code',monospace", letterSpacing: "0.05em" }}>{etTime}</div>
+      <div style={{ fontSize: 9, color: "var(--ink-700)", fontFamily: "var(--font-mono)", letterSpacing: "0.05em" }}>{etTime}</div>
     </div>
   );
 }
@@ -238,20 +239,20 @@ function MarketClockCompact() {
   const isPre = state === "pre";
   const isPost = state === "post";
   const isExt = isPre || isPost;
-  const dotColor = isOpen ? "#34d399" : isExt ? "#f59e0b" : "#475569";
+  const dotColor = isOpen ? "var(--pos)" : isExt ? "var(--warn)" : "var(--ink-500)";
   const label = isOpen ? "OPEN" : isPre ? "PRE" : isPost ? "AH" : "CLOSED";
-  const labelColor = isOpen ? "#34d399" : isExt ? "#f59e0b" : "#64748b";
+  const labelColor = isOpen ? "var(--pos)" : isExt ? "var(--warn)" : "var(--ink-400)";
   const subLabel = isOpen ? "closes" : isExt ? (isPre ? "opens" : "closes") : "opens";
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "'DM Mono','Fira Code',monospace" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <span style={{ width: 5, height: 5, borderRadius: "50%", background: dotColor, display: "inline-block", boxShadow: isOpen ? `0 0 5px ${dotColor}` : "none", animation: isOpen ? "pulseDot 2s infinite" : "none" }} />
         <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.15em", color: labelColor }}>{label}</span>
       </div>
-      <span style={{ fontSize: 9, color: "#334155" }}>{subLabel} in</span>
-      <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", color: isOpen ? "#34d399" : isExt ? "#f59e0b" : "#475569" }}>{countdown}</span>
-      <span style={{ fontSize: 9, color: "#2d3a52", letterSpacing: "0.04em" }}>{etTime}</span>
+      <span style={{ fontSize: 9, color: "var(--ink-600)" }}>{subLabel} in</span>
+      <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", color: isOpen ? "var(--pos)" : isExt ? "var(--warn)" : "var(--ink-500)" }}>{countdown}</span>
+      <span style={{ fontSize: 9, color: "var(--ink-700)", letterSpacing: "0.04em" }}>{etTime}</span>
     </div>
   );
 }
@@ -259,6 +260,7 @@ function MarketClockCompact() {
 export default function TopBar({ marketData }) {
   const barRef = useRef(null);
   const clockRef = useRef(null);
+  const brandRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
@@ -277,7 +279,8 @@ export default function TopBar({ marketData }) {
       if (!barRef.current || !clockRef.current) return;
       const barW = barRef.current.offsetWidth;
       const clockW = clockRef.current.offsetWidth;
-      const available = barW - 32 - 14 - clockW;
+      const brandW = brandRef.current?.offsetWidth ?? 0;
+      const available = barW - 32 - 14 - clockW - brandW;
       const fullW = 148 * 6 + 5 * 5;
       setScale(Math.min(1, Math.max(0.65, available / fullW)));
     };
@@ -311,10 +314,10 @@ export default function TopBar({ marketData }) {
           left: 0,
           right: 0,
           zIndex: 1000,
-          background: "rgba(14,14,14,0.98)",
-          borderBottom: "1px solid rgba(255,255,255,.07)",
-          backdropFilter: "blur(12px)",
-          boxShadow: "0 2px 20px rgba(0,0,0,0.7)",
+          background: "var(--bg-chrome)",
+          borderBottom: "1px solid var(--border-hairline)",
+          backdropFilter: "var(--glass-blur)",
+          boxShadow: "var(--shadow-chrome)",
         }}
       >
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 3, padding: "4px 4px 0" }}>
@@ -323,7 +326,7 @@ export default function TopBar({ marketData }) {
             const price = entry.price;
             const changePct = entry.change;
             const pos = (changePct ?? 0) >= 0;
-            const changeColor = changePct == null ? "#475569" : pos ? "#10b981" : "#ef4444";
+            const changeColor = changePct == null ? "var(--ink-500)" : pos ? "var(--up-500)" : "var(--neg)";
             const sessionLabel = entry?.session === "POST" || entry?.session === "CLOSED" ? "AH" : entry?.session === "PRE" ? "PM" : null;
             let absChange = "—";
             if (price != null && changePct != null) {
@@ -332,16 +335,16 @@ export default function TopBar({ marketData }) {
             }
 
             return (
-              <div key={ticker} style={{ background: "linear-gradient(to bottom, #1c1c1c, #111)", border: "1px solid #222", borderRadius: 3, padding: "5px 7px 3px", fontFamily: "'Roboto Condensed', sans-serif", minWidth: 0 }}>
+              <div key={ticker} style={{ background: "var(--surface-inset)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: "5px 7px 3px", fontFamily: "var(--font-condensed)", minWidth: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                     <span style={{ fontSize: 10, fontWeight: 800, color, letterSpacing: "0.03em", whiteSpace: "nowrap" }}>{label}</span>
-                    {sessionLabel && <span style={{ fontSize: 6, fontWeight: 800, color: "#94a3b8", background: "#171717", border: "1px solid #333", borderRadius: 2, padding: "0px 2px" }}>{sessionLabel}</span>}
+                    {sessionLabel && <span style={{ fontSize: 6, fontWeight: 800, color: "var(--ink-300)", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-chip)", padding: "0px 2px" }}>{sessionLabel}</span>}
                   </div>
                   <span style={{ fontSize: 9, fontWeight: 700, color: changeColor, whiteSpace: "nowrap" }}>{absChange}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#f8fafc", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-050)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: changeColor, whiteSpace: "nowrap", flexShrink: 0, marginLeft: 2 }}>
                     {changePct != null ? `${pos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
                   </span>
@@ -351,7 +354,7 @@ export default function TopBar({ marketData }) {
             );
           })}
         </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "3px 8px 4px", gap: 10, borderTop: "1px solid rgba(255,255,255,.04)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "3px 8px 4px", gap: 10, borderTop: "1px solid var(--border-hairline)" }}>
           <MarketClockCompact />
         </div>
       </div>
@@ -371,13 +374,16 @@ export default function TopBar({ marketData }) {
         alignItems: "center",
         padding: "0 16px",
         height: 72,
-        background: "rgba(14,14,14,0.98)",
-        borderBottom: "1px solid rgba(255,255,255,.07)",
-        backdropFilter: "blur(12px)",
-        boxShadow: "0 2px 20px rgba(0,0,0,0.7)",
+        background: "var(--bg-chrome)",
+        borderBottom: "1px solid var(--border-hairline)",
+        backdropFilter: "var(--glass-blur)",
+        boxShadow: "var(--shadow-chrome)",
         overflow: "hidden",
       }}
     >
+      <div ref={brandRef} style={{ flexShrink: 0, paddingRight: 14 }}>
+        <Wordmark size={16} />
+      </div>
       <div
         style={{
           display: "flex",
@@ -394,7 +400,7 @@ export default function TopBar({ marketData }) {
           const price = entry.price;
           const changePct = entry.change;
           const pos = (changePct ?? 0) >= 0;
-          const changeColor = changePct == null ? "#475569" : pos ? "#10b981" : "#ef4444";
+          const changeColor = changePct == null ? "var(--ink-500)" : pos ? "var(--up-500)" : "var(--neg)";
           const sessionLabel = entry?.session === "POST" || entry?.session === "CLOSED" ? "AH" : entry?.session === "PRE" ? "PM" : null;
           let absChange = "—";
           if (price != null && changePct != null) {
@@ -410,10 +416,10 @@ export default function TopBar({ marketData }) {
                 flexDirection: "column",
                 justifyContent: "center",
                 padding: "6px 10px 4px",
-                borderRadius: 3,
-                background: "linear-gradient(to bottom, #1c1c1c, #111)",
-                border: "1px solid #222",
-                fontFamily: "'Roboto Condensed', sans-serif",
+                borderRadius: "var(--radius-md)",
+                background: "var(--surface-inset)",
+                border: "1px solid var(--border-hairline)",
+                fontFamily: "var(--font-condensed)",
                 flex: "1 1 0",
                 minWidth: 0,
                 boxSizing: "border-box",
@@ -423,12 +429,12 @@ export default function TopBar({ marketData }) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                   <span style={{ fontSize: 11, fontWeight: 800, color, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{label}</span>
-                  {sessionLabel && <span style={{ fontSize: 7, fontWeight: 800, color: "#94a3b8", background: "#171717", border: "1px solid #333", borderRadius: 2, padding: "1px 3px", flexShrink: 0 }}>{sessionLabel}</span>}
+                  {sessionLabel && <span style={{ fontSize: 7, fontWeight: 800, color: "var(--ink-300)", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-chip)", padding: "1px 3px", flexShrink: 0 }}>{sessionLabel}</span>}
                 </div>
                 <span style={{ fontSize: 11, fontWeight: 700, color: changeColor, whiteSpace: "nowrap", flexShrink: 0 }}>{absChange}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2, gap: 4 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f8fafc", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink-050)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: changeColor, whiteSpace: "nowrap", flexShrink: 0 }}>
                   {changePct != null ? `${pos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
                 </span>

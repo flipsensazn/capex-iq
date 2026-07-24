@@ -5,6 +5,7 @@ import CapexSankey from "./components/CapexSankey";
 import CompositeMovers from "./components/CompositeMovers";
 import FearGreedGauge from "./components/FearGreedGauge";
 import SignalScoreboard from "./components/SignalScoreboard";
+import { TabNav } from "./components/ds";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
 import EarningsWeek from "./components/EarningsWeek";
@@ -1362,8 +1363,9 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid robotics
-  const VALID_VIEWS = ["ai", "musk", "robotics"];
+  // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
+  // robotics · "earnings" = this week's calendar as its own view
+  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings"];
   const [view, setView] = useState(() => {
     const h = window.location.hash.replace("#", "");
     return VALID_VIEWS.includes(h) ? h : "ai";
@@ -1637,6 +1639,9 @@ export default function App() {
   const liveMuskData = useMemo(() => mergeIntel(muskCapexData, muskIntel), [muskCapexData, muskIntel]);
   const liveRoboticsData = useMemo(() => mergeIntel(roboticsCapexData, roboticsIntel), [roboticsCapexData, roboticsIntel]);
   const isRobotics = view === "robotics";
+  // The earnings view is a standalone calendar — it still needs a map for the
+  // ticker universe, so it borrows the AI map without rendering its panels.
+  const isEarnings = view === "earnings";
   const activeLiveData = isRobotics ? liveRoboticsData : isMusk ? liveMuskData : liveCapexData;
   const activeIntelStatus = isRobotics ? roboticsIntelStatus : isMusk ? muskIntelStatus : capexIntelStatus;
   const activeIntel = isRobotics ? roboticsIntel : isMusk ? muskIntel : capexIntel;
@@ -1757,32 +1762,37 @@ export default function App() {
             </div>
           </div>
 
-          {/* RIGHT SIDE: Fear & Greed Gauge */}
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
-            <FearGreedGauge />
-          </div>
-
         </div>
 
         <div className="main-content" style={{ maxWidth: 1480, margin: "0 auto", padding: "32px 20px 64px", display: "flex", flexDirection: "column", gap: 28, overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
           
-          {/* VIEW SWITCHER: AI hyperscaler capex flow · Musk Galaxy · Robotics */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {[["ai", "🌐 AI Capex Flow"], ["musk", "🚀 Musk Galaxy"], ["robotics", "🦾 Robotics"]].map(([id, label]) => (
-              <button key={id} onClick={() => switchView(id)}
-                style={{
-                  background: view === id ? "rgba(251,191,36,0.12)" : "rgba(255,255,255,0.03)",
-                  border: `1px solid ${view === id ? "#fbbf24" : "rgba(255,255,255,0.1)"}`,
-                  color: view === id ? "#fbbf24" : "#64748b",
-                  borderRadius: 8, padding: "8px 18px", cursor: "pointer",
-                  fontSize: 12, fontWeight: 800, letterSpacing: "0.08em",
-                  textTransform: "uppercase", fontFamily: "inherit", transition: "all .15s",
-                }}>
-                {label}
-              </button>
-            ))}
+          {/* VIEW SWITCHER + market sentiment, per the design's header row */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+            <TabNav
+              value={view}
+              onChange={switchView}
+              tabs={[
+                { value: "ai", label: "AI Capex", icon: "⚡" },
+                { value: "musk", label: "Musk Galaxy", icon: "🚀" },
+                { value: "robotics", label: "Robotics", icon: "🦾" },
+                { value: "earnings", label: "Earnings", icon: "🗓" },
+              ]}
+            />
+            <div style={{ width: 280, maxWidth: "100%" }}>
+              <FearGreedGauge />
+            </div>
           </div>
 
+          {/* Earnings is its own view: just the week's calendar, full width. */}
+          {isEarnings && (
+            <EarningsWeek
+              tickers={watchlistTickers}
+              prices={prices}
+              onTickerClick={openPopup}
+            />
+          )}
+
+          {!isEarnings && <>
           {/* HERO: capex flow Sankey — spenders → tracks, with guidance trend */}
           <CapexSankey
             key={`sankey-${view}`}
@@ -1834,12 +1844,6 @@ export default function App() {
             title={isRobotics ? "Robotics Dependency Graph" : isMusk ? "Musk Galaxy Dependency Graph" : undefined}
           />
 
-          <EarningsWeek
-            tickers={watchlistTickers}
-            prices={prices}
-            onTickerClick={openPopup}
-          />
-
           <BottleneckScout
             candidates={candidates}
             isAdmin={isAdmin}
@@ -1875,6 +1879,7 @@ export default function App() {
               </div>
             </div>
           </div>
+          </>}
        </div>
       </div>
       {/* TICKER TAPE */}
