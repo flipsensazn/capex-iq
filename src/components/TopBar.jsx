@@ -158,7 +158,7 @@ function BloombergChart({ data, timestamps, color }) {
         </defs>
         <g clipPath="url(#bloomberg-clip)">
           <line x1={splitX} y1={0} x2={splitX} y2={height} stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2,2" />
-          {path1 && <path d={path1} fill="none" stroke="var(--ink-050)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />}
+          {path1 && <path d={path1} fill="none" stroke="var(--ink-600)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />}
           {path2 && <path d={path2} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />}
         </g>
       </svg>
@@ -304,7 +304,7 @@ export default function TopBar({ marketData }) {
             const price = entry.price;
             const changePct = entry.change;
             const pos = (changePct ?? 0) >= 0;
-            const changeColor = changePct == null ? "var(--ink-500)" : pos ? "var(--up-500)" : "var(--neg)";
+            const changeColor = changePct == null ? "var(--ink-500)" : pos ? "var(--up-500)" : "var(--down-400)";
             const sessionLabel = entry?.session === "POST" || entry?.session === "CLOSED" ? "AH" : entry?.session === "PRE" ? "PM" : null;
             let absChange = "—";
             if (price != null && changePct != null) {
@@ -313,16 +313,16 @@ export default function TopBar({ marketData }) {
             }
 
             return (
-              <div key={ticker} style={{ background: "var(--surface-raised)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-md)", padding: "5px 7px 3px", fontFamily: "var(--font-condensed)", minWidth: 0 }}>
+              <div key={ticker} style={{ background: "var(--surface-raised)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: "5px 7px 3px", fontFamily: "var(--font-condensed)", minWidth: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                    <span style={{ fontSize: 10, fontWeight: 800, color, letterSpacing: "0.03em", whiteSpace: "nowrap" }}>{label}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-200)", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{label}</span>
                     {sessionLabel && <span style={{ fontSize: 6, fontWeight: 800, color: "var(--ink-300)", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-chip)", padding: "0px 2px" }}>{sessionLabel}</span>}
                   </div>
                   <span style={{ fontSize: 9, fontWeight: 700, color: changeColor, whiteSpace: "nowrap" }}>{absChange}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-050)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-100)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: changeColor, whiteSpace: "nowrap", flexShrink: 0, marginLeft: 2 }}>
                     {changePct != null ? `${pos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
                   </span>
@@ -379,7 +379,7 @@ export default function TopBar({ marketData }) {
           const price = entry.price;
           const changePct = entry.change;
           const pos = (changePct ?? 0) >= 0;
-          const changeColor = changePct == null ? "var(--ink-500)" : pos ? "var(--up-500)" : "var(--neg)";
+          const changeColor = changePct == null ? "var(--ink-500)" : pos ? "var(--up-500)" : "var(--down-400)";
           const sessionLabel = entry?.session === "POST" || entry?.session === "CLOSED" ? "AH" : entry?.session === "PRE" ? "PM" : null;
           let absChange = "—";
           if (price != null && changePct != null) {
@@ -397,7 +397,7 @@ export default function TopBar({ marketData }) {
                 padding: "6px 10px 4px",
                 borderRadius: "var(--radius-md)",
                 background: "var(--surface-raised)",
-                border: "1px solid var(--border-soft)",
+                border: "1px solid var(--border-hairline)",
                 fontFamily: "var(--font-condensed)",
                 flex: "1 1 0",
                 minWidth: 0,
@@ -407,13 +407,13 @@ export default function TopBar({ marketData }) {
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ fontSize: 11, fontWeight: 800, color, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{label}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-200)", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{label}</span>
                   {sessionLabel && <span style={{ fontSize: 7, fontWeight: 800, color: "var(--ink-300)", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-chip)", padding: "1px 3px", flexShrink: 0 }}>{sessionLabel}</span>}
                 </div>
                 <span style={{ fontSize: 11, fontWeight: 700, color: changeColor, whiteSpace: "nowrap", flexShrink: 0 }}>{absChange}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2, gap: 4 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink-050)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink-100)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatPrice(price, ticker)}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: changeColor, whiteSpace: "nowrap", flexShrink: 0 }}>
                   {changePct != null ? `${pos ? "+" : ""}${changePct.toFixed(2)}%` : "—"}
                 </span>
