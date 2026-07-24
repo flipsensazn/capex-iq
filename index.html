@@ -509,6 +509,13 @@ footer{border-top:1px solid var(--border-hairline)}
         <button class="btn btn-primary glow" type="submit" id="regBtn" style="font-size:14px;padding:11px 20px">Register</button>
       </form>
       <div id="regMsg" role="status" aria-live="polite"></div>
+      <!-- Shown after a successful register; replaces the form. New sign-ups
+           are gated ~60s while the Members-list append propagates to Access,
+           since the first PIN silently won't send until it does. -->
+      <div id="regActivate" hidden style="margin-top:16px;display:flex;flex-direction:column;gap:12px;align-items:center">
+        <p id="regActivateMsg" role="status" aria-live="polite" style="font-size:12.5px;color:var(--text-secondary);line-height:1.55;margin:0"></p>
+        <button id="regSignIn" class="btn btn-primary glow" type="button" style="font-size:14px;padding:11px 20px" disabled>Sign In</button>
+      </div>
     </div>
   </section>
 </div>
@@ -719,6 +726,56 @@ footer{border-top:1px solid var(--border-hairline)}
   var input = document.getElementById("regEmail");
   var msg = document.getElementById("regMsg");
   var btn = document.getElementById("regBtn");
+  var activate = document.getElementById("regActivate");
+  var activateMsg = document.getElementById("regActivateMsg");
+  var signInBtn = document.getElementById("regSignIn");
+
+  // Access needs ~a minute to enforce a freshly-appended member; sign in before
+  // that and the one-time PIN silently never sends (documented Access behavior:
+  // it only emails a code to a policy-matched address). Gate the button until
+  // the window has passed. Counts from when /register returned, i.e. from the
+  // moment the append actually happened.
+  var GATE_SECONDS = 60;
+  var gateTimer = null;
+
+  signInBtn.addEventListener("click", function(){
+    if (!signInBtn.disabled) window.location.href = "/app";
+  });
+
+  function armSignIn(){
+    signInBtn.disabled = false;
+    signInBtn.style.opacity = "";
+    signInBtn.textContent = "Sign In";
+  }
+
+  function startActivation(already){
+    if (gateTimer){ clearInterval(gateTimer); gateTimer = null; }
+    form.hidden = true;
+    msg.textContent = ""; msg.className = "";
+    activate.hidden = false;
+
+    if (already){
+      // Returning user — already propagated, no need to wait.
+      activateMsg.textContent = "You're already registered. Click Sign In — a one-time PIN will be emailed to you.";
+      armSignIn();
+      return;
+    }
+
+    activateMsg.textContent = "You're in! We're activating your access — this can take up to a minute. The button below unlocks when you're ready, then a one-time PIN is emailed to your inbox.";
+    var remaining = GATE_SECONDS;
+    signInBtn.disabled = true;
+    signInBtn.style.opacity = ".6";
+    signInBtn.textContent = "Sign in available in " + remaining + "s";
+    gateTimer = setInterval(function(){
+      remaining -= 1;
+      if (remaining <= 0){
+        clearInterval(gateTimer); gateTimer = null;
+        armSignIn();
+      } else {
+        signInBtn.textContent = "Sign in available in " + remaining + "s";
+      }
+    }, 1000);
+  }
 
   input.addEventListener("input", function(){ input.classList.remove("invalid"); });
 
@@ -740,9 +797,8 @@ footer{border-top:1px solid var(--border-hairline)}
       return res.json().then(function(data){ return { ok: res.ok, data: data }; });
     }).then(function(r){
       if (r.ok && r.data.success){
-        msg.className = "ok";
-        msg.textContent = r.data.message || "You're in! Click Sign In — a one-time PIN will be emailed to you.";
         input.value = "";
+        startActivation(!!r.data.already);
       } else {
         msg.className = "err";
         msg.textContent = r.data.message || "Registration failed — please try again.";
