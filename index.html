@@ -139,9 +139,9 @@ p{margin:0}
 /* ── Hero ── */
 .hero{position:relative;height:min(860px,92vh);min-height:640px;overflow:hidden;background:var(--void-800)}
 .hero canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.hero-scrim{position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,rgba(8,11,17,.85),transparent 22%,transparent 42%,rgba(8,11,17,.96) 80%)}
+.hero-scrim{position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,rgba(8,11,17,.85),transparent 22%,transparent 58%,rgba(8,11,17,.55) 100%)}
 .hero-glow{position:absolute;inset:0;pointer-events:none;background:radial-gradient(58% 42% at 50% -4%,rgba(0,240,255,.10),transparent 68%)}
-.hero-copy{position:absolute;left:clamp(24px,5vw,72px);right:clamp(24px,5vw,72px);bottom:110px;z-index:2;max-width:760px}
+.hero-copy{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);z-index:2;max-width:760px;margin:0 auto;padding:0 clamp(24px,5vw,72px);display:flex;flex-direction:column;align-items:center;text-align:center}
 .hero h1{
   font-family:var(--font-ui);font-weight:800;font-size:clamp(34px,5vw,62px);
   line-height:1.06;letter-spacing:-0.01em;margin:18px 0 0;
@@ -152,7 +152,7 @@ p{margin:0}
 .hero-sub{margin-top:18px;font-size:16px;color:var(--text-secondary);max-width:560px;line-height:1.6}
 .hero-cta{margin-top:28px;display:flex;gap:14px;flex-wrap:wrap}
 .hero-stress-card{
-  position:absolute;right:clamp(24px,4vw,56px);top:52%;z-index:2;width:290px;
+  position:absolute;right:clamp(24px,4vw,56px);bottom:88px;z-index:2;width:290px;
   background:var(--surface-card);backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
   border:1px solid var(--border-hairline);border-radius:var(--radius-xl);padding:16px 18px;box-shadow:var(--shadow-panel);
 }
@@ -249,7 +249,7 @@ footer{border-top:1px solid var(--border-hairline)}
 @media (max-width:640px){
   html,body{overflow-x:hidden}
   .hero-foot.right{display:none}
-  .hero-copy{bottom:72px;right:20px}
+  /* Hero copy is centred at every width now, so no corner re-anchor here. */
   .hero h1{font-size:32px}
 }
 @media (prefers-reduced-motion:reduce){
@@ -565,7 +565,7 @@ footer{border-top:1px solid var(--border-hairline)}
     if (!cv) return;
     var ctx = cv.getContext("2d");
     if (!ctx) return;
-    var mini = !!opts.mini, W = 0, H = 0, dpr = 1, x0 = 0, x1 = 0, showLabels = true;
+    var mini = !!opts.mini, hero = !!opts.hero, W = 0, H = 0, dpr = 1, x0 = 0, x1 = 0, showLabels = true;
 
     function size(){
       dpr = window.devicePixelRatio || 1;
@@ -573,21 +573,19 @@ footer{border-top:1px solid var(--border-hairline)}
       if (!W || !H) return false;
       cv.width = W * dpr; cv.height = H * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      showLabels = mini ? W >= 380 : (H >= 720 && W >= 900);
-      // The endpoint insets exist to leave room for the node labels beside the
-      // overlaid copy. When labels are hidden (phones), those wide margins would
-      // squeeze the flow into a thin central strip — so pull the endpoints out
-      // to the edges instead. Desktop (W>=900) keeps the original insets
-      // byte-for-byte; the wide-but-short case is excluded via the W<900 gate.
-      if (!showLabels && (mini || W < 900)){
-        x0 = mini ? 16 : 22; x1 = W - (mini ? 16 : 22);
-      } else {
-        x0 = mini ? 92 : 130; x1 = W - (mini ? 130 : 190);
-      }
+      // Hero: no labels — ribbons run edge to edge and full-height behind the
+      // centred headline. Mini card: endpoint labels only once it's wide enough,
+      // and it pulls to its own edges when it isn't.
+      showLabels = hero ? false : (mini ? W >= 380 : false);
+      if (hero) { x0 = 36; x1 = W - 36; }
+      else if (!showLabels) { x0 = 16; x1 = W - 16; }
+      else { x0 = 92; x1 = W - 130; }
       return true;
     }
-    var sy = function(i){ return H * (mini ? (0.18 + i*0.155) : (0.07 + i*0.068)); };
-    var ty = function(j){ return H * (mini ? (0.14 + j*0.145) : (0.06 + j*0.062)); };
+    // Hero geometry spreads the endpoints across the full height so ribbons pass
+    // behind the centred copy; the mini card keeps its tighter vertical band.
+    var sy = function(i){ return H * (hero ? (0.16 + i*0.16) : (0.18 + i*0.155)); };
+    var ty = function(j){ return H * (hero ? (0.12 + j*0.15) : (0.14 + j*0.145)); };
     function bez(t, ya, yb){
       var u = 1-t, p1x = x0 + (x1-x0)*0.42, p2x = x0 + (x1-x0)*0.58;
       return {
@@ -675,7 +673,7 @@ footer{border-top:1px solid var(--border-hairline)}
 
   var heroCv = document.getElementById("flowHero");
   var miniCv = document.getElementById("flowMini");
-  startFlow(heroCv, { particles: 120 });
+  startFlow(heroCv, { particles: 120, hero: true });
   startFlow(miniCv, { particles: 70, mini: true });
 
   /* ── Real numbers from our own public endpoints (no fabricated "live" stats).
