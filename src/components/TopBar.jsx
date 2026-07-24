@@ -259,9 +259,6 @@ function MarketClockCompact() {
 
 export default function TopBar({ marketData }) {
   const barRef = useRef(null);
-  const clockRef = useRef(null);
-  const brandRef = useRef(null);
-  const [scale, setScale] = useState(1);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
   useEffect(() => {
@@ -271,25 +268,6 @@ export default function TopBar({ marketData }) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-
-  useEffect(() => {
-    if (isMobile) return;
-
-    const measure = () => {
-      if (!barRef.current || !clockRef.current) return;
-      const barW = barRef.current.offsetWidth;
-      const clockW = clockRef.current.offsetWidth;
-      const brandW = brandRef.current?.offsetWidth ?? 0;
-      const available = barW - 32 - 14 - clockW - brandW;
-      const fullW = 148 * 6 + 5 * 5;
-      setScale(Math.min(1, Math.max(0.65, available / fullW)));
-    };
-
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (barRef.current) ro.observe(barRef.current);
-    return () => ro.disconnect();
-  }, [isMobile]);
 
   function formatPrice(price, ticker) {
     if (price == null) return "—";
@@ -381,18 +359,19 @@ export default function TopBar({ marketData }) {
         overflow: "hidden",
       }}
     >
-      <div ref={brandRef} style={{ flexShrink: 0, paddingRight: 14 }}>
+      <div style={{ flexShrink: 0, paddingRight: 14 }}>
         <Wordmark size={16} />
       </div>
+      {/* The pills flex to fill whatever room is left between the wordmark and
+          the clock. They used to also carry a scaleX() transform, which shrank
+          them a second time and left the gap before the clock. */}
       <div
         style={{
           display: "flex",
           alignItems: "stretch",
-          gap: Math.round(5 * scale),
+          gap: 5,
           flex: "1 1 0",
           minWidth: 0,
-          transformOrigin: "left center",
-          transform: `scaleX(${scale}) scaleY(${Math.min(1, scale + 0.15)})`,
         }}
       >
         {TOP_BAR_TICKERS.map(({ ticker, label, color }) => {
@@ -444,7 +423,7 @@ export default function TopBar({ marketData }) {
           );
         })}
       </div>
-      <div ref={clockRef} style={{ flexShrink: 0, marginLeft: 14, display: "flex", alignItems: "center", gap: 16 }}>
+      <div style={{ flexShrink: 0, marginLeft: 14, display: "flex", alignItems: "center", gap: 16 }}>
         <MarketClock />
       </div>
     </div>

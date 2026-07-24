@@ -11,14 +11,29 @@ import {
 
 const NODE_W = 118, NODE_H = 26, GAP_Y = 10, COL_W = 158, PAD_X = 16, PAD_Y = 46;
 
+// Node pills are data tiles, which the design system renders as SOLID fills
+// with a hue-matched border — not translucent glass. Low-alpha hue tints over
+// the void read as near-black and lose the heat signal, so each pill blends
+// its hue into a raised base and paints the result opaque.
+const TILE_BASE = [30, 38, 50];                 // raised slate, just above --void-400
+const TILE_BASE_CSS = `rgb(${TILE_BASE.join(",")})`;
+function tile(hex, amount) {
+  const h = String(hex).replace("#", "");
+  if (h.length !== 6) return TILE_BASE_CSS;
+  const mix = (i) => Math.round(
+    parseInt(h.slice(i * 2, i * 2 + 2), 16) * amount + TILE_BASE[i] * (1 - amount)
+  );
+  return `rgb(${mix(0)},${mix(1)},${mix(2)})`;
+}
+
 // Absolute color scale — used directly only when the chain has too few
 // scored nodes for a meaningful distribution (see colorFor in the component).
 function nodeColor(strength, risk) {
-  if (strength >= 70) return "var(--neg)";
+  if (strength >= 70) return "#ef4444";
   if (strength >= 40) return "#f59e0b";
-  if (risk >= 50) return "var(--orange-400)";
+  if (risk >= 50) return "#fb923c";
   if (risk >= 20) return "#fbbf24";
-  return "var(--ink-600)";
+  return "#334155";
 }
 
 function fmtChange(v) {
@@ -82,10 +97,10 @@ export default function SupplyGraph({
     return (s, r) => {
       const heat = Math.max(s, r);
       const own = s >= r; // own bottleneck vs inherited risk → warm vs yellow-orange
-      if (heat >= Math.max(p85, 60)) return own ? "var(--neg)" : "var(--orange-400)";
+      if (heat >= Math.max(p85, 60)) return own ? "#ef4444" : "#fb923c";
       if (heat >= Math.max(p60, 40)) return own ? "#f59e0b" : "#fbbf24";
-      if (heat >= Math.max(p35, 15)) return "var(--info)";
-      return "var(--ink-600)";
+      if (heat >= Math.max(p35, 15)) return "#60a5fa";
+      return "#334155";
     };
   }, [graphNodes, strength, risk]);
 
@@ -144,7 +159,7 @@ export default function SupplyGraph({
             const c = colorFor(s, 0);
             return (
               <button key={id} onClick={() => setSelected(p => p === id ? null : id)}
-                style={{ background: c + "1c", border: `1px solid ${c}`, color: c, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 3, cursor: "pointer", fontFamily: "inherit", boxShadow: selected === id ? `0 0 6px ${c}88` : "none" }}>
+                style={{ background: tile(c, 0.30), border: `1px solid ${c}`, color: c, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 3, cursor: "pointer", fontFamily: "inherit", boxShadow: selected === id ? `0 0 6px ${c}88` : "none" }}>
                 {id} {s.toFixed(0)}
               </button>
             );
@@ -199,8 +214,8 @@ export default function SupplyGraph({
               <g key={n.id} opacity={nodeOpacity(n.id)} style={{ cursor: "pointer" }}
                 onClick={() => setSelected(prev => prev === n.id ? null : n.id)}>
                 <rect x={p.x} y={p.y} width={NODE_W} height={NODE_H} rx={6}
-                  fill={isBottleneck ? c + "26" : r >= 20 ? c + "14" : "rgba(255,255,255,0.04)"}
-                  stroke={isSel ? "var(--ink-100)" : isBottleneck ? c : r >= 20 ? c + "99" : "rgba(255,255,255,0.12)"}
+                  fill={isBottleneck ? tile(c, 0.42) : r >= 20 ? tile(c, 0.28) : TILE_BASE_CSS}
+                  stroke={isSel ? "var(--ink-100)" : isBottleneck ? c : r >= 20 ? c + "99" : "rgba(255,255,255,0.18)"}
                   strokeWidth={isSel ? 1.6 : 1}
                   strokeDasharray={!isBottleneck && r >= 20 ? "3,2" : "none"} />
                 <text x={p.x + 8} y={p.y + 17} style={{ fill: n.type === "external" ? "var(--ink-300)" : "var(--ink-100)", fontSize: 10.5, fontWeight: 700 }}>
