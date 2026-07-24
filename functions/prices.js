@@ -16,8 +16,13 @@ const QUOTE_STALE_SEC = 20 * 60;        // v7 quote older than this → live-pro
 const KV_CRUMB_KEY  = "yahooSession_v1";
 const CRUMB_TTL_MS  = 55 * 60 * 1000; // 55 minutes
 const USER_AGENT    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-const MAX_TICKERS = 250;
-const MAX_TICKERS_QUERY_LENGTH = 2048;
+// Single-request sanity bound, not the abuse ceiling (/prices has no per-IP
+// limit, so volume is the real lever). Sized well above the largest real
+// active-view request (~197 tickers / ~933 chars) with room to grow. The query
+// length is raised in step with the ticker cap so it doesn't become the hidden
+// binding limit — 500 tickers averaging ~5 chars is ~3000 chars.
+const MAX_TICKERS = 500;
+const MAX_TICKERS_QUERY_LENGTH = 4096;
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
 
 // ── COOKIE HELPER ────────────────────────────────────────────────────────────
