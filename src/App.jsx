@@ -1464,7 +1464,6 @@ export default function App() {
     prices,
     pricesRef,
     marketData,
-    refreshing,
     refresh,
     capexDataRef,
     activeViewRef,
@@ -1663,8 +1662,6 @@ export default function App() {
     saveActiveMap(newData);
   }
 
-  const allTickerCount = useMemo(() => getAllTickers(capexData).length, [capexData]);
-
   // Merge grounded intel allocations into a capex map (shared by both views).
   function mergeIntel(mapData, intel) {
     if (!intel?.allocations?.length) return mapData;
@@ -1755,22 +1752,13 @@ export default function App() {
         position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none",
         background: "radial-gradient(50% 40% at 50% -6%, rgba(0,240,255,0.07), transparent 70%)",
       }} />
-      <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", color: "var(--ink-100)" }}>
+      {/* The top bar is fixed, so the page clears it here. This used to live on
+          the utility strip below it, which meant a status banner — rendered
+          above that strip — sat underneath the fixed bar and was unreadable. */}
+      <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", color: "var(--ink-100)", paddingTop: "var(--topbar-h, 72px)" }}>
 
         <TopBar marketData={marketData} onlineCount={onlineCount} />
         <StatusBanner notice={appNotice} onDismiss={() => setAppNotice(null)} />
-
-        {/* Thin utility strip. The wordmark and viewer count live in the top
-            bar; advancing/declining moved onto the heat map, which is what
-            they actually describe. */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", marginTop: "var(--topbar-h, 72px)", borderBottom: "1px solid rgba(255,255,255,.04)", background: "var(--bg-raised)", flexWrap: "wrap", gap: 12 }}>
-          <div className="header-controls" style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "var(--ink-700)" }}>{allTickerCount} tickers</span>
-            <button onClick={refresh} disabled={refreshing} title="Refresh prices" style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, color: "var(--ink-400)", padding: "5px 12px", cursor: "pointer", fontSize: 11, fontFamily: "inherit", opacity: refreshing ? 0.5 : 1 }}>
-              ↻
-            </button>
-          </div>
-        </div>
 
         <div className="main-content" style={{ maxWidth: 1480, margin: "0 auto", padding: "32px 20px 64px", display: "flex", flexDirection: "column", gap: 28, overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
           
