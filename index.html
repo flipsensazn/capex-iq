@@ -573,11 +573,17 @@ footer{border-top:1px solid var(--border-hairline)}
       if (!W || !H) return false;
       cv.width = W * dpr; cv.height = H * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      x0 = mini ? 92 : 130; x1 = W - (mini ? 130 : 190);
-      // The canvas stays full-bleed at every width, but its endpoint labels
-      // need room beside the overlaid copy — on a phone they collide with the
-      // hero eyebrow. Width gates are chosen so desktop is unaffected.
       showLabels = mini ? W >= 380 : (H >= 720 && W >= 900);
+      // The endpoint insets exist to leave room for the node labels beside the
+      // overlaid copy. When labels are hidden (phones), those wide margins would
+      // squeeze the flow into a thin central strip — so pull the endpoints out
+      // to the edges instead. Desktop (W>=900) keeps the original insets
+      // byte-for-byte; the wide-but-short case is excluded via the W<900 gate.
+      if (!showLabels && (mini || W < 900)){
+        x0 = mini ? 16 : 22; x1 = W - (mini ? 16 : 22);
+      } else {
+        x0 = mini ? 92 : 130; x1 = W - (mini ? 130 : 190);
+      }
       return true;
     }
     var sy = function(i){ return H * (mini ? (0.18 + i*0.155) : (0.07 + i*0.068)); };
