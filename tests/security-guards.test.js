@@ -104,15 +104,15 @@ test("analyze rate-limits a verified member before calling Gemini", { concurrenc
   }
 });
 
-test("prices rejects more than 250 distinct tickers before upstream work", async () => {
-  const tickerList = Array.from({ length: 251 }, (_, index) => `T${index}`);
+test("prices rejects more than 500 distinct tickers before upstream work", async () => {
+  const tickerList = Array.from({ length: 501 }, (_, index) => `T${index}`);
   const response = await prices({
     request: new Request(`https://capex-iq.us/prices?tickers=${tickerList.join(",")}`),
     env: {},
   });
 
   assert.equal(response.status, 400);
-  assert.match((await response.json()).error, /maximum of 250/i);
+  assert.match((await response.json()).error, /maximum of 500/i);
 });
 
 test("prices rejects malformed tickers before upstream work", async () => {
