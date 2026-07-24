@@ -3,23 +3,33 @@ import { stressColor, CbsSparkline } from "./capex-map/StressBadge";
 
 // Top Composite Bottleneck Score movers this week for the active view's
 // tickers — the "what changed" strip. Heating names (score rising = supply
-// tightening) lead; cooling names follow. Hidden until two weekly snapshots
-// exist (deltas need history).
+// tightening) lead; cooling names follow.
+//
+// The panel stays mounted once any score exists, even with nothing moving.
+// CBS inputs only change when a new earnings call or filing lands, so a quiet
+// week legitimately produces zero movement across the whole map — and a strip
+// that silently vanishes reads as a broken panel rather than a calm market.
+// It only returns null when there is no composite data at all.
 
 const MAX_EACH = 5;
 
 export default function CompositeMovers({ tickers = [], composite = {}, onTickerClick }) {
-  const { heating, cooling } = useMemo(() => {
-    const scored = [...new Set(tickers)]
-      .map(t => ({ ticker: t, ...composite[t] }))
-      .filter(c => c.score != null && c.delta != null && Math.abs(c.delta) >= 3);
+  const { heating, cooling, scoredCount, awaitingHistory } = useMemo(() => {
+    const mine = [...new Set(tickers)].map(t => ({ ticker: t, ...composite[t] }));
+    const withScore = mine.filter(c => c.score != null);
+    const scored = withScore.filter(c => c.delta != null && Math.abs(c.delta) >= 3);
     return {
       heating: scored.filter(c => c.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, MAX_EACH),
       cooling: scored.filter(c => c.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, MAX_EACH),
+      scoredCount: withScore.length,
+      // No second snapshot yet — different situation from "nothing moved".
+      awaitingHistory: withScore.length > 0 && withScore.every(c => c.delta == null),
     };
   }, [tickers, composite]);
 
-  if (!heating.length && !cooling.length) return null;
+  // Nothing scored on this map at all — the ETL hasn't reached these tickers.
+  if (!scoredCount) return null;
+  const quiet = !heating.length && !cooling.length;
 
   const Chip = ({ c, heat }) => {
     const color = stressColor(c.score);
@@ -53,6 +63,13 @@ export default function CompositeMovers({ tickers = [], composite = {}, onTicker
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {quiet && (
+          <div style={{ fontSize: 11.5, color: "var(--ink-500)", lineHeight: 1.6 }}>
+            {awaitingHistory
+              ? `No week-over-week change yet — ${scoredCount} names scored, deltas appear after the next weekly snapshot.`
+              : `No score moved by 3+ this week across ${scoredCount} scored names. CBS only shifts when a new earnings call or filing lands, so a quiet week reads flat.`}
+          </div>
+        )}
         {heating.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "var(--neg)", minWidth: 62 }}>HEATING</span>

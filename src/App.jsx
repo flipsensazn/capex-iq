@@ -1868,11 +1868,6 @@ export default function App() {
             />
           )}
 
-          <CompositeMovers
-            tickers={watchlistTickers}
-            composite={compositeData}
-            onTickerClick={openPopup}
-          />
 
           <SupplyGraph
             key={`graph-${view}`}
@@ -1888,15 +1883,22 @@ export default function App() {
             title={isRobotics ? "Robotics Dependency Graph" : isMusk ? "Musk Galaxy Dependency Graph" : undefined}
           />
 
+          <CompositeMovers
+            tickers={watchlistTickers}
+            composite={compositeData}
+            onTickerClick={openPopup}
+          />
+
+
+          <SignalScoreboard
+            data={scoreboardData}
+            onTickerClick={openPopup}
+          />
+
           <BottleneckScout
             candidates={candidates}
             isAdmin={isAdmin}
             onReview={reviewCandidate}
-            onTickerClick={openPopup}
-          />
-
-          <SignalScoreboard
-            data={scoreboardData}
             onTickerClick={openPopup}
           />
 
