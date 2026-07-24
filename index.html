@@ -142,8 +142,11 @@ p{margin:0}
 .hero-scrim{position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,rgba(8,11,17,.85),transparent 22%,transparent 58%,rgba(8,11,17,.55) 100%)}
 .hero-glow{position:absolute;inset:0;pointer-events:none;background:radial-gradient(58% 42% at 50% -4%,rgba(0,240,255,.10),transparent 68%)}
 .hero-copy{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);z-index:2;max-width:760px;margin:0 auto;padding:0 clamp(24px,5vw,72px);display:flex;flex-direction:column;align-items:center;text-align:center}
+/* Fixed size, not a vw clamp: the headline should read identically at every
+   desktop width instead of growing and re-wrapping as the window widens.
+   Steps down only at the mobile breakpoint below. */
 .hero h1{
-  font-family:var(--font-ui);font-weight:800;font-size:clamp(34px,5vw,62px);
+  font-family:var(--font-ui);font-weight:800;font-size:52px;
   line-height:1.06;letter-spacing:-0.01em;margin:18px 0 0;
 }
 .hero h1 .l1{color:var(--ink-050)}
@@ -151,11 +154,6 @@ p{margin:0}
 .hero h1 em{font-style:normal;color:var(--accent);text-shadow:var(--text-glow-cyan)}
 .hero-sub{margin-top:18px;font-size:16px;color:var(--text-secondary);max-width:560px;line-height:1.6}
 .hero-cta{margin-top:28px;display:flex;gap:14px;flex-wrap:wrap}
-.hero-stress-card{
-  position:absolute;right:clamp(24px,4vw,56px);bottom:88px;z-index:2;width:290px;
-  background:var(--surface-card);backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
-  border:1px solid var(--border-hairline);border-radius:var(--radius-xl);padding:16px 18px;box-shadow:var(--shadow-panel);
-}
 .hero-foot{position:absolute;bottom:22px;z-index:2;font-family:var(--font-mono);font-size:10px;letter-spacing:.14em;color:var(--text-faint)}
 .hero-foot.left{left:clamp(24px,5vw,72px)}
 .hero-foot.right{right:clamp(24px,4vw,56px);display:flex;align-items:center;gap:8px}
@@ -229,10 +227,6 @@ footer{border-top:1px solid var(--border-hairline)}
      .lp-corner-r → .hero-foot.right · .hero-stress-card (same name)
    The hero stays absolutely positioned at every size — only the overlaid copy
    re-anchors — so the full-bleed flow canvas is never letterboxed. */
-@media (max-width:1199px){
-  /* Floating stress card overlaps the copy once the viewport narrows. */
-  .hero-stress-card{display:none}
-}
 @media (max-width:900px){
   .split,.split.reverse,.split.first{grid-template-columns:1fr;gap:28px;padding:56px 0 40px}
   .split.reverse .col-text,.split.reverse .col-visual{order:0}
@@ -275,24 +269,12 @@ footer{border-top:1px solid var(--border-hairline)}
   <div class="hero-glow"></div>
   <div class="hero-copy">
     <div class="mono-eyebrow" id="capexEyebrow">◇ LIVE · TRACKING 2026 HYPERSCALER CAPEX</div>
-    <h1><span class="l1">Capex flows downhill.</span><br><span class="l2">Alpha pools at <em>the choke point</em>.</span></h1>
+    <h1><span class="l1">Capex flows downhill.</span><br><span class="l2">Alpha pools at <em>the<br>choke point</em>.</span></h1>
     <p class="hero-sub">CAPEX-IQ reads earnings-call language, filed backlogs, and customer concentration to find the narrowest link in the AI supply chain — then grades its own signals against the market.</p>
     <div class="hero-cta">
       <a class="btn btn-primary btn-lg glow" href="#register">Register Free</a>
       <a class="btn btn-ghost btn-lg" href="/app">See the terminal →</a>
     </div>
-  </div>
-  <div class="hero-stress-card">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-      <span class="eyebrow-label">🎙 Transcript stress</span>
-      <span class="chip chip-warn">STRESS 82</span>
-    </div>
-    <div style="display:flex;align-items:baseline;gap:10px;margin-top:12px">
-      <span class="ticker" style="font-size:18px">AXTI</span>
-      <span style="font-size:10px;letter-spacing:.12em;color:var(--warn)">BOTTLENECK OWNER</span>
-    </div>
-    <p class="quote" style="font-size:11.5px">“…we remain on allocation for indium-phosphide substrates through year end…”</p>
-    <div style="margin-top:10px;font-size:10px;color:var(--text-faint)">Q2’26 earnings call · verbatim</div>
   </div>
   <div class="hero-foot left">2026 // CAPEX-IQ PLATFORM V2.0</div>
   <div class="hero-foot right"><span class="live-dot"></span>AI-POWERED SUPPLY-CHAIN NLP</div>
