@@ -50,7 +50,9 @@
     "ACCESS_TEAM_DOMAIN": "ibat-performance.cloudflareaccess.com",
     "ACCESS_AUD": "cc43952569fb0b60e51729bdd3724f3f7c944cb53a567fd16d2ed6a5696c198e",
     // Comma-separated admin emails (mirrors the Zero Trust Admins group).
-    "ADMIN_EMAILS": "flipsensazn@gmail.com"
+    "ADMIN_EMAILS": "flipsensazn@gmail.com",
+    // Comma-separated /analyze allow-list; admins are always permitted; empty means admins-only.
+    "ANALYZE_ALLOWED_EMAILS": ""
   },
   "observability": {
     "enabled": true

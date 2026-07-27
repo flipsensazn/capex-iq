@@ -45,6 +45,48 @@ async function createAccessJwt({ aud, email, sub }) {
   };
 }
 
+async function analyzeAsVerifiedMember({ email, sub, env = {} }) {
+  const teamDomain = `test-${crypto.randomUUID()}.example.com`;
+  const accessAud = "test-audience";
+  const { jwt, jwk } = await createAccessJwt({ aud: accessAud, email, sub });
+  const originalFetch = globalThis.fetch;
+  let nonJwksFetches = 0;
+  let limiterCalls = 0;
+
+  globalThis.fetch = async url => {
+    if (String(url) === `https://${teamDomain}/cdn-cgi/access/certs`) {
+      return Response.json({ keys: [jwk] });
+    }
+    nonJwksFetches += 1;
+    throw new Error(`Unexpected upstream request: ${url}`);
+  };
+
+  try {
+    const response = await analyze({
+      request: jsonRequest(
+        "https://capex-iq.us/analyze",
+        { ticker: "MSFT" },
+        { Cookie: `CF_Authorization=${jwt}` }
+      ),
+      env: {
+        ACCESS_TEAM_DOMAIN: teamDomain,
+        ACCESS_AUD: accessAud,
+        GEMINI_API_KEY: "test",
+        ANALYZE_RATE_LIMITER: {
+          limit: async () => {
+            limiterCalls += 1;
+            return { success: false };
+          },
+        },
+        ...env,
+      },
+    });
+    return { response, nonJwksFetches, limiterCalls };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 test("analyze rejects requests without a verified Access member", async () => {
   const response = await analyze({
     request: jsonRequest("https://capex-iq.us/analyze", { ticker: "MSFT" }),
@@ -85,6 +127,7 @@ test("analyze rate-limits a verified member before calling Gemini", { concurrenc
       env: {
         ACCESS_TEAM_DOMAIN: teamDomain,
         ACCESS_AUD: accessAud,
+        ANALYZE_ALLOWED_EMAILS: "member@example.com",
         GEMINI_API_KEY: "test",
         ANALYZE_RATE_LIMITER: {
           limit: async ({ key }) => {
@@ -102,6 +145,55 @@ test("analyze rate-limits a verified member before calling Gemini", { concurrenc
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("analyze rejects a verified member who is not on the allow-list", { concurrency: false }, async () => {
+  const { response, nonJwksFetches, limiterCalls } = await analyzeAsVerifiedMember({
+    email: "member@example.com",
+    sub: "member-not-allowed",
+    env: {
+      ADMIN_EMAILS: "admin@example.com",
+      ANALYZE_ALLOWED_EMAILS: "allowed@example.com",
+    },
+  });
+
+  assert.equal(response.status, 403);
+  assert.equal(
+    (await response.json()).error,
+    "Analysis access is not enabled for this account"
+  );
+  assert.equal(nonJwksFetches, 0);
+  assert.equal(limiterCalls, 0);
+});
+
+test("analyze allows an admin email when the allow-list is empty", { concurrency: false }, async () => {
+  const { response, nonJwksFetches, limiterCalls } = await analyzeAsVerifiedMember({
+    email: "admin@example.com",
+    sub: "admin-123",
+    env: {
+      ADMIN_EMAILS: "admin@example.com",
+      ANALYZE_ALLOWED_EMAILS: "",
+    },
+  });
+
+  assert.equal(response.status, 429);
+  assert.equal(nonJwksFetches, 0);
+  assert.equal(limiterCalls, 1);
+});
+
+test("analyze allows an email on the allow-list", { concurrency: false }, async () => {
+  const { response, nonJwksFetches, limiterCalls } = await analyzeAsVerifiedMember({
+    email: "member@example.com",
+    sub: "member-allowed",
+    env: {
+      ADMIN_EMAILS: "admin@example.com",
+      ANALYZE_ALLOWED_EMAILS: "other@example.com, MEMBER@EXAMPLE.COM ",
+    },
+  });
+
+  assert.equal(response.status, 429);
+  assert.equal(nonJwksFetches, 0);
+  assert.equal(limiterCalls, 1);
 });
 
 test("prices rejects more than 500 distinct tickers before upstream work", async () => {

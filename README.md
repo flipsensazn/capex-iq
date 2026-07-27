@@ -63,6 +63,7 @@ live v8 chart meta per ticker automatically.
 Configure these Cloudflare environment variables as needed:
 
 - `ALLOWED_ORIGIN`
+- `ANALYZE_ALLOWED_EMAILS` — comma-separated allow-list for `/analyze`; admins are always allowed; empty means admins only
 - `ADMIN_PASSWORD`
 - `DATABASE_URL`
 - `FINNHUB_KEY`
