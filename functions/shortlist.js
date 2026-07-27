@@ -2,7 +2,7 @@
 // GET  — public, returns the shared shortlist for all users
 // POST — admin only, updates the shared shortlist in KV
 
-import { isAdminRequest } from "./access-lib.js";
+import { isAuthorizedAdmin } from "./access-lib.js";
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -43,7 +43,7 @@ export async function onRequest(context) {
       if (!adminPassword) {
         return new Response(JSON.stringify({ error: "Server misconfiguration: ADMIN_PASSWORD not set." }), { status: 500, headers });
       }
-      if (body.password !== adminPassword && !(await isAdminRequest(request, env))) {
+      if (!(await isAuthorizedAdmin(request, env, body.password))) {
         return new Response(JSON.stringify({ error: "Incorrect Admin Password" }), { status: 401, headers });
       }
 

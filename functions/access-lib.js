@@ -93,9 +93,54 @@ export function isAdminEmail(email, env) {
     .includes(email.toLowerCase());
 }
 
+// True when the request came from the configured browser origin. When
+// ALLOWED_ORIGIN is unset, preserve the handlers' existing local-dev/CORS
+// degradation and allow the request.
+export function isTrustedOrigin(request, env) {
+  if (!env.ALLOWED_ORIGIN) return true;
+
+  const origin = request.headers.get("Origin");
+  if (origin) return origin === env.ALLOWED_ORIGIN;
+
+  const referer = request.headers.get("Referer");
+  if (referer) {
+    try {
+      return new URL(referer).origin === env.ALLOWED_ORIGIN;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+// Compare the supplied password without short-circuiting on differing bytes.
+export function verifyAdminPassword(provided, env) {
+  if (!env.ADMIN_PASSWORD || typeof provided !== "string") return false;
+
+  const encoder = new TextEncoder();
+  const providedBytes = encoder.encode(provided);
+  const expectedBytes = encoder.encode(env.ADMIN_PASSWORD);
+  if (providedBytes.length !== expectedBytes.length) return false;
+
+  let diff = 0;
+  for (let i = 0; i < expectedBytes.length; i++) {
+    diff |= providedBytes[i] ^ expectedBytes[i];
+  }
+  return diff === 0;
+}
+
 // True when this request carries a valid Access JWT for an admin email.
 // Used as the passwordless alternative in the admin-gated endpoints.
 export async function isAdminRequest(request, env) {
   const payload = await getAccessPayload(request, env);
   return isAdminEmail(payload?.email, env);
+}
+
+// Password clients are headless and do not need browser-origin checks. Access
+// cookie/JWT clients use ambient credentials, so require a trusted origin.
+export async function isAuthorizedAdmin(request, env, providedPassword) {
+  if (verifyAdminPassword(providedPassword, env)) return true;
+  if (!isTrustedOrigin(request, env)) return false;
+  return await isAdminRequest(request, env);
 }

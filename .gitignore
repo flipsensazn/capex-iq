@@ -5,6 +5,10 @@ dist
 .env
 .env.*
 
+# Local dev server logs
+.vite-dev.log
+.wrangler-dev.log
+
 # Scanner output artifacts (ephemeral on CI, local runs only)
 scanner/premarket_gappers_*.json
 scanner/tjl_gap_scan_*.json

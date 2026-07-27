@@ -1,8 +1,9 @@
 import { memo, useState } from "react";
+import { changeOf } from "../../lib/priceChange";
 
 const TickerChip = memo(function TickerChip({ symbol, changeData, onRemove, onTickerClick }) {
   const [hovered, setHovered] = useState(false);
-  const change = changeData?.change ?? changeData;
+  const change = changeOf(changeData);
   const session = changeData?.session;
   const pos = (change ?? 0) >= 0;
   const changeColor = change === undefined ? "var(--ink-500)" : pos ? "var(--pos)" : "var(--down-300)";
