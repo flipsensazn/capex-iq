@@ -93,6 +93,16 @@ export function isAdminEmail(email, env) {
     .includes(email.toLowerCase());
 }
 
+export function isAnalyzeAllowedEmail(email, env) {
+  if (!email) return false;
+  if (isAdminEmail(email, env)) return true;
+  // Fail closed when unset/empty so unmetered Gemini access cannot silently reopen,
+  // mirroring the missing ANALYZE_RATE_LIMITER binding behavior.
+  if (!env.ANALYZE_ALLOWED_EMAILS) return false;
+  return env.ANALYZE_ALLOWED_EMAILS.split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
+    .includes(email.toLowerCase());
+}
+
 // True when the request came from the configured browser origin. When
 // ALLOWED_ORIGIN is unset, preserve the handlers' existing local-dev/CORS
 // degradation and allow the request.
