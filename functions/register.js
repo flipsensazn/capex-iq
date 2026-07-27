@@ -2,11 +2,10 @@
 //
 // POST /register {email} — free-beta self-registration.
 //
-// Adds the email to the Zero Trust Access Group named "Members" via the
-// Cloudflare API, so the Access policy on /app immediately admits them
-// (they still have to pass the One-time PIN to their inbox — registering
-// an address you don't control gets you nothing). Also mirrors into a KV
-// registry for our own records.
+// Adds the email to the Zero Trust Members roster via the Cloudflare API.
+// The roster remains the mailing list and supports the future paywall; open-beta
+// access to /app now uses Google sign-in without waiting for roster propagation.
+// Also mirrors into a KV registry for our own records.
 //
 // Env:
 //   CF_ACCESS_API_TOKEN  secret — API token with Access: Groups Edit.
@@ -180,13 +179,12 @@ export async function onRequest(context) {
 
     return reply(200, {
       success: true,
-      // `already` lets the landing page skip the activation countdown for
-      // returning users — their list membership propagated long ago, so only a
-      // genuinely new append needs the ~60s gate before the first PIN can send.
+      // `already` selects the confirmation copy; both branches hand off
+      // immediately to Google sign-in.
       already,
       message: already
-        ? "You're already registered — click Sign In and a one-time PIN will be emailed to you."
-        : "You're in! Click Sign In — a one-time PIN will be emailed to you.",
+        ? "You're already registered — click Sign In to continue with Google."
+        : "You're in! Click Sign In to continue with Google.",
     });
   } catch (err) {
     console.error("register: unexpected error", err);
