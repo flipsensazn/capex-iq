@@ -484,16 +484,14 @@ footer{border-top:1px solid var(--border-hairline)}
     <h2>If the edge fades, the scoreboard says so.</h2>
     <div class="register-card" id="register">
       <h3>Register — free during beta</h3>
-      <p>Enter your email to join the members list. Sign-in uses a one-time PIN sent to your inbox — no password to remember.</p>
+      <p>Enter your email to join the members list. Sign in with your Google account — no password to remember.</p>
       <form id="regForm" novalidate>
         <label for="regEmail" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Email address</label>
         <input class="input" type="email" id="regEmail" placeholder="you@example.com" autocomplete="email" required>
         <button class="btn btn-primary glow" type="submit" id="regBtn" style="font-size:14px;padding:11px 20px">Register</button>
       </form>
       <div id="regMsg" role="status" aria-live="polite"></div>
-      <!-- Shown after a successful register; replaces the form. New sign-ups
-           are gated ~60s while the Members-list append propagates to Access,
-           since the first PIN silently won't send until it does. -->
+      <!-- Confirms registration and hands off to Google sign-in. -->
       <div id="regActivate" hidden style="margin-top:16px;display:flex;flex-direction:column;gap:12px;align-items:center">
         <p id="regActivateMsg" role="status" aria-live="polite" style="font-size:12.5px;color:var(--text-secondary);line-height:1.55;margin:0"></p>
         <button id="regSignIn" class="btn btn-primary glow" type="button" style="font-size:14px;padding:11px 20px" disabled>Sign In</button>
@@ -716,14 +714,6 @@ footer{border-top:1px solid var(--border-hairline)}
   var activateMsg = document.getElementById("regActivateMsg");
   var signInBtn = document.getElementById("regSignIn");
 
-  // Access needs ~a minute to enforce a freshly-appended member; sign in before
-  // that and the one-time PIN silently never sends (documented Access behavior:
-  // it only emails a code to a policy-matched address). Gate the button until
-  // the window has passed. Counts from when /register returned, i.e. from the
-  // moment the append actually happened.
-  var GATE_SECONDS = 60;
-  var gateTimer = null;
-
   signInBtn.addEventListener("click", function(){
     if (!signInBtn.disabled) window.location.href = "/app";
   });
@@ -735,32 +725,13 @@ footer{border-top:1px solid var(--border-hairline)}
   }
 
   function startActivation(already){
-    if (gateTimer){ clearInterval(gateTimer); gateTimer = null; }
     form.hidden = true;
     msg.textContent = ""; msg.className = "";
     activate.hidden = false;
-
-    if (already){
-      // Returning user — already propagated, no need to wait.
-      activateMsg.textContent = "You're already registered. Click Sign In — a one-time PIN will be emailed to you.";
-      armSignIn();
-      return;
-    }
-
-    activateMsg.textContent = "You're in! We're activating your access — this can take up to a minute. The button below unlocks when you're ready, then a one-time PIN is emailed to your inbox.";
-    var remaining = GATE_SECONDS;
-    signInBtn.disabled = true;
-    signInBtn.style.opacity = ".6";
-    signInBtn.textContent = "Sign in available in " + remaining + "s";
-    gateTimer = setInterval(function(){
-      remaining -= 1;
-      if (remaining <= 0){
-        clearInterval(gateTimer); gateTimer = null;
-        armSignIn();
-      } else {
-        signInBtn.textContent = "Sign in available in " + remaining + "s";
-      }
-    }, 1000);
+    activateMsg.textContent = already
+      ? "You're already registered. Click Sign In to continue with Google."
+      : "You're in! Click Sign In to continue with Google.";
+    armSignIn();
   }
 
   input.addEventListener("input", function(){ input.classList.remove("invalid"); });
