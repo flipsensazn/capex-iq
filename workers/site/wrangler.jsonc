@@ -33,6 +33,14 @@
         "limit": 5,
         "period": 60
       }
+    },
+    {
+      "name": "PRICES_RATE_LIMITER",
+      "namespace_id": "39722",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
     }
   ],
   "vars": {

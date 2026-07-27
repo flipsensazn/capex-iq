@@ -15,6 +15,7 @@ import { ROBOTICS_CAPEX_DATA, ROBOTICS_COMPANIES, ROBOTICS_GRAPH_NODES, ROBOTICS
 import { useAdminActions } from "./hooks/useAdminActions";
 import { useDashboardData } from "./hooks/useDashboardData";
 import { usePresence } from "./hooks/usePresence";
+import { changeOf } from "./lib/priceChange";
 
 // ── MOBILE CONTEXT ──────────────────────────────────────
 const MobileCtx = createContext(false);
@@ -1567,7 +1568,7 @@ export default function App() {
   }, [appNotice]);
 
   const openPopup = useCallback((ticker, rect) => {
-    const change = pricesRef.current[ticker]?.change ?? pricesRef.current[ticker];
+    const change = changeOf(pricesRef.current[ticker]);
     setPopup(prev => (prev?.ticker === ticker ? null : { ticker, change, rect }));
   }, []);
 
@@ -1965,7 +1966,7 @@ export default function App() {
         {tickerEntries.length > 0 && (
           <div className="ticker-tape">
             {[...tickerEntries, ...tickerEntries].map(([sym, val], i) => {
-              const chg = val?.change ?? val;
+              const chg = changeOf(val);
               const sessionLabel = val?.session === "POST" || val?.session === "CLOSED" ? "AH" : val?.session === "PRE" ? "PM" : null;
               return (
                 <span key={`${sym}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-400)", fontSize: 11 }}>

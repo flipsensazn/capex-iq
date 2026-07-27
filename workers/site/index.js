@@ -65,6 +65,29 @@ const ROUTES = {
   "/stress":          stress,
 };
 
+// Security headers live here because `_headers` is a Pages-only convention
+// and is ignored by this Workers-with-static-assets deployment.
+const SECURITY_HEADERS = {
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+};
+
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -74,7 +97,8 @@ export default {
     // the edge — see README). The built asset is app.html; rewrite so the
     // clean URL serves it.
     if (pathname === "/app" || pathname === "/app/") {
-      return env.ASSETS.fetch(new Request(`${url.origin}/app.html`, request));
+      const response = await env.ASSETS.fetch(new Request(`${url.origin}/app.html`, request));
+      return withSecurityHeaders(response);
     }
 
     const route = ROUTES[pathname.replace(/\/$/, "") || "/"];
@@ -92,6 +116,7 @@ export default {
         next: () => env.ASSETS.fetch(request),
       });
     }
-    return env.ASSETS.fetch(request);
+    const response = await env.ASSETS.fetch(request);
+    return withSecurityHeaders(response);
   },
 };

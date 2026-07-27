@@ -5,7 +5,7 @@
 // then synthesizes into a markdown report with a BUY/HOLD/SELL score and
 // 3-year price projection.  Results cached in KV for 24 hours.
 
-import { getAccessPayload } from "./access-lib.js";
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
 
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
@@ -371,6 +371,9 @@ export async function onRequest(context) {
   const memberKey = accessPayload?.sub || accessPayload?.email?.toLowerCase();
   if (!memberKey) {
     return new Response(JSON.stringify({ error: "Authentication required" }), { status: 401, headers });
+  }
+  if (!isTrustedOrigin(request, env)) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers });
   }
 
   const contentLength = Number(request.headers.get("Content-Length") || 0);

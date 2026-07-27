@@ -10,20 +10,30 @@ const FINNHUB_CRYPTO_MAP = {
   "XRP-USD": "BINANCE:XRPUSDT",
 };
 const KV_CACHE_KEY  = "priceCache_v10"; // v10: covered-set hit check (see below)
+const KV_STRIP_CACHE_KEY = "stripCache_v1";
+const STRIP_CACHE_TTL_SECONDS = 10;
 const KV_REFS_KEY   = "priceRefs_v1";   // long-lived per-ticker reference data
 const REFS_TTL_MS   = 6 * 60 * 60 * 1000; // history refs change ~daily; 6h is plenty
 const QUOTE_STALE_SEC = 20 * 60;        // v7 quote older than this → live-probe it
 const KV_CRUMB_KEY  = "yahooSession_v1";
 const CRUMB_TTL_MS  = 55 * 60 * 1000; // 55 minutes
 const USER_AGENT    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-// Single-request sanity bound, not the abuse ceiling (/prices has no per-IP
-// limit, so volume is the real lever). Sized well above the largest real
-// active-view request (~197 tickers / ~933 chars) with room to grow. The query
-// length is raised in step with the ticker cap so it doesn't become the hidden
-// binding limit — 500 tickers averaging ~5 chars is ~3000 chars.
+// Single-request sanity bound, separate from the per-IP cache-miss rate limit.
+// Sized well above the largest real active-view request (~197 tickers / ~933
+// chars) with room to grow. The query length is raised in step with the ticker
+// cap so it doesn't become the hidden binding limit — 500 tickers averaging
+// ~5 chars is ~3000 chars.
 const MAX_TICKERS = 500;
 const MAX_TICKERS_QUERY_LENGTH = 4096;
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
+
+function toFinite(value) {
+  return Number.isFinite(value) ? parseFloat(value.toFixed(2)) : undefined;
+}
+
+export function hasResolvedQuote(entry) {
+  return Number.isFinite(entry?.price);
+}
 
 // ── COOKIE HELPER ────────────────────────────────────────────────────────────
 // Headers.get("set-cookie") collapses multiple cookies into one comma-joined
@@ -149,6 +159,27 @@ function pctFrom(ref, price) {
 }
 
 // ── REQUEST HANDLER ──────────────────────────────────────────────────────────
+async function applyPricesRateLimit(request, env, headers) {
+  // Deliberately fail open when unbound or when limit() throws: unlike
+  // analyze.js, /prices is the dashboard hot path and the prewarm entry point.
+  if (!env.PRICES_RATE_LIMITER) return null;
+
+  try {
+    const key = request.headers.get("CF-Connecting-IP") || "unknown";
+    const { success } = await env.PRICES_RATE_LIMITER.limit({ key });
+    if (!success) {
+      return new Response(
+        JSON.stringify({ error: "Price request limit reached. Try again in a minute." }),
+        { status: 429, headers }
+      );
+    }
+  } catch (err) {
+    console.error("[prices] rate limit error:", err);
+  }
+
+  return null;
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
 
@@ -205,6 +236,21 @@ export async function onRequest(context) {
 
   const allStrip = tickers.length > 0 && tickers.every(t => STRIP_TICKERS.has(t));
   if (allStrip) {
+    if (env.SHARED_DATA) {
+      try {
+        const cached = await env.SHARED_DATA.get(KV_STRIP_CACHE_KEY, "json");
+        if (cached && cached.timestamp && (Date.now() - cached.timestamp < STRIP_CACHE_TTL_SECONDS * 1000)) {
+          const covered = new Set(Object.keys(cached.data ?? {}));
+          if (tickers.every(t => covered.has(t))) {
+            return new Response(JSON.stringify({ data: cached.data, cached: true }), { status: 200, headers });
+          }
+        }
+      } catch (err) {}
+    }
+
+    const rateLimitResponse = await applyPricesRateLimit(request, env, headers);
+    if (rateLimitResponse) return rateLimitResponse;
+
     const stripResults = {};
     const FINNHUB_KEY = env.FINNHUB_KEY;
 
@@ -239,7 +285,10 @@ export async function onRequest(context) {
                 change = q.regularMarketChangePercent ?? 0;
                 session = "REGULAR";
               }
-              v7[q.symbol] = { price: parseFloat(price.toFixed(2)), change: parseFloat(change.toFixed(2)), session, time: q.regularMarketTime ?? 0 };
+              const finitePrice = toFinite(price);
+              const finiteChange = toFinite(change);
+              if (finitePrice === undefined || finiteChange === undefined) continue;
+              v7[q.symbol] = { price: finitePrice, change: finiteChange, session, time: q.regularMarketTime ?? 0 };
             }
           }
         } catch (err) {}
@@ -256,7 +305,10 @@ export async function onRequest(context) {
             if (q7 && (meta.regularMarketTime ?? 0) <= q7.time + 120) return; // v7 is fresh — keep its pre/post awareness
             const prev = meta.chartPreviousClose;
             const change = prev > 0 ? ((meta.regularMarketPrice - prev) / prev) * 100 : 0;
-            stripResults[t] = { price: parseFloat(meta.regularMarketPrice.toFixed(2)), change: parseFloat(change.toFixed(2)), session: "REGULAR" };
+            const finitePrice = toFinite(meta.regularMarketPrice);
+            const finiteChange = toFinite(change);
+            if (finitePrice === undefined || finiteChange === undefined) return;
+            stripResults[t] = { price: finitePrice, change: finiteChange, session: "REGULAR" };
           } catch (err) {}
         }));
         for (const t of INDEX_TICKERS) {
@@ -275,12 +327,27 @@ export async function onRequest(context) {
             const q = await res.json();
             if (q.c != null && q.c > 0) {
               const change = q.dp != null ? q.dp : (q.pc > 0 ? ((q.c - q.pc) / q.pc) * 100 : 0);
-              stripResults[yahooSymbol] = { price: parseFloat(q.c.toFixed(2)), change: parseFloat(change.toFixed(2)), session: "REGULAR" };
+              const finitePrice = toFinite(q.c);
+              const finiteChange = toFinite(change);
+              if (finitePrice === undefined || finiteChange === undefined) return;
+              stripResults[yahooSymbol] = { price: finitePrice, change: finiteChange, session: "REGULAR" };
             }
           }
         } catch (err) {}
       }),
     ]);
+
+    if (Object.keys(stripResults).length > 0 && env.SHARED_DATA) {
+      try {
+        await env.SHARED_DATA.put(
+          KV_STRIP_CACHE_KEY,
+          JSON.stringify({ data: stripResults, timestamp: Date.now() }),
+          // Workers KV requires expirationTtl >= 60; the timestamp enforces 10s freshness.
+          { expirationTtl: 60 }
+        );
+      } catch (err) {}
+    }
+
     return new Response(JSON.stringify({ data: stripResults, cached: false }), { status: 200, headers });
   }
 
@@ -289,10 +356,12 @@ export async function onRequest(context) {
   // ATTEMPTED ("covered"), not the set that resolved. A dead or delisted
   // ticker used to make `t in data` fail forever, forcing every request down
   // the uncached path — one bad symbol poisoned the whole board's cache.
+  let cachedQuoteEntry = null;
   if (env.SHARED_DATA) {
     try {
       const cached = await env.SHARED_DATA.get(KV_CACHE_KEY, "json");
       if (cached && cached.timestamp && (Date.now() - cached.timestamp < CACHE_TTL_SECONDS * 1000)) {
+        cachedQuoteEntry = cached;
         const covered = new Set(cached.covered ?? Object.keys(cached.data ?? {}));
         if (tickers.every(t => covered.has(t))) {
           return new Response(JSON.stringify({ data: cached.data, cached: true }), { status: 200, headers });
@@ -300,6 +369,9 @@ export async function onRequest(context) {
       }
     } catch (err) {}
   }
+
+  const rateLimitResponse = await applyPricesRateLimit(request, env, headers);
+  if (rateLimitResponse) return rateLimitResponse;
 
   const results = {};
   const FINNHUB_KEY = env.FINNHUB_KEY;
@@ -314,6 +386,7 @@ export async function onRequest(context) {
   const needRefs = refsFresh ? tickers.filter(t => !refs.data[t]) : [...tickers];
   let refsDirty = false;
 
+  let fanOutFailed = false;
   try {
     const { cookie, crumb } = await getYahooSession(env);
 
@@ -442,9 +515,9 @@ export async function onRequest(context) {
         session = "REGULAR";
       }
 
-      if (price == null) continue; // Finnhub fallback below
-
-      const currentPrice = parseFloat(price.toFixed(2));
+      const currentPrice = toFinite(price);
+      const currentChange = toFinite(change);
+      if (currentPrice === undefined || currentChange === undefined) continue; // Finnhub fallback below
       const r = refs.data[tkr] || {};
       const qEarnings = q?.earningsTimestamp || q?.earningsTimestampStart || null;
       if (qEarnings && refs.data[tkr] && refs.data[tkr].earnings !== qEarnings) {
@@ -454,7 +527,7 @@ export async function onRequest(context) {
 
       results[tkr] = {
         price:      currentPrice,
-        change:     parseFloat(change.toFixed(2)),
+        change:     currentChange,
         change5D:   pctFrom(r.r5D,  currentPrice),
         change1M:   pctFrom(r.r1M,  currentPrice),
         change6M:   pctFrom(r.r6M,  currentPrice),
@@ -478,8 +551,7 @@ export async function onRequest(context) {
           if (res.ok) {
             const data = await res.json();
             const result = data.chart?.result?.[0];
-            if (result && result.indicators?.quote?.[0]?.close) {
-               results[t] = results[t] || {};
+            if (hasResolvedQuote(results[t]) && result && result.indicators?.quote?.[0]?.close) {
                results[t].chartData = result.indicators.quote[0].close;
                results[t].chartTimestamps = result.timestamp;
             }
@@ -487,9 +559,11 @@ export async function onRequest(context) {
         } catch (e) {}
       }));
     }
-  } catch (err) {}
+  } catch (err) {
+    fanOutFailed = true;
+  }
 
-  const missingTickers = tickers.filter(t => !results[t]);
+  const missingTickers = tickers.filter(t => !hasResolvedQuote(results[t]));
   if (missingTickers.length > 0 && FINNHUB_KEY) {
     const safeMissing = missingTickers.slice(0, 45);
     const BATCH_SIZE  = 8;
@@ -498,8 +572,10 @@ export async function onRequest(context) {
         const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${FINNHUB_KEY}`);
         if (res.ok) {
           const quote = await res.json();
-          if (quote.dp !== null && quote.dp !== undefined) {
-            results[t] = { price: parseFloat((quote.c ?? 0).toFixed(2)), change: parseFloat(quote.dp.toFixed(2)), session: "REGULAR" };
+          const finitePrice = toFinite(quote.c);
+          const finiteChange = toFinite(quote.dp);
+          if (finitePrice !== undefined && finiteChange !== undefined) {
+            results[t] = { price: finitePrice, change: finiteChange, session: "REGULAR" };
           }
         }
       } catch (e) {}
@@ -513,9 +589,23 @@ export async function onRequest(context) {
 
   if (Object.keys(results).length > 0 && env.SHARED_DATA) {
     try {
-      // covered = every ticker this cycle ATTEMPTED, resolved or not — so a
-      // dead symbol can't force every future request down the uncached path.
-      const cachePayload = JSON.stringify({ data: results, covered: tickers, timestamp: Date.now() });
+      // On a completed fan-out, covered = every ticker this cycle ATTEMPTED,
+      // resolved or not, so a dead symbol cannot force future cache misses. If
+      // the fan-out aborted, only claim tickers that actually resolved.
+      const coveredNow = fanOutFailed ? Object.keys(results) : tickers;
+      const canMergeCached = cachedQuoteEntry?.timestamp
+        && (Date.now() - cachedQuoteEntry.timestamp < CACHE_TTL_SECONDS * 1000);
+      const cachedData = canMergeCached && cachedQuoteEntry.data && typeof cachedQuoteEntry.data === "object"
+        ? cachedQuoteEntry.data
+        : {};
+      const cachedCovered = canMergeCached
+        ? (cachedQuoteEntry.covered ?? Object.keys(cachedData))
+        : [];
+      const cachePayload = JSON.stringify({
+        data: { ...cachedData, ...results },
+        covered: [...new Set([...cachedCovered, ...coveredNow])],
+        timestamp: Date.now(),
+      });
       await env.SHARED_DATA.put(KV_CACHE_KEY, cachePayload, { expirationTtl: CACHE_TTL_SECONDS * 4 });
     } catch (err) {}
     if (refsDirty) {
