@@ -52,7 +52,7 @@
     // Comma-separated admin emails (mirrors the Zero Trust Admins group).
     "ADMIN_EMAILS": "flipsensazn@gmail.com",
     // Comma-separated /analyze allow-list; admins are always permitted; empty means admins-only.
-    "ANALYZE_ALLOWED_EMAILS": ""
+    "ANALYZE_ALLOWED_EMAILS": "flipsensazn@gmail.com"
   },
   "observability": {
     "enabled": true
