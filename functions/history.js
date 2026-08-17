@@ -115,7 +115,7 @@ export async function onRequest(context) {
   try {
     const response = await fetch(
       `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=6mo&interval=1d`,
-      { headers: { "User-Agent": USER_AGENT } }
+      { headers: { "User-Agent": USER_AGENT }, signal: request.signal }
     );
     if (!response.ok) throw new Error(`Yahoo returned ${response.status}`);
 

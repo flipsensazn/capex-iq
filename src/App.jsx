@@ -1491,6 +1491,7 @@ export default function App() {
     scannerPoolRef,
     shortListRef,
   } = useDashboardData({
+    activeView: view,
     defaultScannerPool: DEFAULT_MULTIBAGGER,
     defaultCapexData: CAPEX_DATA,
     defaultMuskData: MUSK_CAPEX_DATA,

@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto+Condensed:wght@500;700&family=DM+Mono:wght@400;500&display=swap">
+<script id="turnstileScript" src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <style>
 /* ── CAPEX-IQ design-system tokens (colors / type / spacing / effects) ── */
 :root{
@@ -207,7 +208,12 @@ p{margin:0}
 }
 .register-card h3{font-size:17px;font-weight:800;color:var(--ink-050)}
 .register-card p{margin-top:6px;font-size:12.5px;color:var(--text-secondary);line-height:1.55}
-.register-card form{margin-top:16px;display:flex;gap:8px}
+.register-card form{margin-top:16px;display:flex;gap:8px;flex-wrap:wrap}
+.register-card form .input{flex:1;min-width:220px}
+.turnstile-slot{flex-basis:100%;width:100%;min-height:65px;margin-top:4px}
+#regSecurityMsg{flex-basis:100%;font-size:11px;line-height:1.45;color:var(--text-muted)}
+#regSecurityMsg.ok{color:var(--pos)}
+#regSecurityMsg.err{color:var(--neg)}
 #regMsg{margin-top:12px;font-size:12.5px;min-height:18px;color:var(--text-secondary)}
 #regMsg.ok{color:var(--pos)}
 #regMsg.err{color:var(--neg)}
@@ -488,7 +494,9 @@ footer{border-top:1px solid var(--border-hairline)}
       <form id="regForm" novalidate>
         <label for="regEmail" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Email address</label>
         <input class="input" type="email" id="regEmail" placeholder="you@example.com" autocomplete="email" required>
-        <button class="btn btn-primary glow" type="submit" id="regBtn" style="font-size:14px;padding:11px 20px">Register</button>
+        <button class="btn btn-primary glow" type="submit" id="regBtn" style="font-size:14px;padding:11px 20px" disabled>Register</button>
+        <div id="regTurnstile" class="turnstile-slot" data-action="turnstile-spin-v1"></div>
+        <div id="regSecurityMsg" role="status" aria-live="polite">Preparing security check…</div>
       </form>
       <div id="regMsg" role="status" aria-live="polite"></div>
       <!-- Confirms registration and hands off to Google sign-in. -->
@@ -714,6 +722,116 @@ footer{border-top:1px solid var(--border-hairline)}
   var activate = document.getElementById("regActivate");
   var activateMsg = document.getElementById("regActivateMsg");
   var signInBtn = document.getElementById("regSignIn");
+  var turnstileScript = document.getElementById("turnstileScript");
+  var turnstileElement = document.getElementById("regTurnstile");
+  var securityMsg = document.getElementById("regSecurityMsg");
+  var turnstileToken = "";
+  var turnstileWidgetId = null;
+  var turnstileReady = false;
+  var submitting = false;
+
+  function updateRegisterButton(){
+    btn.disabled = !turnstileReady || !turnstileToken || submitting;
+    btn.style.opacity = btn.disabled ? ".6" : "";
+  }
+
+  function setSecurityMessage(text, className){
+    securityMsg.textContent = text;
+    securityMsg.className = className || "";
+  }
+
+  function resetSecurityCheck(){
+    turnstileToken = "";
+    if (turnstileReady && turnstileWidgetId !== null && window.turnstile) {
+      try { window.turnstile.reset(turnstileWidgetId); } catch (_) {}
+    }
+    if (!form.hidden) setSecurityMessage("Complete the security check to try again.", "");
+    updateRegisterButton();
+  }
+
+  function waitForTurnstile(){
+    return new Promise(function(resolve, reject){
+      if (window.turnstile) { resolve(window.turnstile); return; }
+      var timer = setTimeout(function(){
+        cleanup();
+        reject(new Error("Turnstile script timed out"));
+      }, 15000);
+      function cleanup(){
+        clearTimeout(timer);
+        turnstileScript.removeEventListener("load", loaded);
+        turnstileScript.removeEventListener("error", failed);
+      }
+      function loaded(){
+        cleanup();
+        if (window.turnstile) resolve(window.turnstile);
+        else reject(new Error("Turnstile API unavailable"));
+      }
+      function failed(){ cleanup(); reject(new Error("Turnstile script failed")); }
+      turnstileScript.addEventListener("load", loaded);
+      turnstileScript.addEventListener("error", failed);
+    });
+  }
+
+  function fetchJsonWithTimeout(url, options, timeoutMs){
+    var controller = new AbortController();
+    var timer = setTimeout(function(){ controller.abort(); }, timeoutMs);
+    var requestOptions = Object.assign({}, options || {}, { signal: controller.signal });
+    var request = fetch(url, requestOptions).then(function(response){
+      return response.json().then(function(data){
+        return { response: response, data: data };
+      });
+    });
+    return request.then(function(result){
+      clearTimeout(timer);
+      return result;
+    }, function(error){
+      clearTimeout(timer);
+      throw error;
+    });
+  }
+
+  Promise.all([
+    fetchJsonWithTimeout("/register", { headers: { "Accept": "application/json" } }, 10000).then(function(result){
+      if (!result.response.ok || !result.data.success || typeof result.data.siteKey !== "string" || !result.data.siteKey) {
+        throw new Error("Registration is not configured");
+      }
+      return result.data.siteKey;
+    }),
+    waitForTurnstile()
+  ]).then(function(result){
+    var siteKey = result[0];
+    turnstileWidgetId = window.turnstile.render(turnstileElement, {
+      sitekey: siteKey,
+      action: "turnstile-spin-v1",
+      theme: "dark",
+      size: "flexible",
+      callback: function(token){
+        turnstileToken = token;
+        setSecurityMessage("Security check complete.", "ok");
+        updateRegisterButton();
+      },
+      "expired-callback": function(){
+        turnstileToken = "";
+        setSecurityMessage("Security check expired. Complete it again.", "err");
+        updateRegisterButton();
+      },
+      "error-callback": function(){
+        turnstileToken = "";
+        setSecurityMessage("Security check failed. Please retry.", "err");
+        updateRegisterButton();
+      }
+    });
+    if (turnstileWidgetId === null || turnstileWidgetId === undefined) {
+      throw new Error("Turnstile widget failed to render");
+    }
+    turnstileReady = true;
+    setSecurityMessage("Complete the security check to register.", "");
+    updateRegisterButton();
+  }).catch(function(){
+    turnstileReady = false;
+    setSecurityMessage("Registration security check is unavailable. Please try again later.", "err");
+    updateRegisterButton();
+  });
 
   signInBtn.addEventListener("click", function(){
     if (!signInBtn.disabled) window.location.href = "/app";
@@ -745,14 +863,19 @@ footer{border-top:1px solid var(--border-hairline)}
       input.classList.add("invalid"); input.focus();
       return;
     }
-    btn.disabled = true; btn.style.opacity = ".6";
+    if (!turnstileReady || !turnstileToken){
+      msg.className = "err"; msg.textContent = "Complete the security check before registering.";
+      return;
+    }
+    submitting = true;
+    updateRegisterButton();
     msg.className = ""; msg.textContent = "Registering…";
-    fetch("/register", {
+    fetchJsonWithTimeout("/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email })
-    }).then(function(res){
-      return res.json().then(function(data){ return { ok: res.ok, data: data }; });
+      body: JSON.stringify({ email: email, turnstileToken: turnstileToken })
+    }, 30000).then(function(result){
+      return { ok: result.response.ok, data: result.data };
     }).then(function(r){
       if (r.ok && r.data.success){
         input.value = "";
@@ -765,7 +888,8 @@ footer{border-top:1px solid var(--border-hairline)}
     }).catch(function(){
       msg.className = "err"; msg.textContent = "Network error — please try again.";
     }).then(function(){
-      btn.disabled = false; btn.style.opacity = "";
+      submitting = false;
+      resetSecurityCheck();
     });
   });
 })();

@@ -12,6 +12,10 @@ const CACHE_KEY_PREFIX = "research_v7_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
 const MODEL = "gemini-3.5-flash-lite";
+const DEFAULT_INTERNAL_TIMEOUT_MS = 10_000;
+const DEFAULT_MODEL_TIMEOUT_MS = 40_000;
+const MIN_TIMEOUT_MS = 10;
+const MAX_TIMEOUT_MS = 60_000;
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
 
 const SYSTEM_PROMPT = `You are a disciplined equity financial analyst.
@@ -88,6 +92,32 @@ async function writeKvJson(kv, key, value) {
   }
 }
 
+function boundedTimeout(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= MIN_TIMEOUT_MS && parsed <= MAX_TIMEOUT_MS
+    ? parsed
+    : fallback;
+}
+
+async function withTimeout(operation, timeoutMs, label) {
+  const controller = new AbortController();
+  const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => operation(controller.signal)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Finds the first balanced JSON object/array while ignoring surrounding
 // markdown fences, prose, and Gemini thinking-token leakage.
 function extractJson(text) {
@@ -115,47 +145,59 @@ function extractJson(text) {
   return null;
 }
 
-async function callGemini(apiKey, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite) {
+async function callGemini(apiKey, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite, timeoutMs) {
   const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite })}`;
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 5120,
-          responseMimeType: "application/json",
-          // No thinkingConfig: Gemini 3.x replaced `thinkingBudget` with
-          // `thinking_level`, so the old `thinkingBudget: 0` is rejected with
-          // 400 INVALID_ARGUMENT. This model defaults to minimal thinking,
-          // which is what we want. Tune via `thinkingLevel` if ever needed.
-        },
-      }),
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 5120,
+            responseMimeType: "application/json",
+            // No thinkingConfig: Gemini 3.x replaced `thinkingBudget` with
+            // `thinking_level`, so the old `thinkingBudget: 0` is rejected with
+            // 400 INVALID_ARGUMENT. This model defaults to minimal thinking,
+            // which is what we want. Tune via `thinkingLevel` if ever needed.
+          },
+        }),
+        signal: controller.signal,
+      }
+    );
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`[model ${MODEL}] Gemini ${response.status}: ${detail.slice(0, 300)}`);
     }
-  );
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`[model ${MODEL}] Gemini ${response.status}: ${detail.slice(0, 300)}`);
+    const data = await response.json();
+    if (data?.error) throw new Error(`Gemini error: ${data.error.message || JSON.stringify(data.error)}`);
+    const blockReason = data?.promptFeedback?.blockReason;
+    if (blockReason) throw new Error(`Gemini blocked: ${blockReason}`);
+
+    const rawText = data?.candidates?.[0]?.content?.parts?.map(part => part.text).join("") ?? "";
+    const extracted = extractJson(rawText);
+    if (!extracted) throw new Error("Gemini returned no valid JSON object");
+
+    const parsed = JSON.parse(extracted);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !parsed.cases) {
+      throw new Error("Gemini returned an invalid analysis schema");
+    }
+    return parsed;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`Analysis model timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const data = await response.json();
-  if (data?.error) throw new Error(`Gemini error: ${data.error.message || JSON.stringify(data.error)}`);
-  const blockReason = data?.promptFeedback?.blockReason;
-  if (blockReason) throw new Error(`Gemini blocked: ${blockReason}`);
-
-  const rawText = data?.candidates?.[0]?.content?.parts?.map(part => part.text).join("") ?? "";
-  const extracted = extractJson(rawText);
-  if (!extracted) throw new Error("Gemini returned no valid JSON object");
-
-  const parsed = JSON.parse(extracted);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !parsed.cases) {
-    throw new Error("Gemini returned an invalid analysis schema");
-  }
-  return parsed;
 }
 
 function finiteNumber(value) {
@@ -289,32 +331,34 @@ function validateCaseOrdering(pricedCases) {
   return { valid: false, message };
 }
 
-async function getPriceContext(request, env, ticker) {
+async function getPriceContext(request, env, ticker, signal) {
   try {
     const priceRequest = new Request(
       `https://internal/prices?tickers=${encodeURIComponent(ticker)}`,
-      { method: "GET", headers: request.headers }
+      { method: "GET", headers: request.headers, signal }
     );
     const response = await pricesHandler({ request: priceRequest, env });
     if (!response.ok) return buildPriceContext(null);
     const body = await response.json();
     return buildPriceContext(body?.data?.[ticker]);
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return buildPriceContext(null);
   }
 }
 
-async function getHistory(request, env, ticker) {
+async function getHistory(request, env, ticker, signal) {
   try {
     const historyRequest = new Request(
       `https://internal/history?ticker=${encodeURIComponent(ticker)}`,
-      { method: "GET", headers: request.headers }
+      { method: "GET", headers: request.headers, signal }
     );
     const response = await historyHandler({ request: historyRequest, env });
     if (!response.ok) return null;
     const body = await response.json();
     return body && typeof body === "object" && !Array.isArray(body) ? body : null;
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return null;
   }
 }
@@ -465,15 +509,49 @@ export async function onRequest(context) {
   const cached = await readKvJson(env.SHARED_DATA, cacheKey);
   if (cached) return jsonResponse(cached, 200, headers);
 
+  // Cache hits are free. Fail closed and rate-limit only work that can fan out
+  // to SEC/Yahoo and a paid Gemini request.
+  if (!env.ANALYZE_RATE_LIMITER) {
+    return jsonResponse({ error: "Analysis service is temporarily unavailable" }, 503, headers);
+  }
+  try {
+    const { success } = await env.ANALYZE_RATE_LIMITER.limit({ key: String(memberKey) });
+    if (!success) {
+      return jsonResponse(
+        { error: "Analysis limit reached. Try again in a minute." },
+        429,
+        { ...headers, "Retry-After": "60" }
+      );
+    }
+  } catch (err) {
+    console.error("[research] rate limit error:", err);
+    return jsonResponse({ error: "Analysis service is temporarily unavailable" }, 503, headers);
+  }
+
   if (!env.GEMINI_API_KEY) {
     return jsonResponse({ error: "Analysis service is not configured" }, 503, headers);
   }
 
-  const fundamentalsRequest = new Request(
-    `https://internal/fundamentals?ticker=${encodeURIComponent(ticker)}`,
-    { method: "GET", headers: request.headers }
-  );
-  const fundamentalsResponse = await fundamentalsHandler({ request: fundamentalsRequest, env });
+  const internalTimeoutMs = boundedTimeout(env.RESEARCH_INTERNAL_TIMEOUT_MS, DEFAULT_INTERNAL_TIMEOUT_MS);
+  const modelTimeoutMs = boundedTimeout(env.RESEARCH_MODEL_TIMEOUT_MS, DEFAULT_MODEL_TIMEOUT_MS);
+
+  let fundamentalsResponse;
+  try {
+    fundamentalsResponse = await withTimeout(
+      signal => fundamentalsHandler({
+        request: new Request(
+          `https://internal/fundamentals?ticker=${encodeURIComponent(ticker)}`,
+          { method: "GET", headers: request.headers, signal }
+        ),
+        env,
+      }),
+      internalTimeoutMs,
+      "SEC fundamentals"
+    );
+  } catch (err) {
+    console.error("[research] fundamentals failed:", err);
+    return jsonResponse({ error: "Unable to load SEC fundamentals" }, 504, headers);
+  }
   if (!fundamentalsResponse.ok) {
     return new Response(fundamentalsResponse.body, {
       status: fundamentalsResponse.status,
@@ -489,10 +567,17 @@ export async function onRequest(context) {
   }
 
   const qualityScore = computeQualityScore(fundamentals);
-  const [priceContext, history] = await Promise.all([
-    getPriceContext(request, env, ticker),
-    getHistory(request, env, ticker),
-  ]);
+  let priceContext;
+  let history;
+  try {
+    [priceContext, history] = await Promise.all([
+      withTimeout(signal => getPriceContext(request, env, ticker, signal), internalTimeoutMs, "Price context"),
+      withTimeout(signal => getHistory(request, env, ticker, signal), internalTimeoutMs, "Price history"),
+    ]);
+  } catch (err) {
+    console.error("[research] market context failed:", err);
+    return jsonResponse({ error: "Unable to load market context" }, 504, headers);
+  }
   const technicalScore = computeTechnicalScore(priceContext, history);
   const notablePoints = history
     ? findNotablePoints(history.points, history.displayFrom)
@@ -538,7 +623,7 @@ export async function onRequest(context) {
   };
 
   try {
-    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite);
+    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite, modelTimeoutMs);
     const modelCases = modelAnalysis?.cases && typeof modelAnalysis.cases === "object" && !Array.isArray(modelAnalysis.cases)
       ? modelAnalysis.cases
       : {};

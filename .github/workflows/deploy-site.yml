@@ -4,7 +4,8 @@ name: Deploy Site (Workers)
 # the frontend and deploys the site Worker (workers/site) — API functions,
 # static assets, KV binding, all in one deployable.
 #
-# Requires one repo secret: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit).
+# Deployment requires CLOUDFLARE_API_TOKEN (Workers Scripts:Edit); runtime
+# credentials are synchronized from the repository secrets below.
 
 on:
   push:
@@ -59,17 +60,38 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FINNHUB_KEY: ${{ secrets.FINNHUB_API_KEY }}
           CF_ACCESS_API_TOKEN: ${{ secrets.CF_ACCESS_API_TOKEN }}
+          # These four accept either a repo variable or a repo secret. The list
+          # ID and site key are not sensitive, so a variable is the natural home
+          # — but an empty value here makes the jq below emit null, which DELETES
+          # the deployed Worker secret. Falling back to secrets.* keeps a deploy
+          # from silently wiping a key that was simply stored in the other place.
+          ACCESS_MEMBERS_LIST_ID: ${{ vars.ACCESS_MEMBERS_LIST_ID || secrets.ACCESS_MEMBERS_LIST_ID }}
+          ACCESS_MEMBERS_GROUP_ID: ${{ vars.ACCESS_MEMBERS_GROUP_ID || secrets.ACCESS_MEMBERS_GROUP_ID }}
+          TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY || secrets.TURNSTILE_SITE_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
         run: |
-          # CF_ACCESS_API_TOKEN (member registration) is optional — included
-          # only when the repo secret exists, so registration stays cleanly
-          # 503 until Zero Trust is configured.
+          # JSON null deletes a previously deployed secret, preventing retired
+          # roster IDs or Turnstile credentials from surviving configuration removal.
           jq -n \
             --arg a "$ADMIN_PASSWORD" \
             --arg d "$DATABASE_URL" \
             --arg g "$GEMINI_API_KEY" \
             --arg f "$FINNHUB_KEY" \
             --arg t "$CF_ACCESS_API_TOKEN" \
-            '{ADMIN_PASSWORD: $a, DATABASE_URL: $d, GEMINI_API_KEY: $g, FINNHUB_KEY: $f}
-             + (if $t != "" then {CF_ACCESS_API_TOKEN: $t} else {} end)' > .secrets.json
+            --arg ml "$ACCESS_MEMBERS_LIST_ID" \
+            --arg mg "$ACCESS_MEMBERS_GROUP_ID" \
+            --arg ts "$TURNSTILE_SITE_KEY" \
+            --arg tk "$TURNSTILE_SECRET_KEY" \
+            '{
+              ADMIN_PASSWORD: (if $a != "" then $a else null end),
+              DATABASE_URL: (if $d != "" then $d else null end),
+              GEMINI_API_KEY: (if $g != "" then $g else null end),
+              FINNHUB_KEY: (if $f != "" then $f else null end),
+              CF_ACCESS_API_TOKEN: (if $t != "" then $t else null end),
+              ACCESS_MEMBERS_LIST_ID: (if $ml != "" then $ml else null end),
+              ACCESS_MEMBERS_GROUP_ID: (if $mg != "" then $mg else null end),
+              TURNSTILE_SITE_KEY: (if $ts != "" then $ts else null end),
+              TURNSTILE_SECRET_KEY: (if $tk != "" then $tk else null end)
+            }' > .secrets.json
           npx --yes wrangler@4.113.0 secret bulk .secrets.json --name capex-iq
           rm .secrets.json

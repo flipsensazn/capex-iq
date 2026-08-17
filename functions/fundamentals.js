@@ -88,17 +88,17 @@ async function writeKvJson(kv, key, value, expirationTtl) {
   }
 }
 
-async function fetchSecJson(url) {
-  const response = await fetch(url, { headers: { "User-Agent": SEC_USER_AGENT } });
+async function fetchSecJson(url, signal) {
+  const response = await fetch(url, { headers: { "User-Agent": SEC_USER_AGENT }, signal });
   if (!response.ok) throw new Error(`SEC returned ${response.status}`);
   return await response.json();
 }
 
-async function getCikMap(env) {
+async function getCikMap(env, signal) {
   const cached = await readKvJson(env.SHARED_DATA, CIK_MAP_CACHE_KEY);
   if (cached && typeof cached === "object") return cached;
 
-  const secMap = await fetchSecJson("https://www.sec.gov/files/company_tickers.json");
+  const secMap = await fetchSecJson("https://www.sec.gov/files/company_tickers.json", signal);
   const cikMap = {};
   for (const entry of Object.values(secMap)) {
     if (!entry?.ticker || !Number.isFinite(Number(entry.cik_str))) continue;
@@ -339,7 +339,7 @@ export async function onRequest(context) {
   if (cached) return jsonResponse(cached, 200, headers);
 
   try {
-    const cikMap = await getCikMap(env);
+    const cikMap = await getCikMap(env, request.signal);
     const cik = cikMap[ticker];
     if (!cik) {
       return jsonResponse({
@@ -349,7 +349,10 @@ export async function onRequest(context) {
       }, 404, headers);
     }
 
-    let companyFacts = await fetchSecJson(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`);
+    let companyFacts = await fetchSecJson(
+      `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
+      request.signal
+    );
     const result = buildResult(ticker, cik, companyFacts);
     companyFacts = null;
     await writeKvJson(env.SHARED_DATA, cacheKey, result, FUNDAMENTALS_TTL_SECONDS);

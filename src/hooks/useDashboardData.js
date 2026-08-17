@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+const INTEL_TIMEOUT_MS = 60_000;
+
+export function intelEndpointForView(view) {
+  if (view === "ai") return "/capex-intel";
+  if (view === "musk") return "/musk-intel";
+  if (view === "robotics") return "/robotics-intel";
+  return null;
+}
+
 function mergePriceEntries(prev, incoming) {
   const HIST_KEYS = [
     "change5D",
@@ -37,6 +46,7 @@ function mergePriceEntries(prev, incoming) {
 }
 
 export function useDashboardData({
+  activeView = "ai",
   defaultScannerPool,
   defaultCapexData,
   defaultMuskData,
@@ -74,7 +84,8 @@ export function useDashboardData({
   const roboticsDataRef = useRef(defaultRoboticsData);
   // Which view is showing — refresh fetches only that view's map, not both
   // (fetching both doubled the per-cycle ticker count and broke the cache).
-  const activeViewRef = useRef("ai");
+  const activeViewRef = useRef(activeView);
+  const loadedIntelViewsRef = useRef(new Set());
   const scannerPoolRef = useRef(defaultScannerPool);
   const shortListRef = useRef([]);
   const [marketData, setMarketData] = useState({});
@@ -112,19 +123,6 @@ export function useDashboardData({
       })
       .catch(() => {});
 
-    setMuskIntelStatus("loading");
-    fetch("/musk-intel")
-      .then(res => res.json())
-      .then(data => {
-        if (!data.error && data.allocations?.length) {
-          setMuskIntel(data);
-          setMuskIntelStatus("success");
-        } else {
-          setMuskIntelStatus("error");
-        }
-      })
-      .catch(() => setMuskIntelStatus("error"));
-
     fetch("/robotics-capex")
       .then(res => res.json())
       .then(data => {
@@ -134,43 +132,6 @@ export function useDashboardData({
         }
       })
       .catch(() => {});
-
-    setRoboticsIntelStatus("loading");
-    fetch("/robotics-intel")
-      .then(res => res.json())
-      .then(data => {
-        if (!data.error && data.allocations?.length) {
-          setRoboticsIntel(data);
-          setRoboticsIntelStatus("success");
-        } else {
-          setRoboticsIntelStatus("error");
-        }
-      })
-      .catch(() => setRoboticsIntelStatus("error"));
-
-    setCapexIntelStatus("loading");
-    const intelController = new AbortController();
-    const intelTimeout = setTimeout(() => intelController.abort(), 20000);
-    fetch("/capex-intel", { signal: intelController.signal })
-      .then(res => res.json())
-      .then(data => {
-        clearTimeout(intelTimeout);
-        if (data.error) {
-          setCapexIntelStatus("error");
-          setCapexIntelError(data.detail ? `${data.error} — ${data.detail}` : data.error);
-        } else if (data.allocations?.length) {
-          setCapexIntel(data);
-          setCapexIntelStatus("success");
-        } else {
-          setCapexIntelStatus("error");
-          setCapexIntelError("No allocations returned from API.");
-        }
-      })
-      .catch(e => {
-        clearTimeout(intelTimeout);
-        setCapexIntelStatus("error");
-        setCapexIntelError(e.name === "AbortError" ? "Request timed out — Gemini took too long" : (e.message || "Network error"));
-      });
 
     fetch("/stress")
       .then(res => res.json())
@@ -241,24 +202,77 @@ export function useDashboardData({
       .catch(() => {});
   }, [defaultCapexData.version]);
 
+  // The three intel routes can invoke paid generation. Fetch only the map
+  // currently on screen, and keep standalone views from touching them at all.
   useEffect(() => {
-    const marketTickers = [...indexTickers, ...cryptoTickers, ...hyperscalerTickers];
-    fetchAllPrices(marketTickers).then(data => {
-      setMarketData(prev => {
-        const merged = { ...prev };
-        marketTickers.forEach(ticker => {
-          const val = data[ticker];
-          if (val != null) merged[ticker] = val;
-        });
-        return merged;
-      });
-      setPrices(prev => {
-        const next = mergePriceEntries(prev, data);
-        pricesRef.current = next;
-        return next;
-      });
-    });
-  }, [cryptoTickers, fetchAllPrices, hyperscalerTickers, indexTickers]);
+    const endpoint = intelEndpointForView(activeView);
+    if (!endpoint || loadedIntelViewsRef.current.has(activeView)) return undefined;
+
+    const config = activeView === "ai"
+      ? {
+          setData: setCapexIntel,
+          setStatus: setCapexIntelStatus,
+          setError: setCapexIntelError,
+        }
+      : activeView === "musk"
+        ? { setData: setMuskIntel, setStatus: setMuskIntelStatus }
+        : { setData: setRoboticsIntel, setStatus: setRoboticsIntelStatus };
+    const controller = new AbortController();
+    let cancelled = false;
+    let timedOut = false;
+    let finished = false;
+    let retry = null;
+    const fail = message => {
+      if (cancelled || finished) return;
+      finished = true;
+      clearTimeout(retry);
+      config.setStatus("error");
+      config.setError?.(message);
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      fail("Request timed out — the intel refresh took too long");
+      controller.abort();
+    }, INTEL_TIMEOUT_MS);
+
+    config.setStatus("loading");
+    config.setError?.(null);
+    const loadIntel = async () => {
+      if (cancelled || finished) return;
+      try {
+        const response = await fetch(endpoint, { signal: controller.signal });
+        const data = await response.json();
+        if (!response.ok || data.error || !data.allocations?.length) {
+          throw new Error(data.detail || data.error || "No allocations returned from API.");
+        }
+        if (cancelled || finished) return;
+        config.setData(data);
+        if (data.stale === true) {
+          config.setStatus("stale");
+          retry = setTimeout(() => void loadIntel(), 5_000);
+          return;
+        }
+        finished = true;
+        clearTimeout(timeout);
+        config.setStatus("success");
+        loadedIntelViewsRef.current.add(activeView);
+      } catch (error) {
+        fail(
+          timedOut
+            ? "Request timed out — the intel refresh took too long"
+            : (error?.message || "Network error")
+        );
+      }
+    };
+    void loadIntel();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      clearTimeout(retry);
+      controller.abort();
+    };
+  }, [activeView]);
 
   useEffect(() => {
     capexDataRef.current = capexData;
@@ -283,19 +297,27 @@ export function useDashboardData({
   const refresh = useCallback(async () => {
     setRefreshing(true);
     const marketTickers = [...indexTickers, ...cryptoTickers, ...hyperscalerTickers];
-    // Only the ACTIVE view's map is on screen, so only fetch its tickers —
-    // the heat map, watchlist, Sankey, graph and earnings panels all read the
-    // active view. The inactive view's prices are fetched when you switch to it.
+    // Map views fetch only their active universe. Standalone research and
+    // scanner views keep a deliberately narrow price scope.
+    const currentView = activeViewRef.current;
+    const usesMapUniverse = ["ai", "musk", "robotics", "earnings"].includes(currentView);
     const activeMap =
-      activeViewRef.current === "robotics" && roboticsDataRef.current ? roboticsDataRef.current :
-      activeViewRef.current === "musk" && muskDataRef.current ? muskDataRef.current :
+      currentView === "robotics" && roboticsDataRef.current ? roboticsDataRef.current :
+      currentView === "musk" && muskDataRef.current ? muskDataRef.current :
       capexDataRef.current;
+    const scopedTickers = usesMapUniverse
+      ? [
+          ...getAllTickers(activeMap),
+          ...scannerPoolRef.current,
+          ...shortListRef.current,
+          ...pinnedTickers,
+        ]
+      : currentView === "scanner"
+        ? [...scannerPoolRef.current, ...shortListRef.current]
+        : [];
     const allTickers = [...new Set([
-      ...getAllTickers(activeMap),
-      ...scannerPoolRef.current,
-      ...shortListRef.current,
+      ...scopedTickers,
       ...marketTickers,
-      ...pinnedTickers,  // public hub companies not in a map (e.g. TSLA for the Musk Sankey)
     ])];
 
     const allData = await fetchAllPrices(allTickers);
@@ -319,7 +341,6 @@ export function useDashboardData({
   }, [cryptoTickers, fetchAllPrices, getAllTickers, hyperscalerTickers, indexTickers, pinnedTickers]);
 
   useEffect(() => {
-    refresh();
     const id = setInterval(() => {
       if (!document.hidden) refresh();
     }, 30000);

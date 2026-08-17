@@ -457,6 +457,13 @@ async function requestResearch({
   sub = "research-admin",
   adminEmails = "admin@example.com",
   analyzeAllowedEmails = "",
+  rateLimiterEnabled = true,
+  rateLimitSuccess = true,
+  rateLimitError = null,
+  geminiFetch = null,
+  secCompanyFactsFetch = null,
+  researchInternalTimeoutMs,
+  researchModelTimeoutMs,
 }) {
   const teamDomain = `research-${crypto.randomUUID()}.example.com`;
   const accessAud = "research-audience";
@@ -482,6 +489,7 @@ async function requestResearch({
   const upstreamRequests = [];
   const geminiPrompts = [];
   let geminiCalls = 0;
+  const rateLimitKeys = [];
   globalThis.fetch = async (url, options) => {
     const href = String(url);
     if (href === `https://${teamDomain}/cdn-cgi/access/certs`) {
@@ -494,6 +502,7 @@ async function requestResearch({
       });
     }
     if (href === "https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json") {
+      if (secCompanyFactsFetch) return secCompanyFactsFetch(url, options);
       return Response.json(companyFacts);
     }
     if (href.startsWith("https://query1.finance.yahoo.com/v8/finance/chart/")) {
@@ -502,6 +511,7 @@ async function requestResearch({
     if (href.startsWith("https://generativelanguage.googleapis.com/")) {
       geminiCalls += 1;
       geminiPrompts.push(JSON.parse(options.body).contents[0].parts[0].text);
+      if (geminiFetch) return geminiFetch(url, options);
       return Response.json({
         candidates: [{
           content: {
@@ -532,9 +542,20 @@ async function requestResearch({
         ALLOWED_ORIGIN: "https://capex-iq.us",
         GEMINI_API_KEY: geminiKey,
         SHARED_DATA: kv,
+        ...(researchInternalTimeoutMs == null ? {} : { RESEARCH_INTERNAL_TIMEOUT_MS: String(researchInternalTimeoutMs) }),
+        ...(researchModelTimeoutMs == null ? {} : { RESEARCH_MODEL_TIMEOUT_MS: String(researchModelTimeoutMs) }),
+        ...(rateLimiterEnabled ? {
+          ANALYZE_RATE_LIMITER: {
+            limit: async ({ key }) => {
+              rateLimitKeys.push(key);
+              if (rateLimitError) throw rateLimitError;
+              return { success: rateLimitSuccess };
+            },
+          },
+        } : {}),
       },
     });
-    return { response, kv, upstreamRequests, geminiCalls, geminiPrompts };
+    return { response, kv, upstreamRequests, geminiCalls, geminiPrompts, rateLimitKeys };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -629,6 +650,106 @@ test("research rejects an invalid ticker before upstream work", { concurrency: f
   assert.deepEqual(await response.json(), { error: "Invalid ticker format" });
   assert.equal(upstreamRequests.length, 0);
   assert.equal(geminiCalls, 0);
+});
+
+test("research rate-limits cache misses before upstream work", { concurrency: false }, async () => {
+  const { response, upstreamRequests, geminiCalls, rateLimitKeys } = await requestResearch({
+    rateLimitSuccess: false,
+  });
+
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("Retry-After"), "60");
+  assert.deepEqual(await response.json(), {
+    error: "Analysis limit reached. Try again in a minute.",
+  });
+  assert.deepEqual(rateLimitKeys, ["research-admin"]);
+  assert.equal(upstreamRequests.length, 0);
+  assert.equal(geminiCalls, 0);
+});
+
+test("research fails closed when the rate limiter is unavailable", { concurrency: false }, async () => {
+  const { response, upstreamRequests, geminiCalls } = await requestResearch({
+    rateLimiterEnabled: false,
+  });
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: "Analysis service is temporarily unavailable",
+  });
+  assert.equal(upstreamRequests.length, 0);
+  assert.equal(geminiCalls, 0);
+});
+
+test("research aborts a model request at its configured deadline", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
+    revenueCagr: 5,
+    exitNetMargin: 20,
+    multipleValue: 20,
+  });
+  const { response, geminiCalls } = await requestResearch({
+    geminiAnalysis,
+    researchModelTimeoutMs: 10,
+    geminiFetch: async (_url, options) => new Promise((resolve, reject) => {
+      if (options.signal.aborted) {
+        reject(options.signal.reason);
+        return;
+      }
+      options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+    }),
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 502);
+  assert.equal(geminiCalls, 1);
+  assert.equal(body.error, "Analysis failed");
+  assert.match(body.detail, /Analysis model timed out after 10ms/);
+});
+
+test("research keeps the model deadline active while reading the response body", { concurrency: false }, async () => {
+  let bodyAbortObserved = false;
+  const { response, geminiCalls } = await requestResearch({
+    researchModelTimeoutMs: 10,
+    geminiFetch: async (_url, options) => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"candidates":['));
+        options.signal.addEventListener("abort", () => {
+          bodyAbortObserved = true;
+          controller.error(options.signal.reason);
+        }, { once: true });
+      },
+    }), { headers: { "Content-Type": "application/json" } }),
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 502);
+  assert.equal(geminiCalls, 1);
+  assert.equal(bodyAbortObserved, true);
+  assert.match(body.detail, /Analysis model timed out after 10ms/);
+});
+
+test("research cancels SEC work when its internal deadline expires", { concurrency: false }, async () => {
+  let secAbortObserved = false;
+  const { response, geminiCalls } = await requestResearch({
+    history: historyFixture(),
+    researchInternalTimeoutMs: 10,
+    secCompanyFactsFetch: async (_url, options) => new Promise((resolve, reject) => {
+      if (options.signal.aborted) {
+        secAbortObserved = true;
+        reject(options.signal.reason);
+        return;
+      }
+      options.signal.addEventListener("abort", () => {
+        secAbortObserved = true;
+        reject(options.signal.reason);
+      }, { once: true });
+    }),
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 504);
+  assert.equal(geminiCalls, 0);
+  assert.equal(secAbortObserved, true);
+  assert.deepEqual(body, { error: "Unable to load SEC fundamentals" });
 });
 
 test("research returns server-derived price context and model technical and macro lenses", { concurrency: false }, async () => {
@@ -1033,7 +1154,7 @@ test("research returns a cached result without calling Gemini", { concurrency: f
     model: "gemini-2.5-flash",
     disclaimer: "This is a model-generated projection from filed data, not investment advice.",
   };
-  const { response, upstreamRequests, geminiCalls } = await requestResearch({
+  const { response, upstreamRequests, geminiCalls, rateLimitKeys } = await requestResearch({
     cachedResult,
     geminiKey: undefined,
   });
@@ -1042,4 +1163,5 @@ test("research returns a cached result without calling Gemini", { concurrency: f
   assert.deepEqual(await response.json(), cachedResult);
   assert.equal(geminiCalls, 0);
   assert.equal(upstreamRequests.length, 0);
+  assert.equal(rateLimitKeys.length, 0);
 });

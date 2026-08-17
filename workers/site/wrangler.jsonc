@@ -2,8 +2,10 @@
 // Lives in a subdirectory (not the repo root) so the Pages project's build
 // never sees a Workers-format config while both deployments coexist.
 //
-// Secrets (set once, dashboard or `npx wrangler secret put <NAME>` here):
-//   ADMIN_PASSWORD, DATABASE_URL, GEMINI_API_KEY, FINNHUB_KEY
+// Environment bindings (set once in the dashboard; never commit values):
+//   Secrets: ADMIN_PASSWORD, DATABASE_URL, GEMINI_API_KEY, FINNHUB_KEY,
+//            CF_ACCESS_API_TOKEN, TURNSTILE_SECRET_KEY
+//   Turnstile public key: TURNSTILE_SITE_KEY
 {
   "name": "capex-iq",
   "account_id": "0e727bf4fae81b99443d3150ca244484",
@@ -25,6 +27,24 @@
       "id": "1dadc46e52b146bea2fbc4b8511c7d90"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OPERATION_COORDINATOR",
+        "class_name": "OperationCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-operation-coordinator",
+      "new_sqlite_classes": ["OperationCoordinator"]
+    }
+  ],
+  "triggers": {
+    // Refresh all three feeds every four hours, ahead of their 6-hour TTL.
+    "crons": ["17 */4 * * *"]
+  },
   "ratelimits": [
     {
       "name": "ANALYZE_RATE_LIMITER",
@@ -39,6 +59,22 @@
       "namespace_id": "39722",
       "simple": {
         "limit": 60,
+        "period": 60
+      }
+    },
+    {
+      "name": "REGISTER_RATE_LIMITER",
+      "namespace_id": "39723",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    },
+    {
+      "name": "PRESENCE_RATE_LIMITER",
+      "namespace_id": "39724",
+      "simple": {
+        "limit": 120,
         "period": 60
       }
     }
