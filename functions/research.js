@@ -4,16 +4,16 @@ import { isAuthorizedAdmin } from "./access-lib.js";
 import { onRequest as fundamentalsHandler } from "./fundamentals.js";
 import { onRequest as pricesHandler } from "./prices.js";
 
-const CACHE_KEY_PREFIX = "research_v1_";
+const CACHE_KEY_PREFIX = "research_v2_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3.5-flash-lite";
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
 
 const SYSTEM_PROMPT = `You are a disciplined equity financial analyst.
 Reason ONLY from the supplied filed SEC figures. Do not use outside knowledge and do not invent data.
 When a supplied figure is null, say the data is unavailable rather than estimating or guessing it.
-Every scenario must be arithmetically consistent with its own explicitly stated assumptions.
+The server computes every scenario price deterministically. Supply assumptions only and do NOT output a price.
 
 Return ONLY one valid JSON object, without markdown fences or prose outside the JSON, using exactly this schema:
 {
@@ -22,20 +22,18 @@ Return ONLY one valid JSON object, without markdown fences or prose outside the 
   "risks": ["2-4 items, each citing a real supplied figure"],
   "quality": { "score": 0, "rationale": "one sentence" },
   "cases": {
-    "bear": { "revenueCagr": 0, "exitNetMargin": 0, "exitPe": 0, "impliedPrice": 0, "rationale": "explicit assumptions and reasoning" },
-    "base": { "revenueCagr": 0, "exitNetMargin": 0, "exitPe": 0, "impliedPrice": 0, "rationale": "explicit assumptions and reasoning" },
-    "bull": { "revenueCagr": 0, "exitNetMargin": 0, "exitPe": 0, "impliedPrice": 0, "rationale": "explicit assumptions and reasoning" }
+    "bear": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
+    "base": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
+    "bull": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" }
   },
   "dataGaps": ["concepts that were null and limited the analysis"]
 }
 
 Use percentage-point numbers for revenueCagr and exitNetMargin: 8.5 means 8.5%, not 0.085.
-For each case, calculate impliedPrice exactly as follows:
-1. Project the supplied latest actual revenue for three years at revenueCagr.
-2. Apply exitNetMargin to projected revenue to obtain exit net income.
-3. Divide exit net income by the supplied latest diluted share count to obtain EPS.
-4. Multiply EPS by exitPe.
-If latest revenue or latest diluted shares are null, set impliedPrice to null rather than guessing.
+For multipleType, use "pe" (price / earnings) ONLY when projected exit net income is positive.
+When projected exit net margin is zero or negative, you MUST use "ps" (price / sales, meaning market capitalisation divided by revenue), because P/E is undefined for loss-making companies.
+multipleValue is the numeric multiple for the selected multipleType.
+Do not calculate or return impliedPrice; the server will calculate it from the supplied assumptions and filed data.
 Keep all claims tied to the supplied filed figures, and ensure strengths and risks cite those figures explicitly.`;
 
 function jsonResponse(body, status, headers) {
@@ -140,40 +138,65 @@ function latestFiledValue(series, fiscalYears) {
   return { value: null, fiscalYear: null };
 }
 
-function reconcileCase(modelCase, latestRevenue, latestShares) {
-  if (!modelCase || typeof modelCase !== "object" || Array.isArray(modelCase)) return modelCase;
+function priceCase(modelCase, latestRevenue, latestShares) {
+  const validCase = modelCase && typeof modelCase === "object" && !Array.isArray(modelCase)
+    ? modelCase
+    : {};
+  const revenueCagr = finiteNumber(validCase.revenueCagr);
+  const exitNetMargin = finiteNumber(validCase.exitNetMargin);
+  const multipleType = validCase.multipleType === "pe" || validCase.multipleType === "ps"
+    ? validCase.multipleType
+    : null;
+  const multipleValue = finiteNumber(validCase.multipleValue);
+  const revenue = finiteNumber(latestRevenue);
+  const shares = finiteNumber(latestShares);
+  let projectedRevenue = null;
+  let exitNetIncome = null;
+  let impliedPrice = null;
+  let methodError = null;
 
-  const revenueCagr = finiteNumber(modelCase.revenueCagr);
-  const exitNetMargin = finiteNumber(modelCase.exitNetMargin);
-  const exitPe = finiteNumber(modelCase.exitPe);
-  const modelPrice = finiteNumber(modelCase.impliedPrice);
-  let rawComputedPrice = null;
-
-  if (
-    latestRevenue != null &&
-    latestShares != null &&
-    latestShares > 0 &&
-    revenueCagr != null &&
-    exitNetMargin != null &&
-    exitPe != null
-  ) {
-    const projectedRevenue = latestRevenue * Math.pow(1 + revenueCagr / 100, 3);
-    const exitNetIncome = projectedRevenue * (exitNetMargin / 100);
-    const computed = exitNetIncome / latestShares * exitPe;
-    if (Number.isFinite(computed)) rawComputedPrice = computed;
+  if (revenue == null) methodError = "Latest revenue is missing";
+  else if (revenueCagr == null) methodError = "Revenue CAGR is missing";
+  else {
+    projectedRevenue = revenue * Math.pow(1 + revenueCagr / 100, 3);
+    if (!Number.isFinite(projectedRevenue)) methodError = "Computed price is not meaningful";
   }
 
-  let priceCheckFailed = false;
-  if (rawComputedPrice != null && modelPrice != null) {
-    priceCheckFailed = rawComputedPrice === 0
-      ? modelPrice !== 0
-      : Math.abs(modelPrice - rawComputedPrice) / Math.abs(rawComputedPrice) > 0.15;
+  if (!methodError && exitNetMargin == null) methodError = "Exit net margin is missing";
+  else if (!methodError) {
+    exitNetIncome = projectedRevenue * (exitNetMargin / 100);
+    if (!Number.isFinite(exitNetIncome)) methodError = "Computed price is not meaningful";
+  }
+
+  if (!methodError && (shares == null || shares <= 0)) {
+    methodError = "Diluted shares are missing or zero";
+  } else if (!methodError && multipleType == null) {
+    methodError = "Multiple type is missing or invalid";
+  } else if (!methodError && multipleValue == null) {
+    methodError = "Multiple value is missing";
+  } else if (!methodError && multipleType === "pe" && exitNetIncome <= 0) {
+    methodError = "P/E is not meaningful for negative projected earnings";
+  } else if (!methodError) {
+    const price = multipleType === "pe"
+      ? (exitNetIncome / shares) * multipleValue
+      : (projectedRevenue * multipleValue) / shares;
+    if (!Number.isFinite(price) || price < 0) {
+      methodError = "Computed price is not meaningful";
+    } else {
+      impliedPrice = Number(price.toFixed(2));
+    }
   }
 
   return {
-    ...modelCase,
-    computedPrice: rawComputedPrice == null ? null : Number(rawComputedPrice.toFixed(2)),
-    priceCheckFailed,
+    revenueCagr,
+    exitNetMargin,
+    multipleType,
+    multipleValue,
+    rationale: typeof validCase.rationale === "string" ? validCase.rationale : "",
+    impliedPrice,
+    projectedRevenue: Number.isFinite(projectedRevenue) ? Math.round(projectedRevenue) : null,
+    exitNetIncome: Number.isFinite(exitNetIncome) ? Math.round(exitNetIncome) : null,
+    methodError,
   };
 }
 
@@ -299,9 +322,9 @@ export async function onRequest(context) {
       ...modelAnalysis,
       cases: {
         ...cases,
-        bear: reconcileCase(cases.bear, latestRevenue.value, latestShares.value),
-        base: reconcileCase(cases.base, latestRevenue.value, latestShares.value),
-        bull: reconcileCase(cases.bull, latestRevenue.value, latestShares.value),
+        bear: priceCase(cases.bear, latestRevenue.value, latestShares.value),
+        base: priceCase(cases.base, latestRevenue.value, latestShares.value),
+        bull: priceCase(cases.bull, latestRevenue.value, latestShares.value),
       },
     };
     const result = {

@@ -104,7 +104,7 @@ function formatRatio(value) {
 }
 
 function formatPrice(value) {
-  return Number.isFinite(value) ? `$${value.toFixed(2)}` : "—";
+  return Number.isFinite(value) && value >= 0 ? `$${value.toFixed(2)}` : "—";
 }
 
 async function responseError(response) {
@@ -129,7 +129,7 @@ function StatementTable({ definition, statement, years }) {
         <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              <th style={{ ...EYEBROW_STYLE, textAlign: "left", padding: "9px 16px", borderTop: "1px solid var(--border-hairline)" }}>Filed figures</th>
+              <th style={{ ...EYEBROW_STYLE, position: "sticky", left: 0, zIndex: 1, background: "var(--void-500)", textAlign: "left", padding: "9px 16px", borderTop: "1px solid var(--border-hairline)" }}>Filed figures</th>
               {years.map(year => (
                 <th key={year} style={{ ...EYEBROW_STYLE, textAlign: "right", padding: "9px 14px", borderTop: "1px solid var(--border-hairline)" }}>{year}</th>
               ))}
@@ -138,7 +138,7 @@ function StatementTable({ definition, statement, years }) {
           <tbody>
             {definition.rows.map(([key, label, kind]) => (
               <tr key={key}>
-                <td style={{ color: "var(--ink-300)", fontSize: 11, padding: "9px 16px", borderTop: "1px solid var(--border-hairline)", whiteSpace: "nowrap" }}>{label}</td>
+                <td style={{ position: "sticky", left: 0, zIndex: 1, background: "var(--void-500)", color: "var(--ink-300)", fontSize: 11, padding: "9px 16px", borderTop: "1px solid var(--border-hairline)", whiteSpace: "nowrap" }}>{label}</td>
                 {years.map(year => {
                   const value = statement?.[key]?.[year];
                   return (
@@ -197,25 +197,27 @@ function ResearchCases({ cases }) {
         const scenario = cases?.[key];
         return (
           <article key={key} style={{ border: `1px solid color-mix(in srgb, ${meta.color} 30%, var(--border-hairline))`, borderRadius: 14, padding: 14, background: "rgba(255,255,255,0.02)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
+            <div style={{ marginBottom: 12 }}>
               <div style={{ ...EYEBROW_STYLE, color: meta.color }}>{meta.label} case</div>
-              {scenario?.priceCheckFailed && (
-                <span style={{ color: "var(--down-400)", border: "1px solid color-mix(in srgb, var(--down-400) 45%, transparent)", borderRadius: 999, padding: "3px 7px", fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em" }}>
-                  assumptions don&apos;t reconcile
-                </span>
-              )}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "7px 12px", alignItems: "baseline" }}>
               <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Revenue CAGR</span>
               <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatPercent(scenario?.revenueCagr)}</span>
               <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Exit net margin</span>
               <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatPercent(scenario?.exitNetMargin)}</span>
-              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Exit P/E</span>
-              <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatRatio(scenario?.exitPe)}</span>
-              <span style={{ color: "var(--ink-300)", fontSize: 10, fontWeight: 700 }}>Model implied price</span>
-              <span style={{ color: meta.color, fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800 }}>{formatPrice(scenario?.impliedPrice)}</span>
-              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>From stated assumptions</span>
-              <span style={{ color: scenario?.priceCheckFailed ? "var(--down-400)" : "var(--ink-200)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatPrice(scenario?.computedPrice)}</span>
+              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>
+                {scenario?.multipleType === "pe" ? "Exit P/E" : scenario?.multipleType === "ps" ? "Exit P/S" : "Exit multiple"}
+              </span>
+              <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatRatio(scenario?.multipleValue)}</span>
+              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Projected FY revenue</span>
+              <span style={{ color: "var(--ink-200)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatMagnitude(scenario?.projectedRevenue, "currency")}</span>
+              <span style={{ color: "var(--ink-300)", fontSize: 10, fontWeight: 700 }}>Implied price</span>
+              <span style={{ textAlign: "right" }}>
+                <span style={{ color: meta.color, fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800 }}>{formatPrice(scenario?.impliedPrice)}</span>
+                {scenario?.impliedPrice == null && scenario?.methodError && (
+                  <span style={{ display: "block", maxWidth: 170, marginTop: 3, color: "var(--ink-400)", fontSize: 10, lineHeight: 1.35 }}>{scenario.methodError}</span>
+                )}
+              </span>
             </div>
             {scenario?.rationale && <p style={{ margin: "12px 0 0", color: "var(--ink-300)", fontSize: 11, lineHeight: 1.55 }}>{scenario.rationale}</p>}
           </article>

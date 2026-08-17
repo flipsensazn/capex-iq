@@ -8,7 +8,7 @@
 
 const CACHE_KEY = "roboticsIntel";
 const CACHE_TTL = 6 * 60 * 60 * 1000;
-const MODEL     = "gemini-2.5-flash";
+const MODEL     = "gemini-3.5-flash-lite";
 
 const COMPANY_IDS = ["TSLA", "FIGURE", "AGILITY", "UNITREE", "ONEX", "XPEV", "BYD"];
 

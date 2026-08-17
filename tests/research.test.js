@@ -94,6 +94,25 @@ function companyFactsFixture() {
   };
 }
 
+function aaoiCompanyFactsFixture() {
+  return {
+    entityName: "APPLIED OPTOELECTRONICS, INC.",
+    facts: {
+      "us-gaap": {
+        RevenueFromContractWithCustomerExcludingAssessedTax: {
+          units: { USD: [fact(455_715_000, 2025, "2025-12-31")] },
+        },
+        NetIncomeLoss: {
+          units: { USD: [fact(-38_230_000, 2025, "2025-12-31")] },
+        },
+        WeightedAverageNumberOfDilutedSharesOutstanding: {
+          units: { shares: [fact(60_183_987, 2025, "2025-12-31")] },
+        },
+      },
+    },
+  };
+}
+
 async function requestAsAdmin({ ticker, companyFacts = companyFactsFixture() }) {
   const teamDomain = `test-${crypto.randomUUID()}.example.com`;
   const accessAud = "test-audience";
@@ -277,6 +296,7 @@ async function requestResearchAsAdmin({
   geminiAnalysis,
   cachedResult,
   geminiKey = "test-gemini-key",
+  companyFacts = companyFactsFixture(),
 }) {
   const teamDomain = `research-${crypto.randomUUID()}.example.com`;
   const accessAud = "research-audience";
@@ -292,7 +312,7 @@ async function requestResearchAsAdmin({
     timestamp: Date.now(),
   }), { expirationTtl: 60 });
   if (cachedResult) {
-    await kv.put(`research_v1_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+    await kv.put(`research_v2_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
 
   const originalFetch = globalThis.fetch;
@@ -310,7 +330,7 @@ async function requestResearchAsAdmin({
       });
     }
     if (href === "https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json") {
-      return Response.json(companyFactsFixture());
+      return Response.json(companyFacts);
     }
     if (href.startsWith("https://generativelanguage.googleapis.com/")) {
       geminiCalls += 1;
@@ -349,6 +369,21 @@ async function requestResearchAsAdmin({
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+function geminiAnalysisForCase(scenario) {
+  return {
+    summary: "Revenue and earnings were assessed from the supplied filed figures.",
+    strengths: ["Revenue data was available."],
+    risks: ["Scenario outcomes depend on the stated assumptions."],
+    quality: { score: 72, rationale: "The key pricing inputs were available." },
+    cases: {
+      bear: { ...scenario, rationale: "Bear assumptions." },
+      base: { ...scenario, rationale: "Base assumptions." },
+      bull: { ...scenario, rationale: "Bull assumptions." },
+    },
+    dataGaps: [],
+  };
 }
 
 test("research rejects a non-admin with zero Gemini calls", { concurrency: false }, async () => {
@@ -392,30 +427,87 @@ test("research rejects an invalid ticker before upstream work", { concurrency: f
   assert.equal(geminiCalls, 0);
 });
 
-test("research flags a case whose stated assumptions do not reconcile", { concurrency: false }, async () => {
-  const geminiAnalysis = {
-    summary: "Revenue increased from 1,000 in FY2024 to 1,200 in FY2025. Net income also increased from 200 to 300.",
-    strengths: ["FY2025 revenue was 1,200, up from 1,000 in FY2024.", "FY2025 net income was 300."],
-    risks: ["Gross profit data was unavailable.", "Long-term debt data was unavailable."],
-    quality: { score: 72, rationale: "Revenue and net income improved, but several filed concepts were unavailable." },
-    cases: {
-      bear: { revenueCagr: 0, exitNetMargin: 10, exitPe: 10, impliedPrice: 12, rationale: "No growth and a 10% margin." },
-      base: { revenueCagr: 10, exitNetMargin: 20, exitPe: 20, impliedPrice: 63.89, rationale: "Moderate growth and margin." },
-      bull: { revenueCagr: 20, exitNetMargin: 25, exitPe: 30, impliedPrice: 999, rationale: "High growth and margin." },
-    },
-    dataGaps: ["grossProfit", "longTermDebt"],
-  };
+test("research rejects P/E pricing when projected earnings are negative", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr: 5,
+    exitNetMargin: -5,
+    multipleType: "pe",
+    multipleValue: 5,
+  });
   const { response, geminiCalls } = await requestResearchAsAdmin({ geminiAnalysis });
   const body = await response.json();
+  const bear = body.analysis.cases.bear;
 
   assert.equal(response.status, 200);
   assert.equal(geminiCalls, 1);
   assert.equal(body.currentPrice, 400);
   assert.equal(body.latestFiscalYear, 2025);
-  assert.equal(body.analysis.cases.bull.impliedPrice, 999);
-  assert.equal(body.analysis.cases.bull.computedPrice, 155.52);
-  assert.equal(body.analysis.cases.bull.priceCheckFailed, true);
-  assert.equal(body.analysis.cases.base.priceCheckFailed, false);
+  assert.equal(bear.impliedPrice, null);
+  assert.ok(bear.methodError);
+  assert.ok(bear.impliedPrice == null || bear.impliedPrice >= 0);
+});
+
+test("research computes a positive P/S price for a loss-making company", { concurrency: false }, async () => {
+  const revenue = 455_715_000;
+  const shares = 60_183_987;
+  const revenueCagr = 10;
+  const multipleValue = 2.5;
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr,
+    exitNetMargin: -2,
+    multipleType: "ps",
+    multipleValue,
+  });
+  const { response } = await requestResearchAsAdmin({
+    geminiAnalysis,
+    companyFacts: aaoiCompanyFactsFixture(),
+  });
+  const body = await response.json();
+  const base = body.analysis.cases.base;
+  const projectedRevenue = revenue * Math.pow(1 + revenueCagr / 100, 3);
+  const expectedPrice = (projectedRevenue * multipleValue) / shares;
+
+  assert.equal(response.status, 200);
+  assert.equal(base.methodError, null);
+  assert.ok(base.impliedPrice > 0);
+  assert.ok(Math.abs(base.impliedPrice - expectedPrice) <= 0.01);
+  assert.equal(base.projectedRevenue, Math.round(projectedRevenue));
+});
+
+test("research computes a P/E price from positive projected earnings", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr: 10,
+    exitNetMargin: 20,
+    multipleType: "pe",
+    multipleValue: 20,
+  });
+  const { response } = await requestResearchAsAdmin({ geminiAnalysis });
+  const body = await response.json();
+  const base = body.analysis.cases.base;
+
+  assert.equal(response.status, 200);
+  assert.equal(base.impliedPrice, 63.89);
+  assert.equal(base.projectedRevenue, 1597);
+  assert.equal(base.exitNetIncome, 319);
+  assert.equal(base.methodError, null);
+});
+
+test("research returns an explained null price when diluted shares are missing", { concurrency: false }, async () => {
+  const companyFacts = companyFactsFixture();
+  delete companyFacts.facts["us-gaap"].WeightedAverageNumberOfDilutedSharesOutstanding;
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr: 10,
+    exitNetMargin: 20,
+    multipleType: "pe",
+    multipleValue: 20,
+  });
+  const { response } = await requestResearchAsAdmin({ geminiAnalysis, companyFacts });
+  const body = await response.json();
+  const base = body.analysis.cases.base;
+
+  assert.equal(response.status, 200);
+  assert.equal(base.impliedPrice, null);
+  assert.match(base.methodError, /shares/i);
 });
 
 test("research returns a cached result without calling Gemini", { concurrency: false }, async () => {

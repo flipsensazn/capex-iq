@@ -14,7 +14,7 @@ const CACHE_KEY = "capexIntel";
 // staleness tripwire in the handler.
 const STALE_TOTAL_FLOOR = 400;
 const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours in ms
-const MODEL     = "gemini-2.5-flash";
+const MODEL     = "gemini-3.5-flash-lite";
 
 const SECTORS = [
   {
