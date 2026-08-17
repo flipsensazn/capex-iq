@@ -75,7 +75,7 @@ async function callGemini(promptText, apiKey, temperature, maxTokens, timeoutMs 
         body: JSON.stringify({
           contents: [{ parts: [{ text: promptText }] }],
           ...(grounded ? { tools: [{ google_search: {} }] } : {}),
-          generationConfig: { temperature, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
+          generationConfig: { temperature, maxOutputTokens: maxTokens },
         }),
       }
     );

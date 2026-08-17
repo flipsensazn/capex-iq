@@ -57,9 +57,12 @@ async function callGemini(apiKey, systemPrompt, userContent, maxTokens = 900, ti
       temperature: 0.2,
       maxOutputTokens: maxTokens,
       responseMimeType: "application/json",
-      // Disable thinking mode — we need fast structured JSON, not deep reasoning.
-      // Thinking tokens also leak into the response text and break JSON parsing.
-      thinkingConfig: { thinkingBudget: 0 },
+      // No thinkingConfig: Gemini 3.x replaced `thinkingBudget` with
+      // `thinking_level`, so the old `thinkingBudget: 0` is rejected outright
+      // with 400 INVALID_ARGUMENT. This model already defaults to minimal
+      // thinking, which is what we wanted — fast structured JSON, no deep
+      // reasoning, and no thinking tokens leaking in to break JSON parsing.
+      // To tune it explicitly, use `thinkingConfig: { thinkingLevel: "..." }`.
     },
   });
 

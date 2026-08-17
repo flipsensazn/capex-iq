@@ -99,7 +99,10 @@ async function callGemini(apiKey, fundamentals, currentPrice, calculationInputs)
           temperature: 0.2,
           maxOutputTokens: 4096,
           responseMimeType: "application/json",
-          thinkingConfig: { thinkingBudget: 0 },
+          // No thinkingConfig: Gemini 3.x replaced `thinkingBudget` with
+          // `thinking_level`, so the old `thinkingBudget: 0` is rejected with
+          // 400 INVALID_ARGUMENT. This model defaults to minimal thinking,
+          // which is what we want. Tune via `thinkingLevel` if ever needed.
         },
       }),
     }

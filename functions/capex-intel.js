@@ -141,7 +141,6 @@ async function callGemini(promptText, apiKey, temperature, maxTokens, timeoutMs 
           generationConfig: {
             temperature: temperature,
             maxOutputTokens: maxTokens,
-            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
       }
