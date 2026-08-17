@@ -148,7 +148,7 @@ async function responseError(response) {
 
 function StatementTable({ definition, statement, years }) {
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div style={{ width: "100%", maxWidth: "100%", minWidth: 0, overflowX: "auto" }}>
       <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse" }}>
         <thead>
           <tr>
@@ -190,9 +190,9 @@ function StatementTable({ definition, statement, years }) {
 }
 
 function SeriesChart({ title, series, years, formatValue }) {
-  const width = 720;
-  const height = 300;
-  const margin = { top: 18, right: 18, bottom: 36, left: 64 };
+  const width = 420;
+  const height = 320;
+  const margin = { top: 14, right: 10, bottom: 30, left: 52 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const values = series.flatMap(item => years
@@ -210,17 +210,17 @@ function SeriesChart({ title, series, years, formatValue }) {
   const ticks = [domainMax, (domainMax + domainMin) / 2, domainMin];
   const yearWidth = years.length ? plotWidth / years.length : plotWidth;
   const groupWidth = yearWidth * 0.72;
-  const barGap = 3;
+  const barGap = 2;
   const barWidth = Math.max(2, (groupWidth - barGap * Math.max(0, series.length - 1)) / Math.max(1, series.length));
 
   return (
     <>
       <div style={{ padding: "14px 16px 4px" }}>
         <div style={EYEBROW_STYLE}>{title}</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "7px 14px", marginTop: 9 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 10px", marginTop: 9 }}>
           {series.map(item => (
-            <div key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--ink-300)", fontSize: 10 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color }} />
+            <div key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--ink-300)", fontSize: 9 }}>
+              <span style={{ width: 6, height: 6, flex: "0 0 6px", borderRadius: 2, background: item.color }} />
               {item.label}
             </div>
           ))}
@@ -238,7 +238,7 @@ function SeriesChart({ title, series, years, formatValue }) {
           return (
             <g key={`${tick}-${index}`}>
               <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} stroke="var(--border-hairline)" />
-              <text x={margin.left - 9} y={y + 3.5} textAnchor="end" fill="var(--ink-500)" fontFamily="var(--font-mono)" fontSize="9">
+              <text x={margin.left - 7} y={y + 3} textAnchor="end" fill="var(--ink-500)" fontFamily="var(--font-mono)" fontSize="8">
                 {hasData ? formatValue(tick) : "—"}
               </text>
             </g>
@@ -267,7 +267,7 @@ function SeriesChart({ title, series, years, formatValue }) {
                   </rect>
                 );
               })}
-              <text x={margin.left + yearIndex * yearWidth + yearWidth / 2} y={height - 13} textAnchor="middle" fill="var(--ink-400)" fontFamily="var(--font-mono)" fontSize="10">
+              <text x={margin.left + yearIndex * yearWidth + yearWidth / 2} y={height - 11} textAnchor="middle" fill="var(--ink-400)" fontFamily="var(--font-mono)" fontSize="9">
                 {year}
               </text>
             </g>
@@ -480,6 +480,26 @@ export default function ResearchPanel() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <style>{`
+        .rp-chart-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 13px;
+          min-width: 0;
+        }
+
+        @media (min-width: 700px) {
+          .rp-chart-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (min-width: 1100px) {
+          .rp-chart-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+        }
+      `}</style>
       <section style={{ ...PANEL_STYLE, padding: 18 }}>
         <div style={EYEBROW_STYLE}>SEC-filed equity research</div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, flexWrap: "wrap", marginTop: 8 }}>
@@ -528,7 +548,7 @@ export default function ResearchPanel() {
 
           <MetricsStrip data={fundamentals} latestYear={latestYear} />
 
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14 }}>
+          <div className="rp-chart-grid">
             {STATEMENTS.map(definition => (
               <StatementChart key={definition.key} definition={definition} statement={fundamentals.statements?.[definition.key]} years={years} />
             ))}
