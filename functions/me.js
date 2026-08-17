@@ -1,13 +1,13 @@
 // functions/me.js
 //
 // GET /me — who is this request, according to Cloudflare Access?
-//   { email: "user@x.com" | null, isAdmin: bool, authConfigured: bool }
+//   { email: "user@x.com" | null, isAdmin: bool, canResearch: bool, authConfigured: bool }
 //
 // The dashboard calls this on load: a valid admin identity auto-enables
 // editing (no password prompt); a null email just means the auth layer
 // isn't configured yet or the visitor hasn't signed in.
 
-import { getAccessPayload, isAdminEmail } from "./access-lib.js";
+import { getAccessPayload, isAdminEmail, isAnalyzeAllowedEmail } from "./access-lib.js";
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -40,6 +40,7 @@ export async function onRequest(context) {
   return new Response(JSON.stringify({
     email,
     isAdmin: isAdminEmail(email, env),
+    canResearch: isAnalyzeAllowedEmail(email, env),
     authConfigured,
   }), { status: 200, headers });
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { onRequest as fundamentals } from "../functions/fundamentals.js";
+import { onRequest as me } from "../functions/me.js";
 import { onRequest as research } from "../functions/research.js";
 
 const b64url = value => Buffer.from(value).toString("base64url");
@@ -120,13 +121,20 @@ function aaoiCompanyFactsFixture() {
   };
 }
 
-async function requestAsAdmin({ ticker, companyFacts = companyFactsFixture() }) {
+async function requestFundamentals({
+  ticker,
+  companyFacts = companyFactsFixture(),
+  email = "admin@example.com",
+  sub = "admin-123",
+  adminEmails = "admin@example.com",
+  analyzeAllowedEmails = "",
+}) {
   const teamDomain = `test-${crypto.randomUUID()}.example.com`;
   const accessAud = "test-audience";
   const { jwt, jwk } = await createAccessJwt({
     aud: accessAud,
-    email: "admin@example.com",
-    sub: "admin-123",
+    email,
+    sub,
   });
   const kv = createKv();
   const originalFetch = globalThis.fetch;
@@ -160,7 +168,8 @@ async function requestAsAdmin({ ticker, companyFacts = companyFactsFixture() }) 
       env: {
         ACCESS_TEAM_DOMAIN: teamDomain,
         ACCESS_AUD: accessAud,
-        ADMIN_EMAILS: "admin@example.com",
+        ADMIN_EMAILS: adminEmails,
+        ANALYZE_ALLOWED_EMAILS: analyzeAllowedEmails,
         ALLOWED_ORIGIN: "https://capex-iq.us",
         SHARED_DATA: kv,
       },
@@ -171,7 +180,46 @@ async function requestAsAdmin({ ticker, companyFacts = companyFactsFixture() }) 
   }
 }
 
-test("fundamentals rejects a non-admin before SEC fetches", { concurrency: false }, async () => {
+async function requestMeAsVerifiedMember({ email, adminEmails, analyzeAllowedEmails }) {
+  const teamDomain = `me-${crypto.randomUUID()}.example.com`;
+  const accessAud = "me-audience";
+  const { jwt, jwk } = await createAccessJwt({
+    aud: accessAud,
+    email,
+    sub: `member-${crypto.randomUUID()}`,
+  });
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href === `https://${teamDomain}/cdn-cgi/access/certs`) {
+      return Response.json({ keys: [jwk] });
+    }
+    throw new Error(`Unexpected upstream request: ${href}`);
+  };
+
+  try {
+    return await me({
+      request: new Request("https://capex-iq.us/me", {
+        headers: {
+          Cookie: `CF_Authorization=${jwt}`,
+          Origin: "https://capex-iq.us",
+        },
+      }),
+      env: {
+        ACCESS_TEAM_DOMAIN: teamDomain,
+        ACCESS_AUD: accessAud,
+        ADMIN_EMAILS: adminEmails,
+        ANALYZE_ALLOWED_EMAILS: analyzeAllowedEmails,
+        ALLOWED_ORIGIN: "https://capex-iq.us",
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("fundamentals rejects requests without a verified Access identity", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
   let fetches = 0;
   globalThis.fetch = async () => {
@@ -190,16 +238,68 @@ test("fundamentals rejects a non-admin before SEC fetches", { concurrency: false
       },
     });
 
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { error: "Forbidden" });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: "Authentication required" });
     assert.equal(fetches, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
+test("fundamentals rejects a verified non-allow-listed member before SEC fetches", { concurrency: false }, async () => {
+  const { response, secRequests } = await requestFundamentals({
+    ticker: "MSFT",
+    email: "member@example.com",
+    sub: "member-not-allowed",
+    adminEmails: "admin@example.com",
+    analyzeAllowedEmails: "allowed@example.com",
+  });
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: "Analysis access is not enabled for this account",
+    code: "members_only",
+  });
+  assert.equal(secRequests.length, 0);
+});
+
+test("fundamentals allows an allow-listed member who is not an admin", { concurrency: false }, async () => {
+  const { response, secRequests } = await requestFundamentals({
+    ticker: "MSFT",
+    email: "member@example.com",
+    sub: "member-allowed",
+    adminEmails: "admin@example.com",
+    analyzeAllowedEmails: "other@example.com, MEMBER@EXAMPLE.COM ",
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(secRequests.length, 2);
+});
+
+test("me exposes research capability for admins and non-allow-listed members", { concurrency: false }, async () => {
+  const adminResponse = await requestMeAsVerifiedMember({
+    email: "admin@example.com",
+    adminEmails: "admin@example.com",
+    analyzeAllowedEmails: "",
+  });
+  const memberResponse = await requestMeAsVerifiedMember({
+    email: "member@example.com",
+    adminEmails: "admin@example.com",
+    analyzeAllowedEmails: "allowed@example.com",
+  });
+  const adminBody = await adminResponse.json();
+  const memberBody = await memberResponse.json();
+
+  assert.equal(adminResponse.status, 200);
+  assert.equal(adminBody.isAdmin, true);
+  assert.equal(adminBody.canResearch, true);
+  assert.equal(memberResponse.status, 200);
+  assert.equal(memberBody.isAdmin, false);
+  assert.equal(memberBody.canResearch, false);
+});
+
 test("fundamentals rejects an invalid ticker before SEC fetches", { concurrency: false }, async () => {
-  const { response, secRequests } = await requestAsAdmin({ ticker: "bad ticker" });
+  const { response, secRequests } = await requestFundamentals({ ticker: "bad ticker" });
 
   assert.equal(response.status, 400);
   assert.equal((await response.json()).error, "Invalid ticker format");
@@ -207,7 +307,7 @@ test("fundamentals rejects an invalid ticker before SEC fetches", { concurrency:
 });
 
 test("fundamentals extracts annual facts and computes derived metrics", { concurrency: false }, async () => {
-  const { response, kv, secRequests } = await requestAsAdmin({ ticker: "msft" });
+  const { response, kv, secRequests } = await requestFundamentals({ ticker: "msft" });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -243,7 +343,7 @@ test("fundamentals extracts the most recent shares outstanding across unit keys"
     },
   };
 
-  const { response } = await requestAsAdmin({ ticker: "MSFT", companyFacts });
+  const { response } = await requestFundamentals({ ticker: "MSFT", companyFacts });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -251,7 +351,7 @@ test("fundamentals extracts the most recent shares outstanding across unit keys"
 });
 
 test("fundamentals reports null shares outstanding when the dei fact is absent", { concurrency: false }, async () => {
-  const { response } = await requestAsAdmin({ ticker: "MSFT" });
+  const { response } = await requestFundamentals({ ticker: "MSFT" });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -259,7 +359,7 @@ test("fundamentals reports null shares outstanding when the dei fact is absent",
 });
 
 test("fundamentals returns null when every candidate tag is missing", { concurrency: false }, async () => {
-  const { response } = await requestAsAdmin({ ticker: "MSFT" });
+  const { response } = await requestFundamentals({ ticker: "MSFT" });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -289,7 +389,7 @@ test("fundamentals merges candidate tags across years when a filer switches tags
     },
   };
 
-  const { response } = await requestAsAdmin({ ticker: "MSFT", companyFacts });
+  const { response } = await requestFundamentals({ ticker: "MSFT", companyFacts });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -319,7 +419,7 @@ test("fundamentals fills capex from an alternate tag", { concurrency: false }, a
     },
   };
 
-  const { response } = await requestAsAdmin({ ticker: "MSFT", companyFacts });
+  const { response } = await requestFundamentals({ ticker: "MSFT", companyFacts });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -327,29 +427,34 @@ test("fundamentals fills capex from an alternate tag", { concurrency: false }, a
   assert.deepEqual(body.statements.cashFlow.freeCashFlow, { 2024: 375, 2025: 450 });
 });
 
-async function requestResearchAsAdmin({
+async function requestResearch({
   ticker = "MSFT",
   geminiAnalysis,
   cachedResult,
   geminiKey = "test-gemini-key",
   companyFacts = companyFactsFixture(),
   currentPrice = 400,
+  priceEntry,
+  email = "admin@example.com",
+  sub = "research-admin",
+  adminEmails = "admin@example.com",
+  analyzeAllowedEmails = "",
 }) {
   const teamDomain = `research-${crypto.randomUUID()}.example.com`;
   const accessAud = "research-audience";
   const { jwt, jwk } = await createAccessJwt({
     aud: accessAud,
-    email: "admin@example.com",
-    sub: "research-admin",
+    email,
+    sub,
   });
   const kv = createKv();
   await kv.put("priceCache_v10", JSON.stringify({
-    data: { MSFT: { price: currentPrice, change: 0 } },
+    data: { MSFT: priceEntry ?? { price: currentPrice, change: 0 } },
     covered: ["MSFT"],
     timestamp: Date.now(),
   }), { expirationTtl: 60 });
   if (cachedResult) {
-    await kv.put(`research_v4_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+    await kv.put(`research_v5_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
 
   const originalFetch = globalThis.fetch;
@@ -398,7 +503,8 @@ async function requestResearchAsAdmin({
       env: {
         ACCESS_TEAM_DOMAIN: teamDomain,
         ACCESS_AUD: accessAud,
-        ADMIN_EMAILS: "admin@example.com",
+        ADMIN_EMAILS: adminEmails,
+        ANALYZE_ALLOWED_EMAILS: analyzeAllowedEmails,
         ALLOWED_ORIGIN: "https://capex-iq.us",
         GEMINI_API_KEY: geminiKey,
         SHARED_DATA: kv,
@@ -415,6 +521,14 @@ function geminiAnalysisForCase(scenario) {
     summary: "Revenue and earnings were assessed from the supplied filed figures.",
     strengths: ["Revenue data was available."],
     risks: ["Scenario outcomes depend on the stated assumptions."],
+    technical: {
+      read: "The supplied price context frames the recent trend and momentum.",
+      points: ["The current price was supplied by the server."],
+    },
+    macro: {
+      read: "Sector conditions provide qualitative context for the filed results.",
+      points: ["Competitive and regulatory conditions may affect execution."],
+    },
     quality: { score: 72, rationale: "The key pricing inputs were available." },
     cases: {
       bear: { ...scenario, rationale: "Bear assumptions." },
@@ -425,7 +539,7 @@ function geminiAnalysisForCase(scenario) {
   };
 }
 
-test("research rejects a non-admin with zero Gemini calls", { concurrency: false }, async () => {
+test("research rejects requests without a verified Access identity with zero Gemini calls", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
   let geminiCalls = 0;
   globalThis.fetch = async (url) => {
@@ -447,16 +561,33 @@ test("research rejects a non-admin with zero Gemini calls", { concurrency: false
       },
     });
 
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { error: "Forbidden" });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: "Authentication required" });
     assert.equal(geminiCalls, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
+test("research rejects a verified non-allow-listed member with zero Gemini calls", { concurrency: false }, async () => {
+  const { response, upstreamRequests, geminiCalls } = await requestResearch({
+    email: "member@example.com",
+    sub: "research-member-not-allowed",
+    adminEmails: "admin@example.com",
+    analyzeAllowedEmails: "allowed@example.com",
+  });
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: "Analysis access is not enabled for this account",
+    code: "members_only",
+  });
+  assert.equal(geminiCalls, 0);
+  assert.equal(upstreamRequests.length, 0);
+});
+
 test("research rejects an invalid ticker before upstream work", { concurrency: false }, async () => {
-  const { response, upstreamRequests, geminiCalls } = await requestResearchAsAdmin({
+  const { response, upstreamRequests, geminiCalls } = await requestResearch({
     ticker: "bad ticker",
   });
 
@@ -466,6 +597,53 @@ test("research rejects an invalid ticker before upstream work", { concurrency: f
   assert.equal(geminiCalls, 0);
 });
 
+test("research returns server-derived price context and model technical and macro lenses", { concurrency: false }, async () => {
+  const technical = {
+    read: "At $400, the shares are 4% higher over five days and sit within the supplied $300-$450 range.",
+    points: ["The supplied one-month change is 0%.", "Six-month change data is unavailable."],
+  };
+  const macro = {
+    read: "Enterprise software demand and regulation provide qualitative context for the filing trend.",
+    points: ["Competitive execution remains important.", "Supply-chain exposure is business-model dependent."],
+  };
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr: 5,
+    exitNetMargin: 20,
+    multipleType: "pe",
+    multipleValue: 20,
+  });
+  geminiAnalysis.technical = technical;
+  geminiAnalysis.macro = macro;
+  const priceEntry = {
+    price: 400,
+    change: -1.5,
+    change5D: 4,
+    change1M: 0,
+    change6M: null,
+    changeYTD: 12.25,
+    change1Y: 20,
+    week52Low: 300,
+    week52High: 450,
+    session: "REGULAR",
+  };
+  const { response, geminiCalls, geminiPrompts } = await requestResearch({
+    geminiAnalysis,
+    priceEntry,
+    email: "member@example.com",
+    sub: "research-member-allowed",
+    adminEmails: "admin@example.com",
+    analyzeAllowedEmails: "member@example.com",
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(geminiCalls, 1);
+  assert.deepEqual(body.priceContext, priceEntry);
+  assert.deepEqual(body.analysis.technical, technical);
+  assert.deepEqual(body.analysis.macro, macro);
+  assert.match(geminiPrompts[0], /"priceContext":\{"price":400/);
+});
+
 test("research rejects P/E pricing when projected earnings are negative", { concurrency: false }, async () => {
   const geminiAnalysis = geminiAnalysisForCase({
     revenueCagr: 5,
@@ -473,7 +651,7 @@ test("research rejects P/E pricing when projected earnings are negative", { conc
     multipleType: "pe",
     multipleValue: 5,
   });
-  const { response, geminiCalls } = await requestResearchAsAdmin({ geminiAnalysis });
+  const { response, geminiCalls } = await requestResearch({ geminiAnalysis });
   const body = await response.json();
   const bear = body.analysis.cases.bear;
 
@@ -497,7 +675,7 @@ test("research uses current shares outstanding for the per-share denominator", {
     multipleType: "ps",
     multipleValue,
   });
-  const { response } = await requestResearchAsAdmin({
+  const { response } = await requestResearch({
     geminiAnalysis,
     companyFacts: aaoiCompanyFactsFixture(),
   });
@@ -523,7 +701,7 @@ test("research falls back to the latest weighted-average diluted shares", { conc
     multipleType: "ps",
     multipleValue: 1,
   });
-  const { response } = await requestResearchAsAdmin({ geminiAnalysis });
+  const { response } = await requestResearch({ geminiAnalysis });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -545,7 +723,7 @@ test("research computes AAOI current P/S from price, chosen shares, and latest r
     multipleType: "ps",
     multipleValue: 2.5,
   });
-  const { response, geminiPrompts } = await requestResearchAsAdmin({
+  const { response, geminiPrompts } = await requestResearch({
     geminiAnalysis,
     companyFacts: aaoiCompanyFactsFixture(),
     currentPrice: price,
@@ -566,7 +744,7 @@ test("research reports null current P/E when latest net income is negative", { c
     multipleType: "ps",
     multipleValue: 2.5,
   });
-  const { response } = await requestResearchAsAdmin({
+  const { response } = await requestResearch({
     geminiAnalysis,
     companyFacts: aaoiCompanyFactsFixture(),
     currentPrice: 150.99,
@@ -584,7 +762,7 @@ test("research computes a P/E price from positive projected earnings", { concurr
     multipleType: "pe",
     multipleValue: 20,
   });
-  const { response } = await requestResearchAsAdmin({ geminiAnalysis });
+  const { response } = await requestResearch({ geminiAnalysis });
   const body = await response.json();
   const base = body.analysis.cases.base;
 
@@ -604,7 +782,7 @@ test("research returns an explained null price when diluted shares are missing",
     multipleType: "pe",
     multipleValue: 20,
   });
-  const { response } = await requestResearchAsAdmin({ geminiAnalysis, companyFacts });
+  const { response } = await requestResearch({ geminiAnalysis, companyFacts });
   const body = await response.json();
   const base = body.analysis.cases.base;
 
@@ -624,7 +802,7 @@ test("research returns a cached result without calling Gemini", { concurrency: f
     model: "gemini-2.5-flash",
     disclaimer: "This is a model-generated projection from filed data, not investment advice.",
   };
-  const { response, upstreamRequests, geminiCalls } = await requestResearchAsAdmin({
+  const { response, upstreamRequests, geminiCalls } = await requestResearch({
     cachedResult,
     geminiKey: undefined,
   });

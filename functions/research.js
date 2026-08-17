@@ -1,18 +1,18 @@
 // functions/research.js
 
-import { isAuthorizedAdmin } from "./access-lib.js";
+import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./access-lib.js";
 import { onRequest as fundamentalsHandler } from "./fundamentals.js";
 import { onRequest as pricesHandler } from "./prices.js";
 import { computeQualityScore } from "./quality-score.js";
 
-const CACHE_KEY_PREFIX = "research_v4_";
+const CACHE_KEY_PREFIX = "research_v5_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
 const MODEL = "gemini-3.5-flash-lite";
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
 
 const SYSTEM_PROMPT = `You are a disciplined equity financial analyst.
-Reason ONLY from the supplied filed SEC figures. Do not use outside knowledge and do not invent data.
+Reason ONLY from the supplied filed SEC figures, except that the technical section may use the supplied priceContext and the macro section may use qualitative general sector knowledge under the rules below. Do not invent data.
 When a supplied figure is null, say the data is unavailable rather than estimating or guessing it.
 The server computes every scenario price deterministically. Supply assumptions only and do NOT output a price.
 The quality score has been computed deterministically from the filed figures and is supplied as qualityScore. Write one sentence explaining what drives it, and do not contradict it or return a different score.
@@ -20,12 +20,23 @@ The market currently values this company at the supplied marketContext.currentPs
 If a chosen exit multiple differs materially from the current multiple, that case's rationale MUST state explicitly why the market's current multiple is expected to re-rate (compress or expand) and by roughly how much.
 After selecting assumptions, cross-check each resulting implied price against the supplied currentPrice. A case may land far from the current price ONLY when its rationale explicitly addresses that gap, for example by stating that the market is pricing in materially more growth than the filings support. A bull case far below the current price without such an explanation is incoherent and must be reconsidered.
 Do NOT contort assumptions merely to match the current price. An honest conclusion that the market is overpaying is acceptable and valuable when the rationale states it explicitly.
+The technical read must cite only the supplied priceContext figures. When a priceContext field is null, say the data is unavailable rather than inferring it. Do NOT invent chart patterns, support or resistance levels, or indicator values that cannot be derived from the supplied fields.
+The macro read is explicitly qualitative and may draw on general sector knowledge, but must NOT assert specific numbers such as revenue figures, market share percentages, or competitor financials that are not in the supplied data. Frame it as context, not fact-claims.
+Neither the technical nor macro section may emit a score. The deterministic quality score is the only score.
 
 Return ONLY one valid JSON object, without markdown fences or prose outside the JSON, using exactly this schema:
 {
   "summary": "3-5 sentence plain-English read of the financial trajectory",
   "strengths": ["2-4 items, each citing a real supplied figure"],
   "risks": ["2-4 items, each citing a real supplied figure"],
+  "technical": {
+    "read": "2-3 sentences on trend, momentum and position within the 52-week range",
+    "points": ["2-4 short observations, each citing a supplied price figure"]
+  },
+  "macro": {
+    "read": "2-3 sentences on sector dynamics, competitive position, supply-chain and regulatory context",
+    "points": ["2-4 short observations"]
+  },
   "quality": { "rationale": "one sentence explaining the supplied quality score" },
   "cases": {
     "bear": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
@@ -40,7 +51,7 @@ For multipleType, use "pe" (price / earnings) ONLY when projected exit net incom
 When projected exit net margin is zero or negative, you MUST use "ps" (price / sales, meaning market capitalisation divided by revenue), because P/E is undefined for loss-making companies.
 multipleValue is the numeric multiple for the selected multipleType.
 Do not calculate or return impliedPrice; the server will calculate it from the supplied assumptions and filed data.
-Keep all claims tied to the supplied filed figures, and ensure strengths and risks cite those figures explicitly.`;
+Keep financial claims tied to the supplied filed figures, ensure strengths and risks cite those figures explicitly, and follow the technical and macro sourcing rules above.`;
 
 function jsonResponse(body, status, headers) {
   return new Response(JSON.stringify(body), { status, headers });
@@ -92,8 +103,8 @@ function extractJson(text) {
   return null;
 }
 
-async function callGemini(apiKey, fundamentals, currentPrice, marketContext, calculationInputs, qualityScore) {
-  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, marketContext, calculationInputs, qualityScore })}`;
+async function callGemini(apiKey, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore) {
+  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore })}`;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
     {
@@ -103,7 +114,7 @@ async function callGemini(apiKey, fundamentals, currentPrice, marketContext, cal
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 4096,
+          maxOutputTokens: 5120,
           responseMimeType: "application/json",
           // No thinkingConfig: Gemini 3.x replaced `thinkingBudget` with
           // `thinking_level`, so the old `thinkingBudget: 0` is rejected with
@@ -137,6 +148,21 @@ async function callGemini(apiKey, fundamentals, currentPrice, marketContext, cal
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function buildPriceContext(entry) {
+  return {
+    price: finiteNumber(entry?.price),
+    change: finiteNumber(entry?.change),
+    change5D: finiteNumber(entry?.change5D),
+    change1M: finiteNumber(entry?.change1M),
+    change6M: finiteNumber(entry?.change6M),
+    changeYTD: finiteNumber(entry?.changeYTD),
+    change1Y: finiteNumber(entry?.change1Y),
+    week52Low: finiteNumber(entry?.week52Low),
+    week52High: finiteNumber(entry?.week52High),
+    session: typeof entry?.session === "string" ? entry.session : null,
+  };
 }
 
 function latestFiledValue(series, fiscalYears) {
@@ -221,18 +247,18 @@ function priceCase(modelCase, latestRevenue, latestShares) {
   };
 }
 
-async function getCurrentPrice(request, env, ticker) {
+async function getPriceContext(request, env, ticker) {
   try {
     const priceRequest = new Request(
       `https://internal/prices?tickers=${encodeURIComponent(ticker)}`,
       { method: "GET", headers: request.headers }
     );
     const response = await pricesHandler({ request: priceRequest, env });
-    if (!response.ok) return null;
+    if (!response.ok) return buildPriceContext(null);
     const body = await response.json();
-    return finiteNumber(body?.data?.[ticker]?.price);
+    return buildPriceContext(body?.data?.[ticker]);
   } catch {
-    return null;
+    return buildPriceContext(null);
   }
 }
 
@@ -263,8 +289,20 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Method Not Allowed" }, 405, headers);
   }
 
-  if (!await isAuthorizedAdmin(request, env, undefined)) {
+  const accessPayload = await getAccessPayload(request, env);
+  const memberKey = accessPayload?.sub || accessPayload?.email?.toLowerCase();
+  if (!memberKey) {
+    return jsonResponse({ error: "Authentication required" }, 401, headers);
+  }
+  if (!isTrustedOrigin(request, env)) {
     return jsonResponse({ error: "Forbidden" }, 403, headers);
+  }
+  const email = accessPayload?.email?.toLowerCase();
+  if (!isAnalyzeAllowedEmail(email, env)) {
+    return jsonResponse({
+      error: "Analysis access is not enabled for this account",
+      code: "members_only",
+    }, 403, headers);
   }
 
   const contentLength = Number(request.headers.get("Content-Length") || 0);
@@ -325,7 +363,8 @@ export async function onRequest(context) {
   }
 
   const qualityScore = computeQualityScore(fundamentals);
-  const currentPrice = await getCurrentPrice(request, env, ticker);
+  const priceContext = await getPriceContext(request, env, ticker);
+  const currentPrice = priceContext.price;
   const fiscalYears = Array.isArray(fundamentals.fiscalYears) ? fundamentals.fiscalYears : [];
   const latestFiscalYear = fiscalYears.length ? fiscalYears[fiscalYears.length - 1] : null;
   const latestRevenue = latestFiledValue(fundamentals?.statements?.income?.revenue, fiscalYears);
@@ -365,7 +404,7 @@ export async function onRequest(context) {
   };
 
   try {
-    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, marketContext, calculationInputs, qualityScore);
+    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore);
     const cases = modelAnalysis.cases || {};
     const analysis = {
       ...modelAnalysis,
@@ -386,6 +425,7 @@ export async function onRequest(context) {
       ticker,
       entityName: fundamentals.entityName ?? null,
       currentPrice,
+      priceContext,
       shareCount,
       shareCountBasis,
       shareCountAsOf,
