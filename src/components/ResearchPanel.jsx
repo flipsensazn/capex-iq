@@ -378,6 +378,248 @@ function priceChangeColor(value) {
   return "var(--ink-300)";
 }
 
+function formatChartDate(date) {
+  if (typeof date !== "string") return "—";
+  const [year, month, day] = date.split("-").map(Number);
+  if (![year, month, day].every(Number.isFinite)) return date;
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function annotationColor(kind) {
+  if (["periodHigh", "goldenCross", "biggestUpDay"].includes(kind)) return "var(--up-400)";
+  if (["periodLow", "deathCross", "biggestDownDay"].includes(kind)) return "var(--down-400)";
+  return "var(--accent)";
+}
+
+function PriceChart({ history, annotations }) {
+  if (!history || !Array.isArray(history.points)) return null;
+
+  const startIndex = typeof history.displayFrom === "string"
+    ? history.points.findIndex(point => typeof point?.date === "string" && point.date >= history.displayFrom)
+    : 0;
+  const points = (startIndex >= 0 ? history.points.slice(startIndex) : [])
+    .filter(point => typeof point?.date === "string" && Number.isFinite(point.close));
+  if (points.length < 2) return null;
+
+  const width = 760;
+  const height = 300;
+  const margin = { top: 40, right: 14, bottom: 30, left: 56 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const plotBottom = height - margin.bottom;
+  const values = points.flatMap(point => [point.close, point.ma20, point.ma50].filter(Number.isFinite));
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  const naturalRange = dataMax - dataMin;
+  const domainPadding = naturalRange > 0 ? naturalRange * 0.08 : Math.max(Math.abs(dataMax) * 0.02, 1);
+  const domainMin = dataMin - domainPadding;
+  const domainMax = dataMax + domainPadding;
+  const domainRange = domainMax - domainMin;
+  const xFor = index => margin.left + (index / (points.length - 1)) * plotWidth;
+  const yFor = value => margin.top + ((domainMax - value) / domainRange) * plotHeight;
+  const yTicks = [domainMax, (domainMax + domainMin) / 2, domainMin];
+  const xTickCount = Math.min(5, points.length);
+  const xTickIndexes = [...new Set(Array.from(
+    { length: xTickCount },
+    (_, index) => Math.round((index / Math.max(1, xTickCount - 1)) * (points.length - 1)),
+  ))];
+
+  function segmentsFor(key) {
+    const segments = [];
+    let segment = [];
+    points.forEach((point, index) => {
+      const value = point[key];
+      if (Number.isFinite(value)) {
+        segment.push([xFor(index), yFor(value)]);
+      } else if (segment.length) {
+        segments.push(segment);
+        segment = [];
+      }
+    });
+    if (segment.length) segments.push(segment);
+    return segments.filter(item => item.length > 1);
+  }
+
+  const lineSeries = [
+    { key: "close", label: "Close", color: "var(--accent)", strokeWidth: 1.6, dasharray: null },
+    { key: "ma20", label: "MA20", color: "var(--info-400)", strokeWidth: 1.1, dasharray: "3 3" },
+    { key: "ma50", label: "MA50", color: "var(--event-400)", strokeWidth: 1.1, dasharray: "8 4" },
+  ].map(series => ({ ...series, segments: segmentsFor(series.key) }));
+
+  const pointByDate = new Map(points.map((point, index) => [point.date, { point, index }]));
+  const labelHeight = 15;
+  const chartBottom = height - 20;
+  const placedLabels = [];
+  const annotationLayouts = (Array.isArray(annotations) ? annotations : [])
+    .map((annotation, originalIndex) => {
+      const match = pointByDate.get(annotation?.date);
+      const label = typeof annotation?.label === "string" ? annotation.label.trim() : "";
+      if (!match || !label || !Number.isFinite(match.point.close)) return null;
+      return { annotation, label, originalIndex, ...match };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.index - right.index || left.originalIndex - right.originalIndex)
+    .map(item => {
+      const markerX = xFor(item.index);
+      const markerY = yFor(item.point.close);
+      const labelWidth = Math.min(width - 8, Math.max(34, item.label.length * 5.3 + 10));
+      const desiredX = markerX - labelWidth / 2;
+      const rectX = Math.min(width - labelWidth - 3, Math.max(3, desiredX));
+      const horizontalOverlaps = placedLabels.filter(label =>
+        rectX < label.x + label.width + 3 && rectX + labelWidth + 3 > label.x
+      );
+      const lastOverlap = horizontalOverlaps[horizontalOverlaps.length - 1];
+      const preferredSide = lastOverlap?.side === "above" ? "below" : "above";
+      const sideOrder = [preferredSide, preferredSide === "above" ? "below" : "above"];
+      const candidates = [];
+
+      for (let gap = 9; gap <= 117; gap += 18) {
+        sideOrder.forEach(side => {
+          const y = side === "above" ? markerY - gap - labelHeight : markerY + gap;
+          if (y >= 3 && y + labelHeight <= chartBottom) candidates.push({ y, side });
+        });
+      }
+
+      let placement = candidates.find(candidate => !placedLabels.some(label =>
+        rectX < label.x + label.width + 3
+        && rectX + labelWidth + 3 > label.x
+        && candidate.y < label.y + labelHeight + 3
+        && candidate.y + labelHeight + 3 > label.y
+      ));
+
+      if (!placement) {
+        for (let y = 3; y + labelHeight <= chartBottom; y += labelHeight + 3) {
+          const overlaps = placedLabels.some(label =>
+            rectX < label.x + label.width + 3
+            && rectX + labelWidth + 3 > label.x
+            && y < label.y + labelHeight + 3
+            && y + labelHeight + 3 > label.y
+          );
+          if (!overlaps) {
+            placement = { y, side: y + labelHeight / 2 < markerY ? "above" : "below" };
+            break;
+          }
+        }
+      }
+
+      if (!placement) {
+        const side = preferredSide;
+        placement = {
+          side,
+          y: Math.min(chartBottom - labelHeight, Math.max(3, side === "above" ? markerY - 24 : markerY + 9)),
+        };
+      }
+
+      const nearLeft = desiredX < 3;
+      const nearRight = desiredX > width - labelWidth - 3;
+      const textAnchor = nearLeft ? "start" : nearRight ? "end" : "middle";
+      const textX = nearLeft ? rectX + 5 : nearRight ? rectX + labelWidth - 5 : rectX + labelWidth / 2;
+      const layout = {
+        ...item,
+        markerX,
+        markerY,
+        x: rectX,
+        y: placement.y,
+        width: labelWidth,
+        side: placement.side,
+        textAnchor,
+        textX,
+      };
+      placedLabels.push(layout);
+      return layout;
+    });
+
+  return (
+    <div style={{ width: "100%", maxWidth: "100%", minWidth: 0, marginTop: 10, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 12px", padding: "0 2px 5px" }}>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px 11px" }}>
+          {lineSeries.map(series => (
+            <div key={series.key} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--ink-300)", fontSize: 9 }}>
+              <svg width="18" height="6" aria-hidden="true" style={{ flex: "0 0 auto" }}>
+                <line x1="0" x2="18" y1="3" y2="3" stroke={series.color} strokeWidth={series.strokeWidth} strokeDasharray={series.dasharray || undefined} />
+              </svg>
+              {series.label}
+            </div>
+          ))}
+        </div>
+        <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9 }}>
+          {formatChartDate(points[0].date)} – {formatChartDate(points[points.length - 1].date)}
+        </div>
+      </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
+        role="img"
+        aria-label={`${history.ticker || "Ticker"} three-month closing price with moving averages`}
+        style={{ display: "block", width: "100%", maxWidth: "100%", height: "auto" }}
+      >
+        {yTicks.map((tick, index) => {
+          const y = yFor(tick);
+          return (
+            <g key={`${tick}-${index}`}>
+              <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} stroke="var(--border-hairline)" />
+              <text x={margin.left - 7} y={y + 3} textAnchor="end" fill="var(--ink-500)" fontFamily="var(--font-mono)" fontSize="8.5">
+                {formatPrice(tick)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={margin.left} x2={width - margin.right} y1={plotBottom} y2={plotBottom} stroke="var(--border-hairline)" />
+        {lineSeries.map(series => series.segments.map((segment, index) => (
+          <path
+            key={`${series.key}-${index}`}
+            d={segment.map(([x, y], pointIndex) => `${pointIndex ? "L" : "M"} ${x.toFixed(2)} ${y.toFixed(2)}`).join(" ")}
+            fill="none"
+            stroke={series.color}
+            strokeWidth={series.strokeWidth}
+            strokeDasharray={series.dasharray || undefined}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )))}
+        {xTickIndexes.map(index => {
+          const x = xFor(index);
+          const textAnchor = index === 0 ? "start" : index === points.length - 1 ? "end" : "middle";
+          return (
+            <text key={points[index].date} x={x} y={height - 10} textAnchor={textAnchor} fill="var(--ink-500)" fontFamily="var(--font-mono)" fontSize="9">
+              {formatChartDate(points[index].date)}
+            </text>
+          );
+        })}
+        {annotationLayouts.map(layout => {
+          const color = annotationColor(layout.annotation.kind);
+          const leaderEndX = Math.min(layout.x + layout.width - 4, Math.max(layout.x + 4, layout.markerX));
+          const leaderEndY = layout.side === "above" ? layout.y + labelHeight : layout.y;
+          return (
+            <g key={`${layout.annotation.id || layout.annotation.date}-${layout.originalIndex}`}>
+              <line
+                x1={layout.markerX}
+                x2={leaderEndX}
+                y1={layout.markerY + (layout.side === "above" ? -4 : 4)}
+                y2={leaderEndY}
+                stroke={color}
+                strokeWidth="0.8"
+                opacity="0.8"
+              />
+              <rect x={layout.x} y={layout.y} width={layout.width} height={labelHeight} rx="2.5" fill="var(--surface-card)" fillOpacity="0.9" stroke="var(--border-hairline)" />
+              <text x={layout.textX} y={layout.y + 10.5} textAnchor={layout.textAnchor} fill="var(--ink-200)" fontFamily="var(--font-mono)" fontSize="8.5">
+                {layout.label}
+              </text>
+              <circle cx={layout.markerX} cy={layout.markerY} r="3.5" fill={color}>
+                <title>{`${layout.label} · ${layout.annotation.date} · ${formatPrice(layout.point.close)}`}</title>
+              </circle>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function PriceContextStrip({ priceContext }) {
   const items = [
     ["Price", formatPrice(priceContext?.price), "var(--ink-100)"],
@@ -409,36 +651,37 @@ function hasLensContent(lens) {
   return Boolean(hasRead || hasPoints);
 }
 
-function AnalysisLens({ eyebrow, lens, children }) {
+function AnalysisLens({ eyebrow, lens, beforeRead, children }) {
   const read = typeof lens?.read === "string" ? lens.read.trim() : "";
   const points = Array.isArray(lens?.points)
     ? lens.points.filter(point => typeof point === "string" && point.trim()).map(point => point.trim())
     : [];
-  if (!read && !points.length) return null;
+  if (!read && !points.length && !beforeRead && !children) return null;
 
   return (
     <article style={{ minWidth: 0, border: "1px solid var(--border-hairline)", borderRadius: 12, padding: 14, background: "rgba(255,255,255,0.02)" }}>
       <div style={EYEBROW_STYLE}>{eyebrow}</div>
+      {beforeRead}
       {read && <p style={{ margin: "8px 0 0", color: "var(--ink-200)", fontSize: 11.5, lineHeight: 1.6 }}>{read}</p>}
-      {children}
       {points.length > 0 && (
         <ul style={{ margin: "10px 0 0", paddingLeft: 17, color: "var(--ink-300)", fontSize: 11, lineHeight: 1.55 }}>
           {points.map((point, index) => <li key={`${eyebrow}-${index}`} style={{ marginBottom: 5 }}>{point}</li>)}
         </ul>
       )}
+      {children}
     </article>
   );
 }
 
-function QualityBreakdown({ quality }) {
-  const components = Array.isArray(quality?.components) ? quality.components : [];
+function ScoreBreakdown({ title, scoreObject }) {
+  const components = Array.isArray(scoreObject?.components) ? scoreObject.components : [];
   if (!components.length) return null;
 
   return (
     <div style={{ marginTop: 13, padding: "11px 12px", border: "1px solid var(--border-hairline)", borderRadius: 10, background: "rgba(255,255,255,0.015)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 9 }}>
-        <div style={EYEBROW_STYLE}>Score components</div>
-        <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9.5 }}>{quality.basis || "No fiscal-year basis"}</div>
+        <div style={EYEBROW_STYLE}>{title}</div>
+        <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9.5 }}>{scoreObject.basis || "No fiscal-year basis"}</div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "9px 18px" }}>
         {components.map(component => {
@@ -460,6 +703,61 @@ function QualityBreakdown({ quality }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function CompositeSummary({ composite }) {
+  if (!composite || typeof composite !== "object") return null;
+
+  const score = Number.isFinite(composite.score) ? `${composite.score.toFixed(0)}/100` : "—";
+  const verdict = ["BUY", "HOLD", "SELL"].includes(composite.verdict) ? composite.verdict : null;
+  const verdictColor = verdict === "BUY"
+    ? "var(--up-400)"
+    : verdict === "HOLD"
+      ? "var(--warn)"
+      : "var(--down-400)";
+  const lenses = Array.isArray(composite.lenses) ? composite.lenses : [];
+
+  return (
+    <div style={{ marginTop: 14, padding: "13px 14px", border: "1px solid var(--border-hairline)", borderRadius: 12, background: "rgba(255,255,255,0.02)" }}>
+      <div style={EYEBROW_STYLE}>Composite score</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 4, flexWrap: "wrap" }}>
+        <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 27, fontWeight: 800 }}>{score}</span>
+        {verdict && (
+          <span style={{ color: verdictColor, background: `color-mix(in srgb, ${verdictColor} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${verdictColor} 42%, var(--border-hairline))`, borderRadius: 999, padding: "4px 8px", fontFamily: "var(--font-condensed)", fontSize: 9, fontWeight: 800, letterSpacing: "0.13em", textTransform: "uppercase" }}>
+            {verdict}
+          </span>
+        )}
+      </div>
+      <div style={{ marginTop: 4, color: "var(--ink-500)", fontSize: 9.5, lineHeight: 1.45 }}>
+        Model-assisted composite from filed figures and price data — not investment advice.
+      </div>
+      {!Number.isFinite(composite.score) && composite.note && (
+        <div style={{ marginTop: 5, color: "var(--ink-400)", fontSize: 10 }}>{composite.note}</div>
+      )}
+      {lenses.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginTop: 12 }}>
+          {lenses.map(lens => {
+            const scored = Number.isFinite(lens?.score);
+            const qualitative = lens?.unscored === true;
+            const weight = Number.isFinite(lens?.weight) ? `${(lens.weight * 100).toFixed(1)}% applied` : "— applied";
+            return (
+              <div key={lens.key} style={{ minWidth: 0, padding: "9px 10px", border: "1px solid var(--border-hairline)", borderRadius: 9, opacity: qualitative || !scored ? 0.55 : 1 }}>
+                <div style={{ ...EYEBROW_STYLE, color: scored ? "var(--ink-400)" : "var(--ink-500)" }}>{lens.label}</div>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
+                  <span style={{ color: scored ? "var(--ink-100)" : "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 700 }}>
+                    {scored ? `${lens.score.toFixed(0)}/100` : "—"}
+                  </span>
+                  <span style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9 }}>{weight}</span>
+                </div>
+                {qualitative && <div style={{ marginTop: 3, color: "var(--ink-500)", fontSize: 9.5 }}>qualitative</div>}
+                {lens.note && <div style={{ marginTop: 4, color: "var(--ink-500)", fontSize: 9.5, lineHeight: 1.4 }}>{lens.note}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -592,7 +890,9 @@ export default function ResearchPanel({ initialTicker }) {
   const latestYear = years.length ? years[years.length - 1] : null;
   const analysis = research?.analysis;
   const busy = fundamentalsLoading || aiLoading;
-  const hasTechnical = hasLensContent(analysis?.technical);
+  const hasTechnical = hasLensContent(analysis?.technical)
+    || Boolean(research?.history)
+    || (Array.isArray(research?.technicalScore?.components) && research.technicalScore.components.length > 0);
   const hasMacro = hasLensContent(analysis?.macro);
 
   return (
@@ -698,10 +998,12 @@ export default function ResearchPanel({ initialTicker }) {
             </div>
           </div>
 
+          <CompositeSummary composite={research.composite} />
+
           <p style={{ margin: "14px 0 0", color: "var(--ink-200)", fontSize: 12, lineHeight: 1.65 }}>{analysis.summary}</p>
           {analysis.quality?.rationale && <p style={{ margin: "7px 0 0", color: "var(--ink-400)", fontSize: 10.5 }}>{analysis.quality.rationale}</p>}
           {analysis.quality?.note && <p style={{ margin: "7px 0 0", color: "var(--ink-400)", fontSize: 10.5 }}>{analysis.quality.note}</p>}
-          <QualityBreakdown quality={analysis.quality} />
+          <ScoreBreakdown title="Score components" scoreObject={analysis.quality} />
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginTop: 16, marginBottom: 18 }}>
             {[
@@ -718,10 +1020,19 @@ export default function ResearchPanel({ initialTicker }) {
           </div>
 
           {(hasTechnical || hasMacro) && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14, marginBottom: 18 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14, marginBottom: 18 }}>
               {hasTechnical && (
-                <AnalysisLens eyebrow="Technical read" lens={analysis.technical}>
-                  <PriceContextStrip priceContext={research.priceContext} />
+                <AnalysisLens
+                  eyebrow="Technical read"
+                  lens={analysis.technical}
+                  beforeRead={(
+                    <>
+                      <PriceChart history={research.history} annotations={analysis.technical?.annotations} />
+                      <PriceContextStrip priceContext={research.priceContext} />
+                    </>
+                  )}
+                >
+                  <ScoreBreakdown title="Technical score components" scoreObject={research.technicalScore} />
                 </AnalysisLens>
               )}
               {hasMacro && <AnalysisLens eyebrow="Macro & competitive" lens={analysis.macro} />}

@@ -2,10 +2,13 @@
 
 import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./access-lib.js";
 import { onRequest as fundamentalsHandler } from "./fundamentals.js";
+import { onRequest as historyHandler } from "./history.js";
+import { findNotablePoints } from "./notable-points.js";
 import { onRequest as pricesHandler } from "./prices.js";
 import { computeQualityScore } from "./quality-score.js";
+import { computeTechnicalScore } from "./technical-score.js";
 
-const CACHE_KEY_PREFIX = "research_v5_";
+const CACHE_KEY_PREFIX = "research_v6_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
 const MODEL = "gemini-3.5-flash-lite";
@@ -20,9 +23,12 @@ The market currently values this company at the supplied marketContext.currentPs
 If a chosen exit multiple differs materially from the current multiple, that case's rationale MUST state explicitly why the market's current multiple is expected to re-rate (compress or expand) and by roughly how much.
 After selecting assumptions, cross-check each resulting implied price against the supplied currentPrice. A case may land far from the current price ONLY when its rationale explicitly addresses that gap, for example by stating that the market is pricing in materially more growth than the filings support. A bull case far below the current price without such an explanation is incoherent and must be reconsidered.
 Do NOT contort assumptions merely to match the current price. An honest conclusion that the market is overpaying is acceptable and valuable when the rationale states it explicitly.
-The technical read must cite only the supplied priceContext figures. When a priceContext field is null, say the data is unavailable rather than inferring it. Do NOT invent chart patterns, support or resistance levels, or indicator values that cannot be derived from the supplied fields.
+The technical read must cite only the supplied priceContext figures and notablePoints. When a priceContext field is null, say the data is unavailable rather than inferring it.
+Annotations MUST reference only the supplied notablePoints ids. Do NOT invent dates, price levels, support/resistance values or patterns.
+Select only the genuinely informative annotation candidates; fewer is better, and zero is acceptable.
+The technical score is computed deterministically and supplied as technicalScore. Explain it if useful, do not restate or contradict it, and do not emit your own score.
 The macro read is explicitly qualitative and may draw on general sector knowledge, but must NOT assert specific numbers such as revenue figures, market share percentages, or competitor financials that are not in the supplied data. Frame it as context, not fact-claims.
-Neither the technical nor macro section may emit a score. The deterministic quality score is the only score.
+Macro remains unscored and must not emit a score.
 
 Return ONLY one valid JSON object, without markdown fences or prose outside the JSON, using exactly this schema:
 {
@@ -31,7 +37,8 @@ Return ONLY one valid JSON object, without markdown fences or prose outside the 
   "risks": ["2-4 items, each citing a real supplied figure"],
   "technical": {
     "read": "2-3 sentences on trend, momentum and position within the 52-week range",
-    "points": ["2-4 short observations, each citing a supplied price figure"]
+    "points": ["2-4 short observations, each citing a supplied price figure"],
+    "annotations": [ { "id": "<one of the supplied notablePoints ids>", "label": "short chart label, max 40 chars" } ]
   },
   "macro": {
     "read": "2-3 sentences on sector dynamics, competitive position, supply-chain and regulatory context",
@@ -103,8 +110,8 @@ function extractJson(text) {
   return null;
 }
 
-async function callGemini(apiKey, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore) {
-  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore })}`;
+async function callGemini(apiKey, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite) {
+  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite })}`;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
     {
@@ -262,6 +269,90 @@ async function getPriceContext(request, env, ticker) {
   }
 }
 
+async function getHistory(request, env, ticker) {
+  try {
+    const historyRequest = new Request(
+      `https://internal/history?ticker=${encodeURIComponent(ticker)}`,
+      { method: "GET", headers: request.headers }
+    );
+    const response = await historyHandler({ request: historyRequest, env });
+    if (!response.ok) return null;
+    const body = await response.json();
+    return body && typeof body === "object" && !Array.isArray(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+function computeComposite(qualityScore, technicalScore) {
+  const lensDefinitions = [
+    { key: "fundamentals", label: "Fundamentals", rawWeight: 0.40, score: finiteNumber(qualityScore?.score) },
+    { key: "technical", label: "Technical", rawWeight: 0.30, score: finiteNumber(technicalScore?.score) },
+    {
+      key: "macro",
+      label: "Macro",
+      rawWeight: 0.30,
+      score: null,
+      unscored: true,
+      note: "Qualitative only — no numeric inputs to score",
+    },
+  ];
+  const availableRawWeight = lensDefinitions.reduce((sum, lens) =>
+    lens.score == null ? sum : sum + lens.rawWeight
+  , 0);
+  const lenses = lensDefinitions.map(lens => ({
+    key: lens.key,
+    label: lens.label,
+    score: lens.score,
+    weight: lens.score != null && availableRawWeight > 0
+      ? lens.rawWeight / availableRawWeight
+      : 0,
+    rawWeight: lens.rawWeight,
+    ...(lens.unscored ? { unscored: true, note: lens.note } : {}),
+  }));
+  const weightedScore = lenses.reduce((sum, lens) =>
+    lens.score == null ? sum : sum + lens.score * lens.weight
+  , 0);
+  const score = availableRawWeight > 0 && Number.isFinite(weightedScore)
+    ? Math.round(weightedScore)
+    : null;
+
+  return {
+    score,
+    verdict: score == null ? null : score >= 65 ? "BUY" : score >= 45 ? "HOLD" : "SELL",
+    lenses,
+    note: score == null ? "Insufficient scored lenses to compute a composite" : null,
+  };
+}
+
+function validateTechnicalAnnotations(modelTechnical, notablePoints) {
+  const candidates = new Map(notablePoints.map(candidate => [candidate.id, candidate]));
+  const requested = Array.isArray(modelTechnical?.annotations)
+    ? modelTechnical.annotations
+    : [];
+  const annotations = [];
+
+  for (const annotation of requested) {
+    const candidate = annotation && typeof annotation === "object" && !Array.isArray(annotation)
+      ? candidates.get(annotation.id)
+      : null;
+    if (!candidate || typeof annotation.label !== "string") continue;
+    annotations.push({
+      id: candidate.id,
+      label: annotation.label.slice(0, 40),
+      date: candidate.date,
+      close: candidate.close,
+      kind: candidate.kind,
+    });
+  }
+
+  const droppedCount = requested.length - annotations.length;
+  if (droppedCount > 0) {
+    console.warn(`[research] dropped ${droppedCount} invalid technical annotation${droppedCount === 1 ? "" : "s"}`);
+  }
+  return annotations;
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
   const allowedOrigin = env.ALLOWED_ORIGIN || "";
@@ -363,7 +454,15 @@ export async function onRequest(context) {
   }
 
   const qualityScore = computeQualityScore(fundamentals);
-  const priceContext = await getPriceContext(request, env, ticker);
+  const [priceContext, history] = await Promise.all([
+    getPriceContext(request, env, ticker),
+    getHistory(request, env, ticker),
+  ]);
+  const technicalScore = computeTechnicalScore(priceContext, history);
+  const notablePoints = history
+    ? findNotablePoints(history.points, history.displayFrom)
+    : [];
+  const composite = computeComposite(qualityScore, technicalScore);
   const currentPrice = priceContext.price;
   const fiscalYears = Array.isArray(fundamentals.fiscalYears) ? fundamentals.fiscalYears : [];
   const latestFiscalYear = fiscalYears.length ? fiscalYears[fiscalYears.length - 1] : null;
@@ -404,10 +503,24 @@ export async function onRequest(context) {
   };
 
   try {
-    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore);
+    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite);
     const cases = modelAnalysis.cases || {};
+    const modelTechnical = modelAnalysis?.technical && typeof modelAnalysis.technical === "object" && !Array.isArray(modelAnalysis.technical)
+      ? modelAnalysis.technical
+      : {};
+    const technicalAnalysis = { ...modelTechnical };
+    delete technicalAnalysis.score;
+    const macroAnalysis = modelAnalysis?.macro && typeof modelAnalysis.macro === "object" && !Array.isArray(modelAnalysis.macro)
+      ? { ...modelAnalysis.macro }
+      : {};
+    delete macroAnalysis.score;
     const analysis = {
       ...modelAnalysis,
+      technical: {
+        ...technicalAnalysis,
+        annotations: validateTechnicalAnnotations(technicalAnalysis, notablePoints),
+      },
+      macro: macroAnalysis,
       quality: {
         ...qualityScore,
         rationale: typeof modelAnalysis?.quality?.rationale === "string"
@@ -426,6 +539,10 @@ export async function onRequest(context) {
       entityName: fundamentals.entityName ?? null,
       currentPrice,
       priceContext,
+      history,
+      technicalScore,
+      notablePoints,
+      composite,
       shareCount,
       shareCountBasis,
       shareCountAsOf,
@@ -434,7 +551,7 @@ export async function onRequest(context) {
       analysis,
       generatedAt: new Date().toISOString(),
       model: MODEL,
-      disclaimer: "This is a model-generated projection from filed data, not investment advice.",
+      disclaimer: "This is a model-generated projection from filed data, and the verdict is a model-assisted composite, not investment advice.",
     };
 
     await writeKvJson(env.SHARED_DATA, cacheKey, result);
