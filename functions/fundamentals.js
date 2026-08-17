@@ -1,6 +1,6 @@
 // functions/fundamentals.js
 
-import { isAuthorizedAdmin } from "./access-lib.js";
+import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./access-lib.js";
 
 const SEC_USER_AGENT = "CapexIQ Research flipsensazn@gmail.com";
 const CIK_MAP_CACHE_KEY = "secCikMap_v1";
@@ -313,8 +313,20 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Method Not Allowed" }, 405, headers);
   }
 
-  if (!await isAuthorizedAdmin(request, env, undefined)) {
+  const accessPayload = await getAccessPayload(request, env);
+  const memberKey = accessPayload?.sub || accessPayload?.email?.toLowerCase();
+  if (!memberKey) {
+    return jsonResponse({ error: "Authentication required" }, 401, headers);
+  }
+  if (!isTrustedOrigin(request, env)) {
     return jsonResponse({ error: "Forbidden" }, 403, headers);
+  }
+  const email = accessPayload?.email?.toLowerCase();
+  if (!isAnalyzeAllowedEmail(email, env)) {
+    return jsonResponse({
+      error: "Analysis access is not enabled for this account",
+      code: "members_only",
+    }, 403, headers);
   }
 
   const ticker = (new URL(request.url).searchParams.get("ticker") || "").trim().toUpperCase();

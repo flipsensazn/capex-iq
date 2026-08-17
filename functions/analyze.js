@@ -1,5 +1,7 @@
 // functions/analyze.js
 //
+// Deprecated: superseded by /research and no longer called by the UI; retained temporarily.
+//
 // POST /analyze  { ticker, currentPrice, peRatio, marketCap, week52Low, week52High }
 // Runs 3 Gemini agents concurrently (Fundamentals · Technical · Qual/Macro),
 // then synthesizes into a markdown report with a BUY/HOLD/SELL score and
@@ -381,7 +383,10 @@ export async function onRequest(context) {
   const email = accessPayload?.email?.toLowerCase();
   if (!isAnalyzeAllowedEmail(email, env)) {
     return new Response(
-      JSON.stringify({ error: "Analysis access is not enabled for this account" }),
+      JSON.stringify({
+        error: "Analysis access is not enabled for this account",
+        code: "members_only",
+      }),
       { status: 403, headers }
     );
   }

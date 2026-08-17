@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
-import AnalysisDrawer from "./components/AnalysisDrawer";
 import BottleneckScout from "./components/BottleneckScout";
 import CapexSankey from "./components/CapexSankey";
 import CompositeMovers from "./components/CompositeMovers";
@@ -337,43 +336,13 @@ function MiniChart({ data, dates, color, ticker }) {
 }
 
 // ── COMPANY POPUP ─────────────────────────────────────────
-function CompanyPopup({ ticker, change, anchorRect, onClose, onOpenAnalysis }) {
+function CompanyPopup({ ticker, change, anchorRect, onClose, canResearch, identityChecked, isSignedIn, onOpenResearch }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisError, setAnalysisError] = useState(null);
+  const [researchNotice, setResearchNotice] = useState(false);
   const popupRef = useRef(null);
   const pos = (change ?? 0) >= 0;
   const changeColor = change === undefined ? "var(--ink-500)" : pos ? "var(--pos)" : "var(--down-300)";
-
-  const runAnalysis = async () => {
-    if (analysisLoading) return;
-    setAnalysisLoading(true);
-    setAnalysisError(null);
-    try {
-      const res = await fetch("/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker,
-          currentPrice: data?.rawPrice ?? null,
-          peRatio:      data?.peRatio  ?? null,
-          marketCap:    data?.marketCap ?? null,
-          week52Low:    data?.raw52Low  ?? null,
-          week52High:   data?.raw52High ?? null,
-          sector:       data?.sector   ?? null,
-          industry:     data?.industry ?? null,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.detail || json.error || "Analysis failed");
-      onOpenAnalysis(json);
-    } catch (err) {
-      setAnalysisError(err.message);
-    } finally {
-      setAnalysisLoading(false);
-    }
-  };
 
   useEffect(() => {
     setLoading(true);
@@ -449,31 +418,25 @@ function CompanyPopup({ ticker, change, anchorRect, onClose, onOpenAnalysis }) {
               </span>
             </div>
           )}
-          {!loading && data && (
-            <button
-              onClick={runAnalysis}
-              disabled={analysisLoading}
-              title="Run 3-agent AI analysis (Fundamentals · Technical · Macro)"
-              style={{
-                display: "flex", alignItems: "center", gap: 5,
-                background: analysisLoading ? "rgba(96,165,250,0.05)" : "rgba(96,165,250,0.12)",
-                border: "1px solid rgba(96,165,250,0.35)",
-                borderRadius: 6, padding: "4px 10px",
-                color: analysisLoading ? "var(--ink-500)" : "var(--info)",
-                cursor: analysisLoading ? "default" : "pointer",
-                fontSize: 9, fontWeight: 800, letterSpacing: "0.08em",
-                textTransform: "uppercase", fontFamily: "inherit",
-                transition: "all .15s",
-              }}
-            >
-              {analysisLoading
-                ? <><span style={{ display: "inline-block", animation: "spin 0.8s linear infinite" }}>⟳</span> Analyzing…</>
-                : "⚡ Run Analysis"}
-            </button>
-          )}
-          {analysisError && (
-            <span style={{ fontSize: 9, color: "var(--down-300)", maxWidth: 160, whiteSpace: "normal", lineHeight: 1.3, textAlign: "right" }}>
-              ⚠ {analysisError.length > 80 ? analysisError.slice(0, 80) + "…" : analysisError}
+          <button
+            onClick={() => canResearch ? onOpenResearch(ticker) : setResearchNotice(true)}
+            title={canResearch ? "Open full financial research" : "Full financial research is a members feature"}
+            style={{
+              display: "flex", alignItems: "center", gap: 5,
+              background: "rgba(96,165,250,0.12)",
+              border: "1px solid rgba(96,165,250,0.35)",
+              borderRadius: 6, padding: "4px 10px",
+              color: "var(--info)", cursor: "pointer",
+              fontSize: 9, fontWeight: 800, letterSpacing: "0.08em",
+              textTransform: "uppercase", fontFamily: "inherit",
+              transition: "all .15s",
+            }}
+          >
+            🔬 Research
+          </button>
+          {researchNotice && !canResearch && (
+            <span style={{ fontSize: 9, color: "var(--down-300)", maxWidth: 190, whiteSpace: "normal", lineHeight: 1.3, textAlign: "right" }}>
+              Full financial research is a members feature.{identityChecked && !isSignedIn ? " Sign in to check your access." : ""}
             </span>
           )}
           <button onClick={onClose} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid var(--border-soft)", borderRadius: 6, color: "var(--ink-400)", width: 24, height: 24, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>×</button>
@@ -1344,7 +1307,6 @@ const GLOBAL_STYLES = `
     50% { box-shadow: 0 0 24px rgba(52,211,153,0.9), 0 0 40px rgba(52,211,153,0.35), inset 0 0 20px rgba(52,211,153,0.18); border-color: #34d399; }
   }
   @keyframes pulseDot { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.4; transform:scale(.7); } }
-  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .ticker-tape { animation: scroll-left 200s linear infinite; white-space: nowrap; display: inline-flex; gap: 24px; }
   .pulse { animation: pulseDot 2s infinite; }
   .bottom-grid-all { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
@@ -1430,6 +1392,8 @@ export default function App() {
   }, []);
   
   const [isAdmin, setIsAdmin] = useState(false);
+  const [canResearch, setCanResearch] = useState(false);
+  const [identityEmail, setIdentityEmail] = useState(null);
   const [adminChecked, setAdminChecked] = useState(false);
   const [appNotice, setAppNotice] = useState(null);
 
@@ -1443,14 +1407,20 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         setIsAdmin(Boolean(data.isAdmin));
+        setCanResearch(Boolean(data.canResearch));
+        setIdentityEmail(typeof data.email === "string" && data.email ? data.email : null);
       })
-      .catch(() => setIsAdmin(false))
+      .catch(() => {
+        setIsAdmin(false);
+        setCanResearch(false);
+        setIdentityEmail(null);
+      })
       .finally(() => setAdminChecked(true));
   }, []);
 
   // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
   // robotics · "earnings" = the calendar · "scanner" = pre-market gap scanner
-  // · "research" = the admin-only SEC financial research workspace.
+  // · "research" = the members-only SEC financial research workspace.
   const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "scanner", "research"];
   const [view, setView] = useState(() => {
     const h = window.location.hash.replace("#", "");
@@ -1478,13 +1448,13 @@ export default function App() {
 
   const [activeTrack, setActiveTrack] = useState(null);
   useEffect(() => {
-    if (adminChecked && !isAdmin && view === "research") switchView("ai");
-  }, [adminChecked, isAdmin, view]);
+    if (adminChecked && !canResearch && view === "research") switchView("ai");
+  }, [adminChecked, canResearch, view]);
 
   const [timeline, setTimeline] = useState("1D");
   const [activeFilter, setActiveFilter] = useState(null);
   const [popup, setPopup] = useState(null);
-  const [analysis, setAnalysis] = useState(null); // { ticker, ...analysisResult }
+  const [researchTicker, setResearchTicker] = useState(null);
 
   const {
     scannerPool,
@@ -1578,6 +1548,14 @@ export default function App() {
     const change = changeOf(pricesRef.current[ticker]);
     setPopup(prev => (prev?.ticker === ticker ? null : { ticker, change, rect }));
   }, []);
+
+  function openResearch(ticker) {
+    const normalizedTicker = typeof ticker === "string" ? ticker.trim().toUpperCase() : "";
+    if (!normalizedTicker) return;
+    setResearchTicker(normalizedTicker);
+    switchView("research");
+    setPopup(null);
+  }
 
   function addTickerToSubsector(trackId, subsectorId, ticker) {
     const sym = ticker.trim().toUpperCase();
@@ -1803,7 +1781,7 @@ export default function App() {
     { value: "robotics", label: "Robotics", icon: "🦾" },
     { value: "earnings", label: "Earnings", icon: "🗓" },
     { value: "scanner", label: "Scanner", icon: "🔍" },
-    ...(isAdmin ? [{ value: "research", label: "Research", icon: "🔬" }] : []),
+    ...(canResearch ? [{ value: "research", label: "Research", icon: "🔬" }] : []),
   ];
 
   return (
@@ -1875,7 +1853,7 @@ export default function App() {
             </div>
           )}
 
-          {isResearch && isAdmin && <ResearchPanel />}
+          {isResearch && canResearch && <ResearchPanel initialTicker={researchTicker} />}
 
           {isMapView && <>
           {/* HERO: capex flow Sankey — spenders → tracks, with guidance trend */}
@@ -1997,14 +1975,10 @@ export default function App() {
           change={popup.change}
           anchorRect={popup.rect}
           onClose={() => setPopup(null)}
-          onOpenAnalysis={(result) => setAnalysis({ ticker: popup.ticker, ...result })}
-        />
-      )}
-      {analysis && (
-        <AnalysisDrawer
-          ticker={analysis.ticker}
-          analysis={analysis}
-          onClose={() => setAnalysis(null)}
+          canResearch={canResearch}
+          identityChecked={adminChecked}
+          isSignedIn={Boolean(identityEmail)}
+          onOpenResearch={openResearch}
         />
       )}
     </MobileCtx.Provider>

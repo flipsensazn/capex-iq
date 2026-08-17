@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const PANEL_STYLE = {
   background: "var(--surface-card)",
@@ -136,7 +136,9 @@ async function responseError(response) {
     body = null;
   }
   const message = response.status === 403
-    ? "Admin access required"
+    ? body?.code === "members_only"
+      ? "Full financial research is a members feature."
+      : "Admin access required"
     : response.status === 404
       ? "No SEC filer found for that ticker — US SEC filers only"
       : body?.error || `Request failed (${response.status})`;
@@ -370,6 +372,64 @@ function MarketContextStrip({ research }) {
   );
 }
 
+function priceChangeColor(value) {
+  if (Number.isFinite(value) && value > 0) return "var(--up-400)";
+  if (Number.isFinite(value) && value < 0) return "var(--down-400)";
+  return "var(--ink-300)";
+}
+
+function PriceContextStrip({ priceContext }) {
+  const items = [
+    ["Price", formatPrice(priceContext?.price), "var(--ink-100)"],
+    ["5D", formatSignedPercent(priceContext?.change5D), priceChangeColor(priceContext?.change5D)],
+    ["1M", formatSignedPercent(priceContext?.change1M), priceChangeColor(priceContext?.change1M)],
+    ["6M", formatSignedPercent(priceContext?.change6M), priceChangeColor(priceContext?.change6M)],
+    ["YTD", formatSignedPercent(priceContext?.changeYTD), priceChangeColor(priceContext?.changeYTD)],
+    ["1Y", formatSignedPercent(priceContext?.change1Y), priceChangeColor(priceContext?.change1Y)],
+    ["52-week range", `${formatPrice(priceContext?.week52Low)} – ${formatPrice(priceContext?.week52High)}`, "var(--ink-100)"],
+  ];
+
+  return (
+    <div style={{ marginTop: 12, padding: "10px 11px", border: "1px solid var(--border-hairline)", borderRadius: 10, background: "rgba(255,255,255,0.02)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(82px, 1fr))", gap: 10 }}>
+        {items.map(([label, value, color]) => (
+          <div key={label} style={{ minWidth: 0 }}>
+            <div style={EYEBROW_STYLE}>{label}</div>
+            <div style={{ marginTop: 4, color, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function hasLensContent(lens) {
+  const hasRead = typeof lens?.read === "string" && lens.read.trim();
+  const hasPoints = Array.isArray(lens?.points) && lens.points.some(point => typeof point === "string" && point.trim());
+  return Boolean(hasRead || hasPoints);
+}
+
+function AnalysisLens({ eyebrow, lens, children }) {
+  const read = typeof lens?.read === "string" ? lens.read.trim() : "";
+  const points = Array.isArray(lens?.points)
+    ? lens.points.filter(point => typeof point === "string" && point.trim()).map(point => point.trim())
+    : [];
+  if (!read && !points.length) return null;
+
+  return (
+    <article style={{ minWidth: 0, border: "1px solid var(--border-hairline)", borderRadius: 12, padding: 14, background: "rgba(255,255,255,0.02)" }}>
+      <div style={EYEBROW_STYLE}>{eyebrow}</div>
+      {read && <p style={{ margin: "8px 0 0", color: "var(--ink-200)", fontSize: 11.5, lineHeight: 1.6 }}>{read}</p>}
+      {children}
+      {points.length > 0 && (
+        <ul style={{ margin: "10px 0 0", paddingLeft: 17, color: "var(--ink-300)", fontSize: 11, lineHeight: 1.55 }}>
+          {points.map((point, index) => <li key={`${eyebrow}-${index}`} style={{ marginBottom: 5 }}>{point}</li>)}
+        </ul>
+      )}
+    </article>
+  );
+}
+
 function QualityBreakdown({ quality }) {
   const components = Array.isArray(quality?.components) ? quality.components : [];
   if (!components.length) return null;
@@ -451,7 +511,7 @@ function ResearchCases({ cases, currentPrice }) {
   );
 }
 
-export default function ResearchPanel() {
+export default function ResearchPanel({ initialTicker }) {
   const [tickerInput, setTickerInput] = useState("");
   const [fundamentals, setFundamentals] = useState(null);
   const [research, setResearch] = useState(null);
@@ -459,10 +519,10 @@ export default function ResearchPanel() {
   const [aiLoading, setAiLoading] = useState(false);
   const [fundamentalsError, setFundamentalsError] = useState("");
   const [aiError, setAiError] = useState(null);
+  const lastAutoRunTicker = useRef(null);
 
-  async function analyzeTicker(event) {
-    event.preventDefault();
-    const ticker = tickerInput.trim().toUpperCase();
+  const runResearch = useCallback(async tickerValue => {
+    const ticker = typeof tickerValue === "string" ? tickerValue.trim().toUpperCase() : "";
     setTickerInput(ticker);
     setFundamentals(null);
     setResearch(null);
@@ -505,12 +565,35 @@ export default function ResearchPanel() {
     } finally {
       setAiLoading(false);
     }
+  }, []);
+
+  function analyzeTicker(event) {
+    event.preventDefault();
+    void runResearch(tickerInput);
   }
+
+  useEffect(() => {
+    const ticker = typeof initialTicker === "string" ? initialTicker.trim().toUpperCase() : "";
+    if (!ticker) {
+      lastAutoRunTicker.current = null;
+      return;
+    }
+    if (lastAutoRunTicker.current === ticker) return;
+
+    const loadedTicker = typeof (research?.ticker || fundamentals?.ticker) === "string"
+      ? (research?.ticker || fundamentals?.ticker).trim().toUpperCase()
+      : "";
+    lastAutoRunTicker.current = ticker;
+    if (ticker === loadedTicker) return;
+    void runResearch(ticker);
+  }, [initialTicker, fundamentals?.ticker, research?.ticker, runResearch]);
 
   const years = [...(fundamentals?.fiscalYears ?? [])].sort((a, b) => a - b);
   const latestYear = years.length ? years[years.length - 1] : null;
   const analysis = research?.analysis;
   const busy = fundamentalsLoading || aiLoading;
+  const hasTechnical = hasLensContent(analysis?.technical);
+  const hasMacro = hasLensContent(analysis?.macro);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -633,6 +716,17 @@ export default function ResearchPanel() {
               </div>
             ))}
           </div>
+
+          {(hasTechnical || hasMacro) && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14, marginBottom: 18 }}>
+              {hasTechnical && (
+                <AnalysisLens eyebrow="Technical read" lens={analysis.technical}>
+                  <PriceContextStrip priceContext={research.priceContext} />
+                </AnalysisLens>
+              )}
+              {hasMacro && <AnalysisLens eyebrow="Macro & competitive" lens={analysis.macro} />}
+            </div>
+          )}
 
           <MarketContextStrip research={research} />
           <ResearchCases cases={analysis.cases} currentPrice={research.currentPrice} />

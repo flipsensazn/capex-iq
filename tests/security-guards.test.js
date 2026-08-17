@@ -158,10 +158,9 @@ test("analyze rejects a verified member who is not on the allow-list", { concurr
   });
 
   assert.equal(response.status, 403);
-  assert.equal(
-    (await response.json()).error,
-    "Analysis access is not enabled for this account"
-  );
+  const body = await response.json();
+  assert.equal(body.error, "Analysis access is not enabled for this account");
+  assert.equal(body.code, "members_only");
   assert.equal(nonJwksFetches, 0);
   assert.equal(limiterCalls, 0);
 });
