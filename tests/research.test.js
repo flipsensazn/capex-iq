@@ -121,6 +121,22 @@ function aaoiCompanyFactsFixture() {
   };
 }
 
+function historyFixture() {
+  return {
+    ticker: "MSFT",
+    currency: "USD",
+    points: [
+      { date: "2026-05-12", close: 390, volume: 1000, ma20: 389, ma50: 391 },
+      { date: "2026-05-13", close: 395, volume: 1100, ma20: 392, ma50: 391 },
+      { date: "2026-05-14", close: 420, volume: 1200, ma20: 400, ma50: 393 },
+      { date: "2026-05-15", close: 400, volume: 900, ma20: 402, ma50: 395 },
+    ],
+    displayFrom: "2026-05-12",
+    source: "Yahoo v8 chart",
+    retrievedAt: "2026-05-15T22:00:00.000Z",
+  };
+}
+
 async function requestFundamentals({
   ticker,
   companyFacts = companyFactsFixture(),
@@ -435,6 +451,8 @@ async function requestResearch({
   companyFacts = companyFactsFixture(),
   currentPrice = 400,
   priceEntry,
+  history = historyFixture(),
+  historyStatus = 502,
   email = "admin@example.com",
   sub = "research-admin",
   adminEmails = "admin@example.com",
@@ -453,8 +471,11 @@ async function requestResearch({
     covered: ["MSFT"],
     timestamp: Date.now(),
   }), { expirationTtl: 60 });
+  if (history) {
+    await kv.put(`history_v1_${ticker.toUpperCase()}`, JSON.stringify(history), { expirationTtl: 3600 });
+  }
   if (cachedResult) {
-    await kv.put(`research_v5_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+    await kv.put(`research_v6_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
 
   const originalFetch = globalThis.fetch;
@@ -474,6 +495,9 @@ async function requestResearch({
     }
     if (href === "https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json") {
       return Response.json(companyFacts);
+    }
+    if (href.startsWith("https://query1.finance.yahoo.com/v8/finance/chart/")) {
+      return Response.json({ chart: { result: null, error: { description: "upstream unavailable" } } }, { status: historyStatus });
     }
     if (href.startsWith("https://generativelanguage.googleapis.com/")) {
       geminiCalls += 1;
@@ -524,6 +548,7 @@ function geminiAnalysisForCase(scenario) {
     technical: {
       read: "The supplied price context frames the recent trend and momentum.",
       points: ["The current price was supplied by the server."],
+      annotations: [],
     },
     macro: {
       read: "Sector conditions provide qualitative context for the filed results.",
@@ -601,6 +626,7 @@ test("research returns server-derived price context and model technical and macr
   const technical = {
     read: "At $400, the shares are 4% higher over five days and sit within the supplied $300-$450 range.",
     points: ["The supplied one-month change is 0%.", "Six-month change data is unavailable."],
+    annotations: [],
   };
   const macro = {
     read: "Enterprise software demand and regulation provide qualitative context for the filing trend.",
@@ -789,6 +815,108 @@ test("research returns an explained null price when diluted shares are missing",
   assert.equal(response.status, 200);
   assert.equal(base.impliedPrice, null);
   assert.match(base.methodError, /shares/i);
+});
+
+test("research drops hallucinated annotations and attaches real candidate data", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr: 5,
+    exitNetMargin: 20,
+    multipleType: "pe",
+    multipleValue: 20,
+  });
+  const longLabel = "A genuinely informative period-high annotation label";
+  geminiAnalysis.technical.annotations = [
+    { id: "periodHigh", label: longLabel },
+    { id: "invented-resistance", label: "Invented resistance" },
+  ];
+
+  const { response } = await requestResearch({ geminiAnalysis });
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.analysis.technical.annotations, [{
+    id: "periodHigh",
+    label: longLabel.slice(0, 40),
+    date: "2026-05-14",
+    close: 420,
+    kind: "periodHigh",
+  }]);
+  assert.ok(body.notablePoints.some(point =>
+    point.id === "periodHigh" && point.date === "2026-05-14" && point.close === 420
+  ));
+});
+
+test("research computes a renormalised fundamentals and technical composite", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr: 5,
+    exitNetMargin: 20,
+    multipleType: "pe",
+    multipleValue: 20,
+  });
+  geminiAnalysis.technical.score = 1;
+  geminiAnalysis.macro.score = 99;
+  const priceEntry = {
+    price: 400,
+    change: 1,
+    change5D: 5,
+    change1M: 12,
+    change6M: 40,
+    changeYTD: 30,
+    change1Y: 80,
+    week52Low: 300,
+    week52High: 450,
+    session: "REGULAR",
+  };
+
+  const { response, geminiPrompts } = await requestResearch({ geminiAnalysis, priceEntry });
+  const body = await response.json();
+  const fundamentalsLens = body.composite.lenses.find(lens => lens.key === "fundamentals");
+  const technicalLens = body.composite.lenses.find(lens => lens.key === "technical");
+  const macroLens = body.composite.lenses.find(lens => lens.key === "macro");
+  const expectedScore = Math.round(
+    (body.analysis.quality.score * 0.40 + body.technicalScore.score * 0.30) / 0.70
+  );
+  const expectedVerdict = expectedScore >= 65 ? "BUY" : expectedScore >= 45 ? "HOLD" : "SELL";
+
+  assert.equal(response.status, 200);
+  assert.notEqual(body.analysis.quality.score, null);
+  assert.notEqual(body.technicalScore.score, null);
+  assert.equal(body.composite.score, expectedScore);
+  assert.equal(body.composite.verdict, expectedVerdict);
+  assert.ok(Math.abs(fundamentalsLens.weight - 0.40 / 0.70) < 1e-12);
+  assert.ok(Math.abs(technicalLens.weight - 0.30 / 0.70) < 1e-12);
+  assert.equal(macroLens.score, null);
+  assert.equal(macroLens.weight, 0);
+  assert.equal(macroLens.unscored, true);
+  assert.equal("score" in body.analysis.technical, false);
+  assert.equal("score" in body.analysis.macro, false);
+  assert.match(geminiPrompts[0], /"technicalScore":\{/);
+  assert.match(geminiPrompts[0], /"composite":\{/);
+});
+
+test("research degrades gracefully when history is unavailable", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCase({
+    revenueCagr: 5,
+    exitNetMargin: 20,
+    multipleType: "pe",
+    multipleValue: 20,
+  });
+
+  const { response, upstreamRequests } = await requestResearch({
+    geminiAnalysis,
+    history: null,
+    historyStatus: 502,
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.history, null);
+  assert.equal(body.technicalScore.score, null);
+  assert.notEqual(body.composite.score, null);
+  assert.equal(body.composite.score, body.analysis.quality.score);
+  assert.ok(upstreamRequests.some(url =>
+    url.startsWith("https://query1.finance.yahoo.com/v8/finance/chart/")
+  ));
 });
 
 test("research returns a cached result without calling Gemini", { concurrency: false }, async () => {

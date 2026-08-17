@@ -20,6 +20,7 @@ import * as exposure       from "../../functions/exposure.js";
 import * as fundamentals   from "../../functions/fundamentals.js";
 import * as gapScanner     from "../../functions/gap-scanner.js";
 import * as gauges         from "../../functions/gauges.js";
+import * as history        from "../../functions/history.js";
 import * as marketNews     from "../../functions/market-news.js";
 import * as me             from "../../functions/me.js";
 import * as muskCapex      from "../../functions/musk-capex.js";
@@ -50,6 +51,7 @@ const ROUTES = {
   "/fundamentals":    fundamentals,
   "/gap-scanner":     gapScanner,
   "/gauges":          gauges,
+  "/history":         history,
   "/market-news":     marketNews,
   "/me":              me,
   "/musk-capex":      muskCapex,
