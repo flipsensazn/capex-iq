@@ -79,7 +79,7 @@ def fmt_delta(d):
 
 
 def fmt_excess(v):
-    return "—" if v is None else f"{'+' if v > 0 else ''}{v:.1f}%"
+    return "—" if v is None else f"{'+' if v > 0 else ''}{v:.1f}pp"
 
 
 # ── SECTIONS ─────────────────────────────────────────────
@@ -129,12 +129,15 @@ def section_hottest(composite, stress):
 
 
 def section_scoreboard(scoreboard):
-    if not scoreboard or not scoreboard.get("stats"):
+    if not scoreboard or (scoreboard.get("methodology") or {}).get("version", 0) < 2:
         return None
-    lines = ["## ⚖ Scoreboard — median excess vs QQQ\n",
+    stats = (scoreboard.get("statsByCohort") or {}).get("prospective") or []
+    if not stats:
+        return None
+    lines = ["## ⚖ Prospective scoreboard — median excess vs QQQ\n",
              "| Signal | n | 1w | 1m | 3m |",
              "|---|---|---|---|---|"]
-    stats = sorted(scoreboard["stats"], key=lambda s: (s["type"] == "all", -s["n"]))
+    stats = sorted(stats, key=lambda s: (s["type"] == "all", -s["n"]))
     for s in stats:
         cells = []
         for h in ("1w", "1m", "3m"):
@@ -152,17 +155,22 @@ def section_scoreboard(scoreboard):
 
 
 def section_new_events(scoreboard, since):
-    if not scoreboard or not scoreboard.get("events"):
+    if not scoreboard or (scoreboard.get("methodology") or {}).get("version", 0) < 2:
         return None
-    fresh = [e for e in scoreboard["events"]
-             if e.get("date") and date.fromisoformat(e["date"][:10]) >= since]
+    events = (scoreboard.get("eventsByCohort") or {}).get("prospective") or []
+    fresh = [e for e in events
+             if (e.get("observedAt") or e.get("date"))
+             and date.fromisoformat((e.get("observedAt") or e["date"])[:10]) >= since]
     if not fresh:
         return "## New signal events\n\nNo new signals fired this week.\n"
     lines = ["## New signal events\n"]
     for e in fresh:
         score = f" (score {e['score']:.0f})" if e.get("score") is not None else ""
+        observed = (e.get("observedAt") or e.get("date") or "")[:10]
+        event_date = (e.get("eventDate") or e.get("date") or "")[:10]
+        timing = (f"; observed {observed}" if observed and observed != event_date else "")
         lines.append(f"- {t(e['ticker'])} — {TYPE_LABELS.get(e['type'], e['type'])}"
-                     f" on {e['date'][:10]}{score}")
+                     f" on {event_date}{timing}{score}")
     return "\n".join(lines) + "\n"
 
 

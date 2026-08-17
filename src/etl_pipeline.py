@@ -20,8 +20,43 @@ YF_BATCH_SIZE = 100
 # Pause between batches (seconds). Increase this if rate limits persist.
 YF_BATCH_PAUSE = 3
 
+# Fail closed if successful SEC companyfacts responses cover too little of the
+# ranked universe. This is response coverage, not field-level GAAP completeness.
+# Override with RANKED_ETL_MIN_SEC_RESPONSE_COVERAGE (a decimal from 0 to 1).
+DEFAULT_MIN_SEC_RESPONSE_COVERAGE = 0.90
+
 
 # ── HELPERS ───────────────────────────────────────────────
+
+def minimum_sec_response_coverage():
+    """Return the required ratio of successful SEC companyfacts responses."""
+    raw = os.environ.get('RANKED_ETL_MIN_SEC_RESPONSE_COVERAGE',
+                         str(DEFAULT_MIN_SEC_RESPONSE_COVERAGE))
+    try:
+        minimum = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"RANKED_ETL_MIN_SEC_RESPONSE_COVERAGE must be a decimal from 0 to 1, got {raw!r}"
+        ) from e
+    if not 0 <= minimum <= 1:
+        raise ValueError(
+            f"RANKED_ETL_MIN_SEC_RESPONSE_COVERAGE must be between 0 and 1, got {raw!r}"
+        )
+    return minimum
+
+
+def enforce_sec_response_coverage(stats, minimum=None):
+    """Fail when response success is too sparse; GAAP field presence is separate."""
+    minimum = minimum_sec_response_coverage() if minimum is None else minimum
+    print(f"SEC minimum required response coverage: {minimum:.1%}")
+    if stats['response_coverage'] < minimum:
+        raise RuntimeError(
+            f"SEC companyfacts response coverage {stats['response_coverage']:.1%} is below "
+            f"the required {minimum:.1%} "
+            f"(attempted={stats['attempted']} succeeded={stats['succeeded']} "
+            f"failed={stats['failed']})"
+        )
+
 
 def yf_download_with_retry(tickers_str, max_retries=4):
     """
@@ -349,8 +384,10 @@ def fetch_sec_fundamentals(df_candidates, cik_map):
     Fetch XBRL fundamentals from SEC EDGAR for each candidate.
     cik_map reused from get_us_universe() — no second SEC fetch needed.
     """
-    rows    = []
-    tickers = df_candidates['ticker'].tolist()
+    rows      = []
+    tickers   = df_candidates['ticker'].tolist()
+    attempted = len(tickers)
+    succeeded = 0
     print(f"Fetching SEC fundamentals for {len(tickers)} candidates...")
 
     for ticker in tickers:
@@ -363,6 +400,7 @@ def fetch_sec_fundamentals(df_candidates, cik_map):
                 f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
                 headers=SEC_HEADERS)
             if res.status_code != 200:
+                print(f"  SEC error {ticker}: HTTP {res.status_code}")
                 continue
             facts = res.json()
 
@@ -400,12 +438,24 @@ def fetch_sec_fundamentals(df_candidates, cik_map):
                 'op_inc_current':    op_inc_current, # <-- NEW
                 'op_inc_prev':       op_inc_prev,    # <-- NEW
             })
+            succeeded += 1
         except Exception as e:
             print(f"  SEC error {ticker}: {e}")
 
         time.sleep(0.15)  # SEC rate limit: 10 req/sec
 
-    return pd.DataFrame(rows)
+    failed = attempted - succeeded
+    response_coverage = succeeded / attempted if attempted else 0.0
+    stats = {
+        'attempted': attempted,
+        'succeeded': succeeded,
+        'failed': failed,
+        'response_coverage': response_coverage,
+        'rows_loaded': 0,
+    }
+    print(f"SEC fundamentals: attempted={attempted} succeeded={succeeded} "
+          f"failed={failed} response_coverage={response_coverage:.1%}")
+    return pd.DataFrame(rows), stats
 
 
 # ── PHASE 3: SCORING ─────────────────────────────────────
@@ -508,6 +558,109 @@ def score(df):
 
 # ── PHASE 4: DATABASE LOAD ───────────────────────────────
 
+RUN_MANIFEST_SQL = """
+    CREATE TABLE IF NOT EXISTS ranked_etl_runs (
+        run_date DATE PRIMARY KEY,
+        state TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ,
+        data_fresh_at TIMESTAMPTZ,
+        attempted INTEGER NOT NULL DEFAULT 0,
+        succeeded INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
+        sec_response_coverage DOUBLE PRECISION,
+        rows_loaded INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+"""
+
+RUN_MANIFEST_UPSERT_SQL = """
+    INSERT INTO ranked_etl_runs (
+        run_date, state, started_at, finished_at, data_fresh_at,
+        attempted, succeeded, failed, sec_response_coverage, rows_loaded,
+        error_message, updated_at
+    )
+    VALUES (
+        %s, %s, NOW(),
+        CASE WHEN %s = 'running' THEN NULL ELSE NOW() END,
+        CASE WHEN %s = 'success' THEN NOW() ELSE NULL END,
+        %s, %s, %s, %s, %s, %s, NOW()
+    )
+    ON CONFLICT (run_date) DO UPDATE SET
+        state = EXCLUDED.state,
+        started_at = CASE
+            WHEN EXCLUDED.state = 'running' THEN NOW()
+            ELSE ranked_etl_runs.started_at
+        END,
+        finished_at = EXCLUDED.finished_at,
+        data_fresh_at = COALESCE(
+            EXCLUDED.data_fresh_at,
+            ranked_etl_runs.data_fresh_at
+        ),
+        attempted = EXCLUDED.attempted,
+        succeeded = EXCLUDED.succeeded,
+        failed = EXCLUDED.failed,
+        sec_response_coverage = EXCLUDED.sec_response_coverage,
+        rows_loaded = EXCLUDED.rows_loaded,
+        error_message = EXCLUDED.error_message,
+        updated_at = NOW();
+"""
+
+
+def record_run_manifest(state, stats=None, error=None):
+    """Upsert the idempotent latest state/freshness record for today's run."""
+    if state not in ('running', 'success', 'failure'):
+        raise ValueError(f"invalid ranked ETL state: {state}")
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is required for ranked ETL")
+
+    stats = stats or {}
+    attempted = int(stats.get('attempted', 0))
+    succeeded = int(stats.get('succeeded', 0))
+    failed = int(stats.get('failed', 0))
+    response_coverage = float(stats.get('response_coverage', 0.0))
+    rows_loaded = int(stats.get('rows_loaded', 0))
+    error_message = str(error)[:2000] if error is not None else None
+
+    conn = None
+    committed = False
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(RUN_MANIFEST_SQL)
+        cur.execute(
+            RUN_MANIFEST_UPSERT_SQL,
+            (
+                date.today(), state, state, state,
+                attempted, succeeded, failed, response_coverage, rows_loaded,
+                error_message,
+            ),
+        )
+        conn.commit()
+        committed = True
+    except Exception:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception as rollback_error:
+                print(f"Could not roll back ETL manifest write: {rollback_error}")
+        raise
+    finally:
+        if conn:
+            if committed:
+                conn.close()
+            else:
+                try:
+                    conn.close()
+                except Exception as close_error:
+                    print(f"Could not close failed ETL manifest connection: {close_error}")
+
+    print(f"ETL manifest: state={state} attempted={attempted} "
+          f"succeeded={succeeded} failed={failed} "
+          f"response_coverage={response_coverage:.1%} rows_loaded={rows_loaded}")
+
+
 def load_to_db(df):
     print(f"Loading {len(df)} rows into Neon PostgreSQL...")
 
@@ -600,6 +753,7 @@ def load_to_db(df):
     py_cols    = [py for py, _ in active]
     db_cols    = [db for _, db in active]
     records    = [tuple(x) for x in df_clean[py_cols].to_numpy()]
+    attempted  = len(records)
     col_str    = ', '.join(db_cols)
     update_set = ', '.join([f"{db} = EXCLUDED.{db}"
                             for db in db_cols if db not in ('as_of_date', 'ticker')])
@@ -611,6 +765,7 @@ def load_to_db(df):
     """
 
     conn = None
+    load_committed = False
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur  = conn.cursor()
@@ -620,41 +775,76 @@ def load_to_db(df):
         print("Schema bootstrap + migration complete.")
         psycopg2.extras.execute_values(cur, insert_sql, records, page_size=500)
         conn.commit()
-        print("Database load successful.")
+        load_committed = True
+        print(f"Ranked DB load: attempted={attempted} succeeded={attempted} "
+              f"failed=0 coverage={1.0 if attempted else 0.0:.1%}")
     except Exception as e:
         print(f"DB error: {e}")
+        print(f"Ranked DB load: attempted={attempted} succeeded=0 "
+              f"failed={attempted} coverage=0.0%")
         if conn:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception as rollback_error:
+                print(f"Could not roll back ranked DB load: {rollback_error}")
+        raise
     finally:
         if conn:
-            conn.close()
+            if load_committed:
+                conn.close()
+            else:
+                try:
+                    conn.close()
+                except Exception as close_error:
+                    print(f"Could not close failed ranked DB connection: {close_error}")
+    return attempted
 
 
 # ── MAIN ─────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def main():
     print("=== Starting Weekly ETL ===")
+    stats = {
+        'attempted': 0,
+        'succeeded': 0,
+        'failed': 0,
+        'response_coverage': 0.0,
+        'rows_loaded': 0,
+    }
 
-    raw_symbols, cik_map = get_us_universe()
-    candidates = apply_gates(raw_symbols)
+    try:
+        record_run_manifest('running', stats)
 
-    if candidates.empty:
-        print("No candidates passed gates — aborting.")
-        exit(1)
+        raw_symbols, cik_map = get_us_universe()
+        candidates = apply_gates(raw_symbols)
 
-    sec_data = fetch_sec_fundamentals(candidates, cik_map)
-    merged   = pd.merge(candidates, sec_data, on='ticker', how='inner')
+        if candidates.empty:
+            raise RuntimeError("No candidates passed gates")
 
-    ranked = score(merged)
+        sec_data, stats = fetch_sec_fundamentals(candidates, cik_map)
+        enforce_sec_response_coverage(stats)
+        merged = pd.merge(candidates, sec_data, on='ticker', how='inner')
 
-    if ranked.empty:
-        print("No candidates survived scoring — aborting.")
-        exit(1)
+        ranked = score(merged)
 
-    print(f"\nTop 10 ranked:")
-    print(ranked[['ticker', 'rank_overall', 'composite_score',
-                  'fcf_yield', 'revenue_growth',
-                  'quality_penalty', 'pct_above_52w_low']].head(10).to_string())
+        if ranked.empty:
+            raise RuntimeError("No candidates survived scoring")
 
-    load_to_db(ranked)
-    print("=== ETL Complete ===")
+        print(f"\nTop 10 ranked:")
+        print(ranked[['ticker', 'rank_overall', 'composite_score',
+                      'fcf_yield', 'revenue_growth',
+                      'quality_penalty', 'pct_above_52w_low']].head(10).to_string())
+
+        stats['rows_loaded'] = load_to_db(ranked)
+        record_run_manifest('success', stats)
+        print("=== ETL Complete ===")
+    except Exception as original_error:
+        try:
+            record_run_manifest('failure', stats, error=original_error)
+        except Exception as manifest_error:
+            print(f"Could not persist ETL failure manifest: {manifest_error}")
+        raise
+
+
+if __name__ == "__main__":
+    main()

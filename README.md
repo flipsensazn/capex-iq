@@ -106,14 +106,23 @@ workflow) is the feedback loop that tests whether the signals actually have
 edge. Every time the system fires — CBS crossing 70, CBS jumping +15 in a
 week, transcript stress crossing 70, XBRL order gap breaching +50pp, or a
 scout candidate being approved — the event is logged to Neon `signal_events`
-with the first close after the event date, and 1w/1m/3m forward returns vs
-QQQ are filled in as each window matures. Transcript events are backfilled to
-their earnings-call dates, so the scoreboard seeds with history immediately.
-A 90-day per-ticker refractory stops threshold oscillation from double
-counting. `GET /scoreboard` aggregates median excess return and hit rate per
-signal type (plus an all-signals rollup); the ⚖ Signal Scoreboard panel below
-the Bottleneck Scout renders the verdict and the most recent signal chips.
-No alerting — this layer is passive measurement.
+with source-availability timing and a frozen methodology version. Timestamped
+prospective signals enter at the first NYSE regular-session close strictly
+after availability; the exchange calendar handles holidays and early closes.
+Date-only reconstructions wait until a later session. The 1w/1m/3m windows
+anchor to the actual entry date. An incomplete current-day Yahoo bar is never
+treated as a close, and stock/QQQ entry and exit dates must match.
+
+Methodology v2 begins **2026-08-17** (an explicit backfill/test run can override
+it with `SCOREBOARD_PROSPECTIVE_START`). Events before that boundary—including
+transcripts reconstructed at historical call dates—are labeled retrospective
+and remain exploratory. They are never blended into the forward-observed
+track record. A 90-day per-ticker refractory applies within each cohort.
+`GET /scoreboard` returns prospective data in the legacy `stats` / `events`
+fields and exposes both tracks explicitly through `statsByCohort` and
+`eventsByCohort`. The dashboard makes the prospective table primary and keeps
+the reconstruction in a disclosed, collapsed section. No alerting—this layer
+is passive measurement.
 
 ## Obsidian weekly digest (local)
 
@@ -258,4 +267,8 @@ GitHub Actions secrets for the workflow:
   time, but falls back to the latest available headlines on weekends and holidays.
 - The ETL pipeline can now bootstrap the `ranked_candidates` table in a fresh
   Neon database before loading scanner results.
+- Ranked ETL runs fail when successful SEC companyfacts responses cover less
+  than 90% of candidates (override with
+  `RANKED_ETL_MIN_SEC_RESPONSE_COVERAGE`) and publish daily state, counts,
+  errors, and last-success freshness to `ranked_etl_runs`.
 - Full setup guide: [docs/cloudflare-setup.md](docs/cloudflare-setup.md)

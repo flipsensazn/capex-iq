@@ -29,7 +29,7 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
-        run: pip install requests psycopg2-binary yfinance
+        run: pip install requests psycopg2-binary yfinance tzdata pandas_market_calendars==5.4.0
 
       - name: Run XBRL Gauges ETL
         env:
@@ -53,7 +53,8 @@ jobs:
       # forward returns vs QQQ — the "does the edge exist" feedback loop.
       - name: Update Signal Scoreboard
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL:                ${{ secrets.DATABASE_URL }}
+          SCOREBOARD_PROSPECTIVE_START: ${{ vars.SCOREBOARD_PROSPECTIVE_START }}
         run: python src/signal_scoreboard.py
 
       - name: Notify on failure

@@ -201,11 +201,21 @@ export function useDashboardData({
       .catch(() => {});
 
     fetch("/scoreboard")
-      .then(res => res.json())
-      .then(json => {
-        if (json.success) setScoreboardData({ stats: json.stats ?? [], events: json.events ?? [] });
+      .then(async res => {
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(json.message || "Scoreboard unavailable");
+        return json;
       })
-      .catch(() => {});
+      .then(json => {
+        setScoreboardData({
+          stats: json.stats ?? [],
+          events: json.events ?? [],
+          statsByCohort: json.statsByCohort ?? null,
+          eventsByCohort: json.eventsByCohort ?? null,
+          methodology: json.methodology ?? null,
+        });
+      })
+      .catch(() => setScoreboardData({ error: true }));
 
     fetch("/candidates")
       .then(res => res.json())

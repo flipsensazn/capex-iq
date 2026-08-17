@@ -5,13 +5,40 @@
 // the stock actually beat the market afterwards?"
 //
 //   { success: true,
-//     stats: [{ type,            // event type, or "all" for the rollup row
-//               n,               // total events logged
-//               horizons: { "1w": { n, medianExcess, hitRate }, "1m": ..., "3m": ... } }],
-//     events: [{ ticker, type, date, score, excess: { "1w": pct|null, ... } }] }
+//     stats: [...prospective stats], events: [...prospective events],
+//     statsByCohort: { prospective: [...], retrospective: [...] },
+//     eventsByCohort: { prospective: [...], retrospective: [...] },
+//     methodology: {...} }
 //
 // Excess = event return minus QQQ over the same window, percentage points.
 // Horizon stats only include events whose window has matured.
+
+const PROSPECTIVE_START = "2026-08-17";
+
+const METHODOLOGY = Object.freeze({
+  version: 2,
+  benchmark: "QQQ",
+  entry: "First NYSE regular-session close strictly after signal availability (or after event date for reconstructions).",
+  horizonAnchor: "Actual entry date",
+  horizonCalendarDays: { "1w": 7, "1m": 30, "3m": 91 },
+  excessUnit: "percentage_points",
+  aggregation: "Median over matured events",
+  hitDefinition: "Stock return strictly greater than benchmark return",
+  refractoryDays: 90,
+  refractoryScope: "ticker, event type, and cohort",
+  prospectiveStart: PROSPECTIVE_START,
+  initialObservationDisclosure: "A first stored value already above a threshold is labeled initial, not an observed crossing.",
+  retrospectiveDisclosure: "Historically reconstructed after the scoring rubric was designed; exploratory, not an out-of-sample track record.",
+});
+
+const emptyPayload = () => ({
+  success: true,
+  stats: [],
+  events: [],
+  statsByCohort: { prospective: [], retrospective: [] },
+  eventsByCohort: { prospective: [], retrospective: [] },
+  methodology: METHODOLOGY,
+});
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -66,14 +93,31 @@ export async function onRequest(context) {
     if (!res.ok) {
       const detail = await res.text();
       const err = new Error(detail);
-      err.missingTable = /does not exist/i.test(detail);
+      let dbError = null;
+      try { dbError = JSON.parse(detail); } catch { /* Neon may return plain text. */ }
+      const message = dbError?.message || dbError?.error || detail;
+      err.missingTable = /relation\s+"?(?:public\.)?signal_events"?\s+does not exist/i.test(message);
       throw err;
     }
     return (await res.json()).rows ?? [];
   };
 
+  const COHORT_SQL = `
+    CASE
+      WHEN details->>'cohort' IN ('prospective', 'retrospective')
+        THEN details->>'cohort'
+      ELSE 'retrospective'
+    END
+  `;
+
   const STATS_SQL = `
-    SELECT COALESCE(event_type, 'all') AS type,
+    WITH classified AS (
+      SELECT *, ${COHORT_SQL} AS cohort
+      FROM signal_events
+    )
+    SELECT cohort, COALESCE(event_type, 'all') AS type,
+           MIN(NULLIF(details->>'cohortBoundary', '')) AS cohort_boundary_min,
+           MAX(NULLIF(details->>'cohortBoundary', '')) AS cohort_boundary_max,
            COUNT(*) AS n,
            COUNT(*) FILTER (WHERE ret_1w IS NOT NULL AND bench_1w IS NOT NULL) AS n_1w,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY ret_1w - bench_1w)
@@ -90,17 +134,36 @@ export async function onRequest(context) {
              FILTER (WHERE ret_3m IS NOT NULL AND bench_3m IS NOT NULL) AS med_3m,
            AVG((ret_3m > bench_3m)::int)
              FILTER (WHERE ret_3m IS NOT NULL AND bench_3m IS NOT NULL) AS hit_3m
-    FROM signal_events
-    GROUP BY ROLLUP(event_type)
-    ORDER BY n DESC
+    FROM classified
+    GROUP BY cohort, ROLLUP(event_type)
+    ORDER BY cohort DESC, n DESC
   `;
 
   const EVENTS_SQL = `
-    SELECT ticker, event_type, event_date, score,
+    WITH classified AS (
+      SELECT *, ${COHORT_SQL} AS cohort,
+             COALESCE(
+               NULLIF(details->>'signalAvailableAt', '')::timestamptz,
+               created_at,
+               event_date::timestamptz
+             ) AS observed_at
+      FROM signal_events
+    ), ranked AS (
+      SELECT ticker, event_type, event_date, score, cohort, observed_at,
+             entry_date, details->>'signalAvailableAt' AS signal_available_at,
+             details->'exitDates' AS exit_dates,
+             ret_1w, bench_1w, ret_1m, bench_1m, ret_3m, bench_3m,
+             ROW_NUMBER() OVER (
+               PARTITION BY cohort ORDER BY observed_at DESC, event_date DESC, ticker
+             ) AS cohort_rank
+      FROM classified
+    )
+    SELECT ticker, event_type, event_date, score, cohort, observed_at,
+           entry_date, signal_available_at, exit_dates,
            ret_1w, bench_1w, ret_1m, bench_1m, ret_3m, bench_3m
-    FROM signal_events
-    ORDER BY event_date DESC, ticker
-    LIMIT 30
+    FROM ranked
+    WHERE cohort_rank <= 30
+    ORDER BY observed_at DESC, event_date DESC, ticker
   `;
 
   try {
@@ -111,8 +174,18 @@ export async function onRequest(context) {
 
     const num = v => (v != null ? Number(v) : null);
     const round1 = v => (v != null ? Math.round(v * 10) / 10 : null);
+    const boundaries = new Set(statRows.flatMap(r => [
+      r.cohort_boundary_min,
+      r.cohort_boundary_max,
+    ]).filter(Boolean));
+    if (boundaries.size > 1) {
+      throw new Error("signal_events contains inconsistent cohort boundaries");
+    }
+    const prospectiveStart = boundaries.values().next().value || PROSPECTIVE_START;
+    const methodology = { ...METHODOLOGY, prospectiveStart };
 
-    const stats = statRows.map(r => ({
+    const allStats = statRows.map(r => ({
+      cohort: r.cohort,
       type: r.type,
       n: num(r.n),
       horizons: Object.fromEntries(["1w", "1m", "3m"].map(h => [h, {
@@ -122,11 +195,17 @@ export async function onRequest(context) {
       }])),
     }));
 
-    const events = eventRows.map(r => ({
+    const allEvents = eventRows.map(r => ({
       ticker: r.ticker,
       type: r.event_type,
       date: r.event_date,
+      eventDate: r.event_date,
+      observedAt: r.observed_at,
+      signalAvailableAt: r.signal_available_at,
+      entryDate: r.entry_date,
+      exitDates: r.exit_dates ?? {},
       score: num(r.score),
+      cohort: r.cohort,
       excess: Object.fromEntries(["1w", "1m", "3m"].map(h => [h,
         r[`ret_${h}`] != null && r[`bench_${h}`] != null
           ? round1(Number(r[`ret_${h}`]) - Number(r[`bench_${h}`]))
@@ -134,8 +213,29 @@ export async function onRequest(context) {
       ])),
     }));
 
+    const statsByCohort = { prospective: [], retrospective: [] };
+    for (const stat of allStats) {
+      if (statsByCohort[stat.cohort]) statsByCohort[stat.cohort].push(stat);
+    }
+    const eventsByCohort = { prospective: [], retrospective: [] };
+    for (const event of allEvents) {
+      if (eventsByCohort[event.cohort]) eventsByCohort[event.cohort].push(event);
+    }
+
+    // Preserve the legacy top-level shape, but make it prospective-only so an
+    // older client cannot accidentally present a blended backtest as live edge.
+    const stats = statsByCohort.prospective;
+    const events = eventsByCohort.prospective;
+
     return new Response(
-      JSON.stringify({ success: true, stats, events }),
+      JSON.stringify({
+        success: true,
+        stats,
+        events,
+        statsByCohort,
+        eventsByCohort,
+        methodology,
+      }),
       { status: 200, headers }
     );
 
@@ -143,7 +243,7 @@ export async function onRequest(context) {
     // Table won't exist until the first ETL run — serve an empty scoreboard.
     if (err.missingTable) {
       return new Response(
-        JSON.stringify({ success: true, stats: [], events: [] }),
+        JSON.stringify(emptyPayload()),
         { status: 200, headers }
       );
     }

@@ -480,7 +480,7 @@ footer{border-top:1px solid var(--border-hairline)}
   </section>
 
   <section class="register-section">
-    <div class="mono-eyebrow" id="edgeEyebrow">◇ EVERY SIGNAL GRADED ON FORWARD RETURNS VS QQQ</div>
+    <div class="mono-eyebrow" id="edgeEyebrow">◇ PROSPECTIVE SIGNALS GRADED ON FORWARD RETURNS VS QQQ</div>
     <h2>If the edge fades, the scoreboard says so.</h2>
     <div class="register-card" id="register">
       <h3>Register — free during beta</h3>
@@ -694,14 +694,15 @@ footer{border-top:1px solid var(--border-hairline)}
   }).catch(function(){});
 
   fetch("/scoreboard").then(function(r){ return r.json(); }).then(function(d){
-    var stats = (d && d.stats) || [];
+    var stats = (d && d.statsByCohort && d.statsByCohort.prospective) || [];
     var all = null;
     for (var i = 0; i < stats.length; i++) if (stats[i].type === "all") all = stats[i];
     var h = all && all.horizons && all.horizons["3m"];
     if (!h || !h.n || h.medianExcess == null) return;
-    var txt = "◇ EVERY SIGNAL GRADED ON FORWARD RETURNS VS QQQ — " +
-              (h.medianExcess > 0 ? "+" : "") + h.medianExcess.toFixed(1) + "% MEDIAN";
+    var txt = "◇ PROSPECTIVE SIGNALS GRADED ON FORWARD RETURNS VS QQQ — " +
+              (h.medianExcess > 0 ? "+" : "") + h.medianExcess.toFixed(1) + "PP MEDIAN";
     if (h.hitRate != null) txt += " · " + h.hitRate + "% HIT";
+    txt += " · N=" + h.n;
     document.getElementById("edgeEyebrow").textContent = txt;
   }).catch(function(){});
 
