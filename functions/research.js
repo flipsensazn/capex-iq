@@ -3,8 +3,9 @@
 import { isAuthorizedAdmin } from "./access-lib.js";
 import { onRequest as fundamentalsHandler } from "./fundamentals.js";
 import { onRequest as pricesHandler } from "./prices.js";
+import { computeQualityScore } from "./quality-score.js";
 
-const CACHE_KEY_PREFIX = "research_v3_";
+const CACHE_KEY_PREFIX = "research_v4_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
 const MODEL = "gemini-3.5-flash-lite";
@@ -14,6 +15,7 @@ const SYSTEM_PROMPT = `You are a disciplined equity financial analyst.
 Reason ONLY from the supplied filed SEC figures. Do not use outside knowledge and do not invent data.
 When a supplied figure is null, say the data is unavailable rather than estimating or guessing it.
 The server computes every scenario price deterministically. Supply assumptions only and do NOT output a price.
+The quality score has been computed deterministically from the filed figures and is supplied as qualityScore. Write one sentence explaining what drives it, and do not contradict it or return a different score.
 The market currently values this company at the supplied marketContext.currentPs, and at marketContext.currentPe when available. Each chosen exit multiple MUST be reasoned relative to that current multiple, not picked from generic sector heuristics.
 If a chosen exit multiple differs materially from the current multiple, that case's rationale MUST state explicitly why the market's current multiple is expected to re-rate (compress or expand) and by roughly how much.
 After selecting assumptions, cross-check each resulting implied price against the supplied currentPrice. A case may land far from the current price ONLY when its rationale explicitly addresses that gap, for example by stating that the market is pricing in materially more growth than the filings support. A bull case far below the current price without such an explanation is incoherent and must be reconsidered.
@@ -24,7 +26,7 @@ Return ONLY one valid JSON object, without markdown fences or prose outside the 
   "summary": "3-5 sentence plain-English read of the financial trajectory",
   "strengths": ["2-4 items, each citing a real supplied figure"],
   "risks": ["2-4 items, each citing a real supplied figure"],
-  "quality": { "score": 0, "rationale": "one sentence" },
+  "quality": { "rationale": "one sentence explaining the supplied quality score" },
   "cases": {
     "bear": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
     "base": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
@@ -90,8 +92,8 @@ function extractJson(text) {
   return null;
 }
 
-async function callGemini(apiKey, fundamentals, currentPrice, marketContext, calculationInputs) {
-  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, marketContext, calculationInputs })}`;
+async function callGemini(apiKey, fundamentals, currentPrice, marketContext, calculationInputs, qualityScore) {
+  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, marketContext, calculationInputs, qualityScore })}`;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
     {
@@ -322,6 +324,7 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Unable to read SEC fundamentals" }, 502, headers);
   }
 
+  const qualityScore = computeQualityScore(fundamentals);
   const currentPrice = await getCurrentPrice(request, env, ticker);
   const fiscalYears = Array.isArray(fundamentals.fiscalYears) ? fundamentals.fiscalYears : [];
   const latestFiscalYear = fiscalYears.length ? fiscalYears[fiscalYears.length - 1] : null;
@@ -362,10 +365,16 @@ export async function onRequest(context) {
   };
 
   try {
-    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, marketContext, calculationInputs);
+    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, marketContext, calculationInputs, qualityScore);
     const cases = modelAnalysis.cases || {};
     const analysis = {
       ...modelAnalysis,
+      quality: {
+        ...qualityScore,
+        rationale: typeof modelAnalysis?.quality?.rationale === "string"
+          ? modelAnalysis.quality.rationale
+          : "",
+      },
       cases: {
         ...cases,
         bear: priceCase(cases.bear, latestRevenue.value, shareCount),

@@ -370,6 +370,40 @@ function MarketContextStrip({ research }) {
   );
 }
 
+function QualityBreakdown({ quality }) {
+  const components = Array.isArray(quality?.components) ? quality.components : [];
+  if (!components.length) return null;
+
+  return (
+    <div style={{ marginTop: 13, padding: "11px 12px", border: "1px solid var(--border-hairline)", borderRadius: 10, background: "rgba(255,255,255,0.015)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 9 }}>
+        <div style={EYEBROW_STYLE}>Score components</div>
+        <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9.5 }}>{quality.basis || "No fiscal-year basis"}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "9px 18px" }}>
+        {components.map(component => {
+          const included = Number.isFinite(component?.score);
+          const barWidth = included ? Math.min(100, Math.max(0, component.score)) : 0;
+          return (
+            <div key={component.key} style={{ opacity: included ? 1 : 0.48 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: included ? "var(--ink-300)" : "var(--ink-500)", fontSize: 10.5 }}>{component.label}</span>
+                <span style={{ color: included ? "var(--ink-200)" : "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 10 }}>
+                  {included ? `${component.score.toFixed(0)}/100 · ${(component.weight * 100).toFixed(1)}% weight` : "— · excluded (no filed data)"}
+                </span>
+              </div>
+              <div style={{ height: 3, marginTop: 5, overflow: "hidden", borderRadius: 999, background: "rgba(255,255,255,.06)" }}>
+                <div style={{ width: `${barWidth}%`, height: "100%", borderRadius: 999, background: included ? "var(--accent)" : "transparent" }} />
+              </div>
+              <div style={{ marginTop: 4, color: "var(--ink-500)", fontSize: 9.5 }}>{component.detail}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ResearchCases({ cases, currentPrice }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
@@ -583,6 +617,8 @@ export default function ResearchPanel() {
 
           <p style={{ margin: "14px 0 0", color: "var(--ink-200)", fontSize: 12, lineHeight: 1.65 }}>{analysis.summary}</p>
           {analysis.quality?.rationale && <p style={{ margin: "7px 0 0", color: "var(--ink-400)", fontSize: 10.5 }}>{analysis.quality.rationale}</p>}
+          {analysis.quality?.note && <p style={{ margin: "7px 0 0", color: "var(--ink-400)", fontSize: 10.5 }}>{analysis.quality.note}</p>}
+          <QualityBreakdown quality={analysis.quality} />
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginTop: 16, marginBottom: 18 }}>
             {[
