@@ -107,7 +107,7 @@ async function callGemini(apiKey, fundamentals, currentPrice, calculationInputs)
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`Gemini ${response.status}: ${detail.slice(0, 300)}`);
+    throw new Error(`[model ${MODEL}] Gemini ${response.status}: ${detail.slice(0, 300)}`);
   }
 
   const data = await response.json();
@@ -342,6 +342,6 @@ export async function onRequest(context) {
     return jsonResponse(result, 200, headers);
   } catch (err) {
     console.error("[research] analysis failed:", err);
-    return jsonResponse({ error: "Analysis failed" }, 502, headers);
+    return jsonResponse({ error: "Analysis failed", detail: String(err?.message || err).slice(0, 400) }, 502, headers);
   }
 }

@@ -20,6 +20,12 @@ const STATEMENTS = [
   {
     key: "income",
     title: "Income Statement",
+    chartRows: [
+      ["revenue", "Revenue", "var(--accent)"],
+      ["grossProfit", "Gross profit", "var(--info-400)"],
+      ["operatingIncome", "Operating income", "var(--event-400)"],
+      ["netIncome", "Net income", "var(--up-400)"],
+    ],
     rows: [
       ["revenue", "Revenue", "currency"],
       ["grossProfit", "Gross profit", "currency"],
@@ -33,6 +39,11 @@ const STATEMENTS = [
   {
     key: "balance",
     title: "Balance Sheet",
+    chartRows: [
+      ["totalAssets", "Total assets", "var(--accent)"],
+      ["totalLiabilities", "Total liabilities", "var(--info-400)"],
+      ["equity", "Equity", "var(--up-400)"],
+    ],
     rows: [
       ["totalAssets", "Total assets", "currency"],
       ["totalLiabilities", "Total liabilities", "currency"],
@@ -46,6 +57,11 @@ const STATEMENTS = [
   {
     key: "cashFlow",
     title: "Cash Flow",
+    chartRows: [
+      ["operatingCashFlow", "Operating cash flow", "var(--accent)"],
+      ["capex", "Capital expenditures", "var(--event-400)"],
+      ["freeCashFlow", "Free cash flow", "var(--up-400)"],
+    ],
     rows: [
       ["operatingCashFlow", "Operating cash flow", "currency"],
       ["capex", "Capital expenditures", "currency"],
@@ -114,55 +130,181 @@ async function responseError(response) {
   } catch {
     body = null;
   }
-  if (response.status === 403) return "Admin access required";
-  if (response.status === 404) return "No SEC filer found for that ticker — US SEC filers only";
-  return body?.error || `Request failed (${response.status})`;
+  const message = response.status === 403
+    ? "Admin access required"
+    : response.status === 404
+      ? "No SEC filer found for that ticker — US SEC filers only"
+      : body?.error || `Request failed (${response.status})`;
+  return {
+    message,
+    detail: typeof body?.detail === "string" ? body.detail : "",
+  };
 }
 
 function StatementTable({ definition, statement, years }) {
   return (
-    <section style={{ ...PANEL_STYLE, minWidth: 0, overflow: "hidden" }}>
-      <div style={{ padding: "14px 16px 10px" }}>
-        <div style={EYEBROW_STYLE}>{definition.title}</div>
-      </div>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={{ ...EYEBROW_STYLE, position: "sticky", left: 0, zIndex: 1, background: "var(--void-500)", textAlign: "left", padding: "9px 16px", borderTop: "1px solid var(--border-hairline)" }}>Filed figures</th>
-              {years.map(year => (
-                <th key={year} style={{ ...EYEBROW_STYLE, textAlign: "right", padding: "9px 14px", borderTop: "1px solid var(--border-hairline)" }}>{year}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {definition.rows.map(([key, label, kind]) => (
-              <tr key={key}>
-                <td style={{ position: "sticky", left: 0, zIndex: 1, background: "var(--void-500)", color: "var(--ink-300)", fontSize: 11, padding: "9px 16px", borderTop: "1px solid var(--border-hairline)", whiteSpace: "nowrap" }}>{label}</td>
-                {years.map(year => {
-                  const value = statement?.[key]?.[year];
-                  return (
-                    <td
-                      key={year}
-                      style={{
-                        color: Number.isFinite(value) && value < 0 ? "var(--down-400)" : "var(--ink-100)",
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 11,
-                        padding: "9px 14px",
-                        textAlign: "right",
-                        borderTop: "1px solid var(--border-hairline)",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {formatMagnitude(value, kind)}
-                    </td>
-                  );
-                })}
-              </tr>
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...EYEBROW_STYLE, position: "sticky", left: 0, zIndex: 1, background: "var(--void-500)", textAlign: "left", padding: "9px 16px", borderTop: "1px solid var(--border-hairline)" }}>Filed figures</th>
+            {years.map(year => (
+              <th key={year} style={{ ...EYEBROW_STYLE, textAlign: "right", padding: "9px 14px", borderTop: "1px solid var(--border-hairline)" }}>{year}</th>
             ))}
-          </tbody>
-        </table>
+          </tr>
+        </thead>
+        <tbody>
+          {definition.rows.map(([key, label, kind]) => (
+            <tr key={key}>
+              <td style={{ position: "sticky", left: 0, zIndex: 1, background: "var(--void-500)", color: "var(--ink-300)", fontSize: 11, padding: "9px 16px", borderTop: "1px solid var(--border-hairline)", whiteSpace: "nowrap" }}>{label}</td>
+              {years.map(year => {
+                const value = statement?.[key]?.[year];
+                return (
+                  <td
+                    key={year}
+                    style={{
+                      color: Number.isFinite(value) && value < 0 ? "var(--down-400)" : "var(--ink-100)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 11,
+                      padding: "9px 14px",
+                      textAlign: "right",
+                      borderTop: "1px solid var(--border-hairline)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {formatMagnitude(value, kind)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SeriesChart({ title, series, years, formatValue }) {
+  const width = 720;
+  const height = 300;
+  const margin = { top: 18, right: 18, bottom: 36, left: 64 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const values = series.flatMap(item => years
+    .map(year => item.values?.[year])
+    .filter(Number.isFinite));
+  const hasData = values.length > 0;
+  const dataMin = hasData ? Math.min(...values) : 0;
+  const dataMax = hasData ? Math.max(...values) : 0;
+  const domainMin = Math.min(0, dataMin);
+  const naturalMax = Math.max(0, dataMax);
+  const domainMax = naturalMax === domainMin ? domainMin + 1 : naturalMax;
+  const domainRange = domainMax - domainMin;
+  const yFor = value => margin.top + ((domainMax - value) / domainRange) * plotHeight;
+  const zeroY = yFor(0);
+  const ticks = [domainMax, (domainMax + domainMin) / 2, domainMin];
+  const yearWidth = years.length ? plotWidth / years.length : plotWidth;
+  const groupWidth = yearWidth * 0.72;
+  const barGap = 3;
+  const barWidth = Math.max(2, (groupWidth - barGap * Math.max(0, series.length - 1)) / Math.max(1, series.length));
+
+  return (
+    <>
+      <div style={{ padding: "14px 16px 4px" }}>
+        <div style={EYEBROW_STYLE}>{title}</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "7px 14px", marginTop: 9 }}>
+          {series.map(item => (
+            <div key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--ink-300)", fontSize: 10 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color }} />
+              {item.label}
+            </div>
+          ))}
+        </div>
       </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
+        role="img"
+        aria-label={`${title} grouped bar chart`}
+        style={{ display: "block", width: "100%", height: "auto" }}
+      >
+        {ticks.map((tick, index) => {
+          const y = yFor(tick);
+          return (
+            <g key={`${tick}-${index}`}>
+              <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} stroke="var(--border-hairline)" />
+              <text x={margin.left - 9} y={y + 3.5} textAnchor="end" fill="var(--ink-500)" fontFamily="var(--font-mono)" fontSize="9">
+                {hasData ? formatValue(tick) : "—"}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={margin.left} x2={width - margin.right} y1={zeroY} y2={zeroY} stroke="var(--border-soft)" />
+        {years.map((year, yearIndex) => {
+          const groupX = margin.left + yearIndex * yearWidth + (yearWidth - groupWidth) / 2;
+          return (
+            <g key={year}>
+              {series.map((item, seriesIndex) => {
+                const value = item.values?.[year];
+                if (!Number.isFinite(value)) return null;
+                const valueY = yFor(value);
+                return (
+                  <rect
+                    key={item.label}
+                    x={groupX + seriesIndex * (barWidth + barGap)}
+                    y={Math.min(valueY, zeroY)}
+                    width={barWidth}
+                    height={Math.abs(valueY - zeroY)}
+                    rx="1.5"
+                    fill={value < 0 ? "var(--down-400)" : item.color}
+                  >
+                    <title>{`${item.label} · FY ${year} · ${formatValue(value)}`}</title>
+                  </rect>
+                );
+              })}
+              <text x={margin.left + yearIndex * yearWidth + yearWidth / 2} y={height - 13} textAnchor="middle" fill="var(--ink-400)" fontFamily="var(--font-mono)" fontSize="10">
+                {year}
+              </text>
+            </g>
+          );
+        })}
+        {!hasData && (
+          <text x={margin.left + plotWidth / 2} y={margin.top + plotHeight / 2} textAnchor="middle" fill="var(--ink-500)" fontSize="11">
+            No filed data
+          </text>
+        )}
+      </svg>
+    </>
+  );
+}
+
+function StatementChart({ definition, statement, years }) {
+  const [showFigures, setShowFigures] = useState(false);
+  const series = definition.chartRows.map(([key, label, color]) => ({
+    label,
+    values: statement?.[key] ?? {},
+    color,
+  }));
+
+  return (
+    <section style={{ ...PANEL_STYLE, minWidth: 0, overflow: "hidden" }}>
+      <SeriesChart
+        title={definition.title}
+        series={series}
+        years={years}
+        formatValue={value => formatMagnitude(value, "currency")}
+      />
+      <div style={{ padding: "0 16px 14px" }}>
+        <button
+          type="button"
+          aria-expanded={showFigures}
+          onClick={() => setShowFigures(value => !value)}
+          style={{ background: "none", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-sm)", color: "var(--ink-400)", padding: "5px 8px", fontFamily: "var(--font-condensed)", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer" }}
+        >
+          {showFigures ? "Hide figures" : "Show figures"}
+        </button>
+      </div>
+      {showFigures && <StatementTable definition={definition} statement={statement} years={years} />}
     </section>
   );
 }
@@ -234,7 +376,7 @@ export default function ResearchPanel() {
   const [fundamentalsLoading, setFundamentalsLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [fundamentalsError, setFundamentalsError] = useState("");
-  const [aiError, setAiError] = useState("");
+  const [aiError, setAiError] = useState(null);
 
   async function analyzeTicker(event) {
     event.preventDefault();
@@ -243,7 +385,7 @@ export default function ResearchPanel() {
     setFundamentals(null);
     setResearch(null);
     setFundamentalsError("");
-    setAiError("");
+    setAiError(null);
     if (!ticker) return;
 
     setFundamentalsLoading(true);
@@ -251,7 +393,8 @@ export default function ResearchPanel() {
     try {
       const response = await fetch(`/fundamentals?ticker=${encodeURIComponent(ticker)}`);
       if (!response.ok) {
-        setFundamentalsError(await responseError(response));
+        const error = await responseError(response);
+        setFundamentalsError(error.message);
         return;
       }
       filedData = await response.json();
@@ -276,7 +419,7 @@ export default function ResearchPanel() {
       }
       setResearch(await response.json());
     } catch {
-      setAiError("Unable to generate the research analysis");
+      setAiError({ message: "Unable to generate the research analysis", detail: "" });
     } finally {
       setAiLoading(false);
     }
@@ -337,16 +480,25 @@ export default function ResearchPanel() {
 
           <MetricsStrip data={fundamentals} latestYear={latestYear} />
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 430px), 1fr))", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14 }}>
             {STATEMENTS.map(definition => (
-              <StatementTable key={definition.key} definition={definition} statement={fundamentals.statements?.[definition.key]} years={years} />
+              <StatementChart key={definition.key} definition={definition} statement={fundamentals.statements?.[definition.key]} years={years} />
             ))}
           </div>
         </>
       )}
 
       {aiLoading && <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--ink-400)", fontSize: 12 }}>Analyzing the filed figures and checking scenario arithmetic…</div>}
-      {aiError && <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--down-400)", fontSize: 12 }}>{aiError}</div>}
+      {aiError && (
+        <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--down-400)", fontSize: 12 }}>
+          <div>{aiError.message}</div>
+          {aiError.detail && (
+            <div style={{ marginTop: 7, maxHeight: 120, overflow: "auto", color: "var(--ink-400)", fontFamily: "var(--font-mono)", fontSize: 10.5, lineHeight: 1.45, wordBreak: "break-word" }}>
+              {aiError.detail}
+            </div>
+          )}
+        </div>
+      )}
 
       {analysis && (
         <section style={{ ...PANEL_STYLE, padding: 18 }}>
