@@ -155,6 +155,24 @@ function extractConcepts(usGaapFacts) {
   return extracted;
 }
 
+function extractSharesOutstanding(deiFacts) {
+  const units = deiFacts?.EntityCommonStockSharesOutstanding?.units;
+  if (!units || typeof units !== "object") return { value: null, asOf: null };
+
+  const entries = Object.values(units)
+    .flatMap(unitEntries => Array.isArray(unitEntries) ? unitEntries : [])
+    .filter(entry => typeof entry?.end === "string");
+  if (!entries.length) return { value: null, asOf: null };
+
+  const latest = entries.reduce((current, entry) =>
+    entry.end >= current.end ? entry : current
+  );
+  return {
+    value: Number.isFinite(latest.val) ? latest.val : null,
+    asOf: latest.end || null,
+  };
+}
+
 function valuesForYears(series, fiscalYears) {
   return Object.fromEntries(fiscalYears.map(year => [year, series[String(year)] ?? null]));
 }
@@ -186,6 +204,7 @@ function cagr(series, fiscalYears) {
 
 function buildResult(ticker, cik, companyFacts) {
   const extracted = extractConcepts(companyFacts?.facts?.["us-gaap"] || {});
+  const sharesOutstanding = extractSharesOutstanding(companyFacts?.facts?.dei || {});
   const fiscalYears = [...new Set(
     Object.values(extracted).flatMap(series => Object.keys(series).map(Number))
   )]
@@ -228,6 +247,7 @@ function buildResult(ticker, cik, companyFacts) {
     entityName: companyFacts?.entityName || null,
     fiscalYears,
     currency: "USD",
+    sharesOutstanding,
     statements: {
       income: {
         revenue: values.revenue,
@@ -302,7 +322,7 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Invalid ticker format" }, 400, headers);
   }
 
-  const cacheKey = `fundamentals_v1_${ticker}`;
+  const cacheKey = `fundamentals_v2_${ticker}`;
   const cached = await readKvJson(env.SHARED_DATA, cacheKey);
   if (cached) return jsonResponse(cached, 200, headers);
 

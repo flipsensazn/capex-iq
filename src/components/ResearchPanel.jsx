@@ -123,6 +123,11 @@ function formatPrice(value) {
   return Number.isFinite(value) && value >= 0 ? `$${value.toFixed(2)}` : "—";
 }
 
+function formatSignedPercent(value) {
+  if (!Number.isFinite(value)) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
 async function responseError(response) {
   let body;
   try {
@@ -332,11 +337,52 @@ function MetricsStrip({ data, latestYear }) {
   );
 }
 
-function ResearchCases({ cases }) {
+function MarketContextStrip({ research }) {
+  const context = research?.marketContext;
+  const shareCount = Number.isFinite(research?.shareCount)
+    ? formatMagnitude(research.shareCount, "shares")
+    : "—";
+  const shareBasis = research?.shareCountBasis === "current_outstanding"
+    ? `current outstanding${research.shareCountAsOf ? `, as of ${research.shareCountAsOf}` : ""}`
+    : research?.shareCountBasis === "weighted_average_diluted"
+      ? "FY weighted-average diluted"
+      : "basis unavailable";
+
+  return (
+    <div style={{ marginBottom: 14, padding: "12px 14px", border: "1px solid var(--border-hairline)", borderRadius: 12, background: "rgba(255,255,255,0.02)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
+        {[
+          ["Current price", formatPrice(research?.currentPrice)],
+          ["Market cap", formatMagnitude(context?.marketCap, "currency")],
+          ["Current P/S", formatRatio(context?.currentPs)],
+          ["Current P/E", formatRatio(context?.currentPe)],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <div style={EYEBROW_STYLE}>{label}</div>
+            <div style={{ marginTop: 4, color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700 }}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid var(--border-hairline)", color: "var(--ink-300)", fontFamily: "var(--font-mono)", fontSize: 10.5 }}>
+        {shareCount} shares ({shareBasis})
+      </div>
+    </div>
+  );
+}
+
+function ResearchCases({ cases, currentPrice }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
       {Object.entries(CASE_META).map(([key, meta]) => {
         const scenario = cases?.[key];
+        const vsCurrent = Number.isFinite(scenario?.impliedPrice) && Number.isFinite(currentPrice) && currentPrice > 0
+          ? ((scenario.impliedPrice / currentPrice) - 1) * 100
+          : null;
+        const vsCurrentColor = vsCurrent > 0
+          ? "var(--up-400)"
+          : vsCurrent < 0
+            ? "var(--down-400)"
+            : "var(--ink-300)";
         return (
           <article key={key} style={{ border: `1px solid color-mix(in srgb, ${meta.color} 30%, var(--border-hairline))`, borderRadius: 14, padding: 14, background: "rgba(255,255,255,0.02)" }}>
             <div style={{ marginBottom: 12 }}>
@@ -360,6 +406,8 @@ function ResearchCases({ cases }) {
                   <span style={{ display: "block", maxWidth: 170, marginTop: 3, color: "var(--ink-400)", fontSize: 10, lineHeight: 1.35 }}>{scenario.methodError}</span>
                 )}
               </span>
+              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>vs current</span>
+              <span style={{ color: vsCurrentColor, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, textAlign: "right" }}>{formatSignedPercent(vsCurrent)}</span>
             </div>
             {scenario?.rationale && <p style={{ margin: "12px 0 0", color: "var(--ink-300)", fontSize: 11, lineHeight: 1.55 }}>{scenario.rationale}</p>}
           </article>
@@ -530,7 +578,8 @@ export default function ResearchPanel() {
             ))}
           </div>
 
-          <ResearchCases cases={analysis.cases} />
+          <MarketContextStrip research={research} />
+          <ResearchCases cases={analysis.cases} currentPrice={research.currentPrice} />
 
           {Array.isArray(analysis.dataGaps) && analysis.dataGaps.length > 0 && (
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--border-hairline)" }}>
