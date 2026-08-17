@@ -17,6 +17,7 @@ import * as capex          from "../../functions/capex.js";
 import * as cnnFearGreed   from "../../functions/cnn-fear-greed.js";
 import * as composite      from "../../functions/composite.js";
 import * as exposure       from "../../functions/exposure.js";
+import * as fundamentals   from "../../functions/fundamentals.js";
 import * as gapScanner     from "../../functions/gap-scanner.js";
 import * as gauges         from "../../functions/gauges.js";
 import * as marketNews     from "../../functions/market-news.js";
@@ -45,6 +46,7 @@ const ROUTES = {
   "/cnn-fear-greed":  cnnFearGreed,
   "/composite":       composite,
   "/exposure":        exposure,
+  "/fundamentals":    fundamentals,
   "/gap-scanner":     gapScanner,
   "/gauges":          gauges,
   "/market-news":     marketNews,
