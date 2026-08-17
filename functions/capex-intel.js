@@ -145,8 +145,6 @@ async function callGemini(promptText, apiKey, temperature, maxTokens, timeoutMs 
         }),
       }
     );
-    clearTimeout(timeout);
-
     if (!res.ok) {
       const errText = await res.text();
       throw new Error(`Gemini API error ${res.status}: ${errText}`);
@@ -162,11 +160,11 @@ async function callGemini(promptText, apiKey, temperature, maxTokens, timeoutMs 
 
     const clean = textContent.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
     return JSON.parse(clean);
-
   } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === "AbortError") throw new Error(`Gemini request timed out after ${timeoutMs}ms`);
+    if (controller.signal.aborted) throw new Error(`Gemini request timed out after ${timeoutMs}ms`);
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -192,15 +190,19 @@ async function persistHistory(env, result) {
     const host = new URL(
       env.DATABASE_URL.replace("postgresql://", "https://").replace("postgres://", "https://")
     ).hostname;
-    const sql = (query, params = []) =>
-      fetch(`https://${host}/sql`, {
+    const sql = async (query, params = []) => {
+      const response = await fetch(`https://${host}/sql`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Neon-Connection-String": env.DATABASE_URL,
         },
         body: JSON.stringify({ query, params }),
+        signal: AbortSignal.timeout(5_000),
       });
+      if (!response.ok) throw new Error(`Neon history write failed (${response.status})`);
+      return response;
+    };
 
     await sql(`
       CREATE TABLE IF NOT EXISTS capex_intel_history (
@@ -289,6 +291,86 @@ function validateAllocations(allocations, totalCapex) {
 }
 
 import { isAuthorizedAdmin } from "./access-lib.js";
+import {
+  IntelRefreshError,
+  intelErrorResponse,
+  invalidateIntelCoordinated,
+  refreshIntelCoordinated,
+  refreshIntelInBackground,
+} from "./operation-coordinator.js";
+
+export async function refreshCapexIntel(env, { force = false } = {}) {
+  if (!force && env.SHARED_DATA) {
+    const cached = await env.SHARED_DATA.get(CACHE_KEY, "json");
+    if (cached?.fetchedAt && Date.now() - cached.fetchedAt < CACHE_TTL) {
+      return cached;
+    }
+  }
+
+  const geminiKey = env.GEMINI_API_KEY;
+  if (!geminiKey) {
+    throw new IntelRefreshError(500, {
+      error: "GEMINI_API_KEY not set. Add it as a Cloudflare Pages environment variable.",
+    });
+  }
+
+  let totalCapex = null;
+  let byCompany = null;
+  try {
+    const totalResult = await callGemini(buildPrompt1(), geminiKey, 0.1, 1024, 25000, true);
+    byCompany = validateByCompany(totalResult?.byCompany);
+
+    if (byCompany) {
+      totalCapex = Object.values(byCompany).reduce((sum, value) => sum + value, 0);
+    } else if (totalResult && typeof totalResult.totalCapexBillions === "number") {
+      totalCapex = totalResult.totalCapexBillions;
+    }
+
+    if (totalCapex && totalCapex < STALE_TOTAL_FLOOR) {
+      console.warn("capex-intel: total", totalCapex,
+        "is below the staleness floor", STALE_TOTAL_FLOOR, "— discarding this reading");
+      totalCapex = null;
+      byCompany = null;
+    }
+  } catch (error) {
+    console.warn("capex-intel: prompt 1 failed", error);
+  }
+
+  if (!totalCapex || totalCapex <= 0) {
+    throw new IntelRefreshError(502, {
+      error: "Could not establish a current capex total",
+      detail: "The grounded reading was missing or looked like a prior-year figure.",
+    }, { noStore: true });
+  }
+
+  let allocations;
+  try {
+    allocations = validateAllocations(
+      await callGemini(buildPrompt2(totalCapex), geminiKey, 0.2, 1500),
+      totalCapex
+    );
+  } catch (error) {
+    throw new IntelRefreshError(502, {
+      error: "Failed to gather allocations",
+      detail: error.message,
+    });
+  }
+
+  const result = {
+    totalCapexDerived: totalCapex,
+    byCompany,
+    allocations,
+    fetchedAt: Date.now(),
+    model: MODEL,
+    note: "Search-grounded TOTAL capex guidance per hyperscaler (not an AI-only split — the AI portion is not a disclosed line item); sector allocations derived from Gemini based on public filings and earnings calls.",
+  };
+
+  if (env.SHARED_DATA) {
+    await env.SHARED_DATA.put(CACHE_KEY, JSON.stringify(result));
+  }
+  await persistHistory(env, result);
+  return result;
+}
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -321,107 +403,36 @@ export async function onRequest(context) {
       if (!(await isAuthorizedAdmin(request, env, body.password))) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
       }
-      if (env.SHARED_DATA) await env.SHARED_DATA.delete(CACHE_KEY);
+      await invalidateIntelCoordinated(env, "capex");
       return new Response(JSON.stringify({ success: true, message: "Cache cleared — next GET will fetch live intel." }), { status: 200, headers });
     } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
+      return intelErrorResponse(err, headers);
     }
   }
 
   // ── GET: serve from cache or fetch fresh ─────────────────────────────────
   if (request.method === "GET") {
     try {
-      // 1. Try KV cache first
+      let cached = null;
       if (env.SHARED_DATA) {
-        const cached = await env.SHARED_DATA.get(CACHE_KEY, "json");
+        cached = await env.SHARED_DATA.get(CACHE_KEY, "json");
         if (cached?.fetchedAt && Date.now() - cached.fetchedAt < CACHE_TTL) {
           return new Response(JSON.stringify({ ...cached, fromCache: true }), { status: 200, headers });
         }
       }
 
-      // 2. Cache miss — Call Gemini
-      const geminiKey = env.GEMINI_API_KEY;
-      if (!geminiKey) {
+      if (cached) {
+        refreshIntelInBackground(context, env, "capex");
         return new Response(
-          JSON.stringify({ error: "GEMINI_API_KEY not set. Add it as a Cloudflare Pages environment variable." }),
-          { status: 500, headers }
+          JSON.stringify({ ...cached, fromCache: true, stale: true }),
+          { status: 200, headers }
         );
       }
 
-      let totalCapex = null;
-      let byCompany  = null;
-
-      // STEP 2A: Execute Prompt 1 (search-grounded total + per-company split)
-      try {
-        const totalResult = await callGemini(buildPrompt1(), geminiKey, 0.1, 1024, 25000, true);
-        byCompany = validateByCompany(totalResult?.byCompany);
-
-        if (byCompany) {
-          // The per-company sum is the most defensible total
-          totalCapex = Object.values(byCompany).reduce((s, v) => s + v, 0);
-        } else if (totalResult && typeof totalResult.totalCapexBillions === "number") {
-          totalCapex = totalResult.totalCapexBillions;
-        }
-
-        // Staleness tripwire: the model sometimes answers with a prior-year
-        // actual instead of current guidance (a 2023 reading lands near $200B
-        // across the five, versus the ~$700B+ now guided). A floor for
-        // detecting obviously-stale data, NOT a target — genuine readings
-        // above it pass through untouched.
-        if (totalCapex && totalCapex < STALE_TOTAL_FLOOR) {
-          console.warn("capex-intel: total", totalCapex,
-            "is below the staleness floor", STALE_TOTAL_FLOOR, "— discarding this reading");
-          totalCapex = null;
-          byCompany = null;
-        }
-      } catch (prompt1Err) {
-        console.warn("capex-intel: prompt 1 failed", prompt1Err);
-      }
-
-      // No trustworthy total → serve an error instead of a fabricated one.
-      // Both surfaces fall back to the curated map values, which are
-      // conservative and clearly labelled as estimates.
-      if (!totalCapex || totalCapex <= 0) {
-        return new Response(
-          JSON.stringify({
-            error: "Could not establish a current capex total",
-            detail: "The grounded reading was missing or looked like a prior-year figure.",
-          }),
-          { status: 502, headers: { ...headers, "Cache-Control": "no-store" } }
-        );
-      }
-
-      // STEP 2B: Execute Prompt 2 (Get Allocations based on dynamic total)
-      let allocations;
-      try {
-        allocations = await callGemini(buildPrompt2(totalCapex), geminiKey, 0.2, 1500);
-        allocations = validateAllocations(allocations, totalCapex);
-      } catch (prompt2Err) {
-        return new Response(
-          JSON.stringify({ error: "Failed to gather allocations", detail: prompt2Err.message }),
-          { status: 502, headers }
-        );
-      }
-
-      const result = {
-        totalCapexDerived: totalCapex, // Returning this so you can inspect what the model decided
-        byCompany,
-        allocations,
-        fetchedAt: Date.now(),
-        model:     MODEL,
-        note:      "Search-grounded TOTAL capex guidance per hyperscaler (not an AI-only split — the AI portion is not a disclosed line item); sector allocations derived from Gemini based on public filings and earnings calls.",
-      };
-
-      // 3. Persist to KV for 6 hours + append to the guidance-history table
-      if (env.SHARED_DATA) {
-        await env.SHARED_DATA.put(CACHE_KEY, JSON.stringify(result));
-      }
-      await persistHistory(env, result);
-
+      const result = await refreshIntelCoordinated(env, "capex");
       return new Response(JSON.stringify({ ...result, fromCache: false }), { status: 200, headers });
-
     } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
+      return intelErrorResponse(err, headers);
     }
   }
 

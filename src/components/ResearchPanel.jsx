@@ -842,6 +842,7 @@ export default function ResearchPanel({ initialTicker }) {
   const [fundamentalsError, setFundamentalsError] = useState("");
   const [aiError, setAiError] = useState(null);
   const lastAutoRunTicker = useRef(null);
+  const requestControllerRef = useRef(null);
 
   const runResearch = useCallback(async tickerValue => {
     const ticker = typeof tickerValue === "string" ? tickerValue.trim().toUpperCase() : "";
@@ -852,41 +853,92 @@ export default function ResearchPanel({ initialTicker }) {
     setAiError(null);
     if (!ticker) return;
 
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const isCurrentRequest = () => requestControllerRef.current === controller;
+
+    setAiLoading(false);
     setFundamentalsLoading(true);
-    let filedData;
+    let fundamentalsLoaded = false;
+    let fundamentalsTimedOut = false;
+    const fundamentalsTimeout = setTimeout(() => {
+      fundamentalsTimedOut = true;
+      controller.abort();
+    }, 25_000);
     try {
-      const response = await fetch(`/fundamentals?ticker=${encodeURIComponent(ticker)}`);
+      const response = await fetch(`/fundamentals?ticker=${encodeURIComponent(ticker)}`, {
+        signal: controller.signal,
+      });
       if (!response.ok) {
         const error = await responseError(response);
-        setFundamentalsError(error.message);
-        return;
+        if (isCurrentRequest()) setFundamentalsError(error.message);
+      } else {
+        const filedData = await response.json();
+        if (isCurrentRequest()) {
+          setFundamentals(filedData);
+          fundamentalsLoaded = true;
+        }
       }
-      filedData = await response.json();
-      setFundamentals(filedData);
-    } catch {
-      setFundamentalsError("Unable to retrieve SEC fundamentals");
-      return;
+    } catch (error) {
+      if (isCurrentRequest()) {
+        setFundamentalsError(
+          fundamentalsTimedOut
+            ? "SEC fundamentals request timed out"
+            : "Unable to retrieve SEC fundamentals"
+        );
+      }
     } finally {
-      setFundamentalsLoading(false);
+      clearTimeout(fundamentalsTimeout);
+      if (isCurrentRequest()) setFundamentalsLoading(false);
+    }
+
+    if (!fundamentalsLoaded || !isCurrentRequest() || controller.signal.aborted) {
+      if (isCurrentRequest()) requestControllerRef.current = null;
+      return;
     }
 
     setAiLoading(true);
+    let researchTimedOut = false;
+    const researchTimeout = setTimeout(() => {
+      researchTimedOut = true;
+      controller.abort();
+    }, 65_000);
     try {
       const response = await fetch("/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ticker }),
+        signal: controller.signal,
       });
       if (!response.ok) {
-        setAiError(await responseError(response));
+        const error = await responseError(response);
+        if (isCurrentRequest()) setAiError(error);
         return;
       }
-      setResearch(await response.json());
-    } catch {
-      setAiError({ message: "Unable to generate the research analysis", detail: "" });
+      const result = await response.json();
+      if (isCurrentRequest()) setResearch(result);
+    } catch (error) {
+      if (isCurrentRequest()) {
+        setAiError({
+          message: researchTimedOut
+            ? "Research analysis timed out — please try again"
+            : "Unable to generate the research analysis",
+          detail: "",
+        });
+      }
     } finally {
-      setAiLoading(false);
+      clearTimeout(researchTimeout);
+      if (isCurrentRequest()) {
+        setAiLoading(false);
+        requestControllerRef.current = null;
+      }
     }
+  }, []);
+
+  useEffect(() => () => {
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
   }, []);
 
   function analyzeTicker(event) {

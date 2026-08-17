@@ -47,7 +47,7 @@ function parseCookies(headers) {
 }
 
 // ── CRUMB HELPER ─────────────────────────────────────────────────────────────
-async function getYahooSession(env) {
+async function getYahooSession(env, signal) {
   if (env.SHARED_DATA) {
     try {
       const cached = await env.SHARED_DATA.get(KV_CRUMB_KEY, "json");
@@ -59,11 +59,15 @@ async function getYahooSession(env) {
     }
   }
 
-  const cookieRes = await fetch("https://fc.yahoo.com", { headers: { "User-Agent": USER_AGENT } });
+  const cookieRes = await fetch("https://fc.yahoo.com", {
+    headers: { "User-Agent": USER_AGENT },
+    signal,
+  });
   const cookie    = parseCookies(cookieRes.headers);
 
   const crumbRes = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", {
-    headers: { "User-Agent": USER_AGENT, "Cookie": cookie }
+    headers: { "User-Agent": USER_AGENT, "Cookie": cookie },
+    signal,
   });
   const crumb = await crumbRes.text();
 
@@ -258,9 +262,12 @@ export async function onRequest(context) {
       (async () => {
         const v7 = {};
         try {
-          const { cookie, crumb } = await getYahooSession(env);
+          const { cookie, crumb } = await getYahooSession(env, request.signal);
           const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${INDEX_TICKERS.join(",")}&corsDomain=finance.yahoo.com&formatted=false&crumb=${crumb}`;
-          const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, "Cookie": cookie } });
+          const res = await fetch(url, {
+            headers: { "User-Agent": USER_AGENT, "Cookie": cookie },
+            signal: request.signal,
+          });
           if (res.ok) {
             const data = await res.json();
             const quotes = data?.quoteResponse?.result || [];
@@ -297,7 +304,10 @@ export async function onRequest(context) {
         // ticking when v7 serves a frozen snapshot; prefer whichever is fresher.
         await Promise.all(INDEX_TICKERS.map(async (t) => {
           try {
-            const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t)}?range=1d&interval=5m`, { headers: { "User-Agent": USER_AGENT } });
+            const res = await fetch(
+              `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t)}?range=1d&interval=5m`,
+              { headers: { "User-Agent": USER_AGENT }, signal: request.signal }
+            );
             if (!res.ok) return;
             const meta = (await res.json())?.chart?.result?.[0]?.meta;
             if (meta?.regularMarketPrice == null) return;
@@ -322,7 +332,10 @@ export async function onRequest(context) {
         const finnhubSymbol = FINNHUB_CRYPTO_MAP[yahooSymbol];
         if (!finnhubSymbol) return;
         try {
-          const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${finnhubSymbol}&token=${FINNHUB_KEY}`);
+          const res = await fetch(
+            `https://finnhub.io/api/v1/quote?symbol=${finnhubSymbol}&token=${FINNHUB_KEY}`,
+            { signal: request.signal }
+          );
           if (res.ok) {
             const q = await res.json();
             if (q.c != null && q.c > 0) {
@@ -388,7 +401,7 @@ export async function onRequest(context) {
 
   let fanOutFailed = false;
   try {
-    const { cookie, crumb } = await getYahooSession(env);
+    const { cookie, crumb } = await getYahooSession(env, request.signal);
 
     // ── STEP 1: rebuild reference data where missing/expired (2y chart per
     // ticker). On warm cycles this set is EMPTY, so the expensive per-ticker
@@ -399,7 +412,10 @@ export async function onRequest(context) {
       await Promise.all(batch.map(async (ticker) => {
         try {
           const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=2y&interval=1d&crumb=${encodeURIComponent(crumb)}`;
-          const chartRes = await fetch(chartUrl, { headers: { "User-Agent": USER_AGENT, "Cookie": cookie } });
+          const chartRes = await fetch(chartUrl, {
+            headers: { "User-Agent": USER_AGENT, "Cookie": cookie },
+            signal: request.signal,
+          });
           if (chartRes.ok) {
             const cd = await chartRes.json();
             const r  = cd?.chart?.result?.[0];
@@ -432,7 +448,10 @@ export async function onRequest(context) {
     for (let i = 0; i < tickers.length; i += 40) {
       const batch = tickers.slice(i, i + 40);
       const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${batch.join(",")}&corsDomain=finance.yahoo.com&formatted=false&crumb=${encodeURIComponent(crumb)}`;
-      const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, "Cookie": cookie } });
+      const res = await fetch(url, {
+        headers: { "User-Agent": USER_AGENT, "Cookie": cookie },
+        signal: request.signal,
+      });
       if (res.ok) {
         const data = await res.json();
         for (const q of data?.quoteResponse?.result || []) quotes[q.symbol] = q;
@@ -457,7 +476,10 @@ export async function onRequest(context) {
       const batch = needProbe.slice(i, i + 40);
       await Promise.all(batch.map(async (t) => {
         try {
-          const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t)}?range=1d&interval=5m`, { headers: { "User-Agent": USER_AGENT } });
+          const res = await fetch(
+            `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t)}?range=1d&interval=5m`,
+            { headers: { "User-Agent": USER_AGENT }, signal: request.signal }
+          );
           if (!res.ok) return;
           const meta = (await res.json())?.chart?.result?.[0]?.meta;
           if (meta?.regularMarketPrice == null) return;
@@ -547,7 +569,10 @@ export async function onRequest(context) {
       await Promise.all(macrosToFetch.map(async (t) => {
         try {
           const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(t)}?range=2d&interval=15m&crumb=${crumb}`;
-          const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, "Cookie": cookie } });
+          const res = await fetch(url, {
+            headers: { "User-Agent": USER_AGENT, "Cookie": cookie },
+            signal: request.signal,
+          });
           if (res.ok) {
             const data = await res.json();
             const result = data.chart?.result?.[0];
@@ -560,6 +585,7 @@ export async function onRequest(context) {
       }));
     }
   } catch (err) {
+    if (request.signal.aborted) throw err;
     fanOutFailed = true;
   }
 
@@ -569,7 +595,10 @@ export async function onRequest(context) {
     const BATCH_SIZE  = 8;
     async function fetchFinnhub(t) {
       try {
-        const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${FINNHUB_KEY}`);
+        const res = await fetch(
+          `https://finnhub.io/api/v1/quote?symbol=${t}&token=${FINNHUB_KEY}`,
+          { signal: request.signal }
+        );
         if (res.ok) {
           const quote = await res.json();
           const finitePrice = toFinite(quote.c);

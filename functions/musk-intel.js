@@ -79,7 +79,6 @@ async function callGemini(promptText, apiKey, temperature, maxTokens, timeoutMs 
         }),
       }
     );
-    clearTimeout(timeout);
     if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
     const data = await res.json();
     const text = data?.candidates?.[0]?.content?.parts?.filter(p => p.text)?.map(p => p.text)?.join("") ?? "";
@@ -88,9 +87,10 @@ async function callGemini(promptText, apiKey, temperature, maxTokens, timeoutMs 
     const m = clean.match(/[\[{][\s\S]*[\]}]/);
     return JSON.parse(m ? m[0] : clean);
   } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === "AbortError") throw new Error(`Gemini request timed out after ${timeoutMs}ms`);
+    if (controller.signal.aborted) throw new Error(`Gemini request timed out after ${timeoutMs}ms`);
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -131,6 +131,68 @@ function validateAllocations(allocations, totalCapex) {
 }
 
 import { isAuthorizedAdmin } from "./access-lib.js";
+import {
+  IntelRefreshError,
+  intelErrorResponse,
+  invalidateIntelCoordinated,
+  refreshIntelCoordinated,
+  refreshIntelInBackground,
+} from "./operation-coordinator.js";
+
+export async function refreshMuskIntel(env, { force = false } = {}) {
+  if (!force && env.SHARED_DATA) {
+    const cached = await env.SHARED_DATA.get(CACHE_KEY, "json");
+    if (cached?.fetchedAt && Date.now() - cached.fetchedAt < CACHE_TTL) {
+      return cached;
+    }
+  }
+
+  const geminiKey = env.GEMINI_API_KEY;
+  if (!geminiKey) {
+    throw new IntelRefreshError(500, { error: "GEMINI_API_KEY not set." });
+  }
+
+  let totalCapex = 60;
+  let byCompany = null;
+  try {
+    const totalResult = await callGemini(buildPrompt1(), geminiKey, 0.1, 1024, 25000, true);
+    byCompany = validateByCompany(totalResult?.byCompany);
+    if (byCompany) {
+      totalCapex = Object.values(byCompany).reduce((sum, value) => sum + value, 0);
+    } else if (typeof totalResult?.totalCapexBillions === "number") {
+      totalCapex = totalResult.totalCapexBillions;
+    }
+  } catch (error) {
+    console.warn("musk-intel prompt 1 failed, using fallback total", error);
+  }
+
+  let allocations;
+  try {
+    allocations = validateAllocations(
+      await callGemini(buildPrompt2(totalCapex), geminiKey, 0.2, 1500),
+      totalCapex
+    );
+  } catch (error) {
+    throw new IntelRefreshError(502, {
+      error: "Failed to gather allocations",
+      detail: error.message,
+    });
+  }
+
+  const result = {
+    totalCapexDerived: totalCapex,
+    byCompany,
+    allocations,
+    fetchedAt: Date.now(),
+    model: MODEL,
+    note: "Search-grounded Musk-company capex estimates; private-company figures are public reporting, not filings.",
+  };
+
+  if (env.SHARED_DATA) {
+    await env.SHARED_DATA.put(CACHE_KEY, JSON.stringify(result));
+  }
+  return result;
+}
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -162,67 +224,35 @@ export async function onRequest(context) {
       if (!(await isAuthorizedAdmin(request, env, body.password))) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
       }
-      if (env.SHARED_DATA) await env.SHARED_DATA.delete(CACHE_KEY);
+      await invalidateIntelCoordinated(env, "musk");
       return new Response(JSON.stringify({ success: true, message: "Cache cleared." }), { status: 200, headers });
     } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
+      return intelErrorResponse(err, headers);
     }
   }
 
   if (request.method === "GET") {
     try {
+      let cached = null;
       if (env.SHARED_DATA) {
-        const cached = await env.SHARED_DATA.get(CACHE_KEY, "json");
+        cached = await env.SHARED_DATA.get(CACHE_KEY, "json");
         if (cached?.fetchedAt && Date.now() - cached.fetchedAt < CACHE_TTL) {
           return new Response(JSON.stringify({ ...cached, fromCache: true }), { status: 200, headers });
         }
       }
 
-      const geminiKey = env.GEMINI_API_KEY;
-      if (!geminiKey) {
-        return new Response(JSON.stringify({ error: "GEMINI_API_KEY not set." }), { status: 500, headers });
-      }
-
-      let totalCapex = 60; // conservative fallback
-      let byCompany  = null;
-      try {
-        const totalResult = await callGemini(buildPrompt1(), geminiKey, 0.1, 1024, 25000, true);
-        byCompany = validateByCompany(totalResult?.byCompany);
-        if (byCompany) {
-          totalCapex = Object.values(byCompany).reduce((s, v) => s + v, 0);
-        } else if (typeof totalResult?.totalCapexBillions === "number") {
-          totalCapex = totalResult.totalCapexBillions;
-        }
-      } catch (err) {
-        console.warn("musk-intel prompt 1 failed, using fallback total", err);
-      }
-
-      let allocations;
-      try {
-        allocations = validateAllocations(
-          await callGemini(buildPrompt2(totalCapex), geminiKey, 0.2, 1500),
-          totalCapex
+      if (cached) {
+        refreshIntelInBackground(context, env, "musk");
+        return new Response(
+          JSON.stringify({ ...cached, fromCache: true, stale: true }),
+          { status: 200, headers }
         );
-      } catch (err) {
-        return new Response(JSON.stringify({ error: "Failed to gather allocations", detail: err.message }), { status: 502, headers });
       }
 
-      const result = {
-        totalCapexDerived: totalCapex,
-        byCompany,
-        allocations,
-        fetchedAt: Date.now(),
-        model: MODEL,
-        note: "Search-grounded Musk-company capex estimates; private-company figures are public reporting, not filings.",
-      };
-
-      if (env.SHARED_DATA) {
-        await env.SHARED_DATA.put(CACHE_KEY, JSON.stringify(result));
-      }
-
+      const result = await refreshIntelCoordinated(env, "musk");
       return new Response(JSON.stringify({ ...result, fromCache: false }), { status: 200, headers });
     } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
+      return intelErrorResponse(err, headers);
     }
   }
 
