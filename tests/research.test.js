@@ -349,7 +349,7 @@ async function requestResearchAsAdmin({
     timestamp: Date.now(),
   }), { expirationTtl: 60 });
   if (cachedResult) {
-    await kv.put(`research_v3_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+    await kv.put(`research_v4_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
 
   const originalFetch = globalThis.fetch;
