@@ -7,7 +7,7 @@ import yfinance as yf
 import time
 import random
 import os
-from datetime import date
+from datetime import date, timedelta
 
 # --- Credentials from environment variables (GitHub Secrets inject these) ---
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -248,35 +248,100 @@ def apply_gates(symbols):
 
 # ── PHASE 2: SEC FUNDAMENTALS ────────────────────────────
 
-def latest_gaap(facts, tags):
-    """Returns the most recent value for the first matching GAAP tag."""
-    gaap = facts.get('facts', {}).get('us-gaap', {})
-    for tag in tags:
-        if tag in gaap:
-            try:
-                units = sorted(gaap[tag]['units']['USD'],
-                               key=lambda x: x['end'], reverse=True)
-                if units:
-                    return units[0]['val']
-            except (KeyError, IndexError):
-                continue
-    return np.nan
+ANNUAL_DURATION_DAYS = (330, 380)
+FILED_FORMS = ('10-Q', '10-Q/A', '10-K', '10-K/A', '20-F', '20-F/A')
+ANNUAL_FORMS = ('10-K', '10-K/A', '20-F', '20-F/A')
 
 
-def prev_year_gaap(facts, tags):
-    """Returns the prior-year annual value (second most recent 10-K) for YoY calcs."""
+def _sec_date(value):
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def annual_gaap_pair(facts, tags):
+    """Latest and prior comparable annual values for the freshest matching tag.
+
+    Companyfacts carries quarterly and year-to-date facts inside 10-K filings,
+    so form alone does not establish an annual period. Require an annual
+    duration and dedupe repeated/restated periods by keeping the newest filing.
+    """
     gaap = facts.get('facts', {}).get('us-gaap', {})
-    for tag in tags:
-        if tag in gaap:
-            try:
-                usd_units = gaap[tag]['units']['USD']
-                annual = [u for u in usd_units if u.get('form') in ('10-K', '10-K/A')]
-                if len(annual) >= 2:
-                    annual_sorted = sorted(annual, key=lambda x: x['end'], reverse=True)
-                    return annual_sorted[1]['val']
-            except (KeyError, IndexError):
+    candidates = []
+
+    for tag_order, tag in enumerate(tags):
+        units = gaap.get(tag, {}).get('units', {}).get('USD', [])
+        periods = {}
+        for unit in units:
+            if unit.get('form') not in ANNUAL_FORMS or unit.get('val') is None:
                 continue
-    return np.nan
+            start = _sec_date(unit.get('start'))
+            end = _sec_date(unit.get('end'))
+            if not start or not end:
+                continue
+            duration = (end - start).days
+            if not (ANNUAL_DURATION_DAYS[0] <= duration <= ANNUAL_DURATION_DAYS[1]):
+                continue
+
+            filed = unit.get('filed') or ''
+            if end not in periods or filed > periods[end][1]:
+                periods[end] = (unit['val'], filed)
+
+        if periods:
+            ordered = sorted((end, value) for end, (value, _) in periods.items())
+            candidates.append((ordered[-1][0], len(ordered), -tag_order, ordered))
+
+    if not candidates:
+        return np.nan, np.nan
+
+    ordered = max(candidates, key=lambda candidate: candidate[:3])[3]
+    latest_end, latest = ordered[-1]
+    prior_target = latest_end - timedelta(days=365)
+    prior_candidates = [
+        (abs((end - prior_target).days), value)
+        for end, value in ordered[:-1]
+        if abs((end - prior_target).days) <= 45
+    ]
+    previous = min(prior_candidates, default=(None, np.nan), key=lambda item: item[0])[1]
+    return latest, previous
+
+
+def instant_gaap_pair(facts, tags):
+    """Latest balance-sheet value and the comparable prior-year instant."""
+    gaap = facts.get('facts', {}).get('us-gaap', {})
+    candidates = []
+
+    for tag_order, tag in enumerate(tags):
+        units = gaap.get(tag, {}).get('units', {}).get('USD', [])
+        periods = {}
+        for unit in units:
+            if unit.get('form') not in FILED_FORMS or unit.get('val') is None:
+                continue
+            end = _sec_date(unit.get('end'))
+            if not end:
+                continue
+            filed = unit.get('filed') or ''
+            if end not in periods or filed > periods[end][1]:
+                periods[end] = (unit['val'], filed)
+
+        if periods:
+            ordered = sorted((end, value) for end, (value, _) in periods.items())
+            candidates.append((ordered[-1][0], len(ordered), -tag_order, ordered))
+
+    if not candidates:
+        return np.nan, np.nan
+
+    ordered = max(candidates, key=lambda candidate: candidate[:3])[3]
+    latest_end, latest = ordered[-1]
+    prior_target = latest_end - timedelta(days=365)
+    prior_candidates = [
+        (abs((end - prior_target).days), value)
+        for end, value in ordered[:-1]
+        if abs((end - prior_target).days) <= 45
+    ]
+    previous = min(prior_candidates, default=(None, np.nan), key=lambda item: item[0])[1]
+    return latest, previous
 
 
 def fetch_sec_fundamentals(df_candidates, cik_map):
@@ -301,28 +366,25 @@ def fetch_sec_fundamentals(df_candidates, cik_map):
                 continue
             facts = res.json()
 
-            cfo               = latest_gaap(facts, ['NetCashProvidedByUsedInOperatingActivities'])
-            capex             = latest_gaap(facts, ['PaymentsToAcquirePropertyPlantAndEquipment',
-                                                    'PaymentsToAcquireProductiveAssets'])
-            net_income        = latest_gaap(facts, ['NetIncomeLoss'])
-            total_assets      = latest_gaap(facts, ['Assets'])
-            book_equity       = latest_gaap(facts, ['StockholdersEquity', 'AssetsNet'])
-            total_assets_prev = prev_year_gaap(facts, ['Assets'])
-            total_debt        = latest_gaap(facts, ['LongTermDebt',
-                                                    'LongTermDebtAndCapitalLeaseObligation',
-                                                    'DebtAndCapitalLeaseObligations'])
+            cfo, _            = annual_gaap_pair(facts, ['NetCashProvidedByUsedInOperatingActivities'])
+            capex, _          = annual_gaap_pair(facts, ['PaymentsToAcquirePropertyPlantAndEquipment',
+                                                         'PaymentsToAcquireProductiveAssets'])
+            net_income, _     = annual_gaap_pair(facts, ['NetIncomeLoss'])
+            total_assets, total_assets_prev = instant_gaap_pair(facts, ['Assets'])
+            book_equity, _    = instant_gaap_pair(facts, ['StockholdersEquity', 'AssetsNet'])
+            total_debt, _     = instant_gaap_pair(facts, ['LongTermDebt',
+                                                          'LongTermDebtAndCapitalLeaseObligation',
+                                                          'DebtAndCapitalLeaseObligations'])
             rev_tags = [
                 'RevenueFromContractWithCustomerExcludingAssessedTax',
                 'Revenues',
                 'SalesRevenueNet',
                 'RevenueFromContractWithCustomerIncludingAssessedTax',
             ]
-            revenue_current = latest_gaap(facts, rev_tags)
-            revenue_prev    = prev_year_gaap(facts, rev_tags)
+            revenue_current, revenue_prev = annual_gaap_pair(facts, rev_tags)
             # Fetch Operating Income (Proxy for EBITDA)
             op_tags = ['OperatingIncomeLoss', 'IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndExtraordinaryItems']
-            op_inc_current = latest_gaap(facts, op_tags)
-            op_inc_prev    = prev_year_gaap(facts, op_tags)
+            op_inc_current, op_inc_prev = annual_gaap_pair(facts, op_tags)
 
             rows.append({
                 'ticker':            ticker,

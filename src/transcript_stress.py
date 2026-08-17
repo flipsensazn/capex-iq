@@ -682,12 +682,13 @@ def analyze_ticker(conn, ticker, calendar_quarters, existing):
         print(f"  {ticker}: not covered by defeatbeta and no paid provider key — skipped")
         return
 
-    on_file = sum(1 for (y, q, _, _) in candidates if (ticker, y, q) in existing)
+    covered = 0
 
     for year, quarter, call_date, source in candidates:
-        if on_file >= QUARTERS_WANTED:
+        if covered >= QUARTERS_WANTED:
             break
         if (ticker, year, quarter) in existing:
+            covered += 1
             continue
 
         if source == "defeatbeta":
@@ -730,7 +731,7 @@ def analyze_ticker(conn, ticker, calendar_quarters, existing):
             ))
         conn.commit()
         existing.add((ticker, year, quarter))
-        on_file += 1
+        covered += 1
         print(f"  {ticker} {year}Q{quarter}: stress={stress} "
               f"({'gemini' if ai else 'lexicon-only'}, hits={raw}, {word_count}w, {provider})")
 

@@ -86,7 +86,6 @@ def evaluate_tjl(sym):
     rows = [(t, q["high"][i], q["close"][i]) for i, t in enumerate(ts)
             if q["close"][i] is not None and q["high"][i] is not None]
 
-    curr_px = meta.get("regularMarketPrice")
     reg_start = meta["currentTradingPeriod"]["regular"]["start"]
     reg_end = meta["currentTradingPeriod"]["regular"]["end"]
     pre_start = meta["currentTradingPeriod"]["pre"]["start"]
@@ -105,6 +104,11 @@ def evaluate_tjl(sym):
     mts = m["timestamp"]
     mq = m["indicators"]["quote"][0]
     now = time.time()
+    # Daily-chart regularMarketPrice is the prior close before the open.
+    timestamped_closes = [(t, close) for t, close in zip(mts, mq.get("close", []))
+                          if pre_start <= t <= now and close is not None]
+    curr_px = (max(timestamped_closes, key=lambda row: row[0])[1]
+               if timestamped_closes else None)
     pmh = None
     hod = None
     last_t = mts[-1] if mts else 0

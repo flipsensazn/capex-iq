@@ -42,9 +42,9 @@ if not quotes:
 rows = []
 for q in quotes:
     sym = q.get("symbol")
-    price = q.get("regularMarketPrice")
-    gap = q.get("preMarketChangePercent") or q.get("regularMarketChangePercent")
-    vol = q.get("preMarketVolume") or q.get("regularMarketVolume")
+    price = q.get("preMarketPrice")
+    gap = q.get("preMarketChangePercent")
+    vol = q.get("preMarketVolume")
     if not sym or price is None or gap is None or vol is None:
         continue
     if gap > 5 and price > 3 and vol > 25000:
