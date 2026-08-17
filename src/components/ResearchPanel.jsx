@@ -763,48 +763,72 @@ function CompositeSummary({ composite }) {
 }
 
 function ResearchCases({ cases, currentPrice }) {
+  const multipleUnit = cases?.multipleType === "pe"
+    ? "P/E"
+    : cases?.multipleType === "ps"
+      ? "P/S"
+      : null;
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
-      {Object.entries(CASE_META).map(([key, meta]) => {
-        const scenario = cases?.[key];
-        const vsCurrent = Number.isFinite(scenario?.impliedPrice) && Number.isFinite(currentPrice) && currentPrice > 0
-          ? ((scenario.impliedPrice / currentPrice) - 1) * 100
-          : null;
-        const vsCurrentColor = vsCurrent > 0
-          ? "var(--up-400)"
-          : vsCurrent < 0
-            ? "var(--down-400)"
-            : "var(--ink-300)";
-        return (
-          <article key={key} style={{ border: `1px solid color-mix(in srgb, ${meta.color} 30%, var(--border-hairline))`, borderRadius: 14, padding: 14, background: "rgba(255,255,255,0.02)" }}>
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ ...EYEBROW_STYLE, color: meta.color }}>{meta.label} case</div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "7px 12px", alignItems: "baseline" }}>
-              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Revenue CAGR</span>
-              <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatPercent(scenario?.revenueCagr)}</span>
-              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Exit net margin</span>
-              <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatPercent(scenario?.exitNetMargin)}</span>
-              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>
-                {scenario?.multipleType === "pe" ? "Exit P/E" : scenario?.multipleType === "ps" ? "Exit P/S" : "Exit multiple"}
-              </span>
-              <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatRatio(scenario?.multipleValue)}</span>
-              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Projected FY revenue</span>
-              <span style={{ color: "var(--ink-200)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatMagnitude(scenario?.projectedRevenue, "currency")}</span>
-              <span style={{ color: "var(--ink-300)", fontSize: 10, fontWeight: 700 }}>Implied price</span>
-              <span style={{ textAlign: "right" }}>
-                <span style={{ color: meta.color, fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800 }}>{formatPrice(scenario?.impliedPrice)}</span>
-                {scenario?.impliedPrice == null && scenario?.methodError && (
-                  <span style={{ display: "block", maxWidth: 170, marginTop: 3, color: "var(--ink-400)", fontSize: 10, lineHeight: 1.35 }}>{scenario.methodError}</span>
-                )}
-              </span>
-              <span style={{ color: "var(--ink-400)", fontSize: 10 }}>vs current</span>
-              <span style={{ color: vsCurrentColor, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, textAlign: "right" }}>{formatSignedPercent(vsCurrent)}</span>
-            </div>
-            {scenario?.rationale && <p style={{ margin: "12px 0 0", color: "var(--ink-300)", fontSize: 11, lineHeight: 1.55 }}>{scenario.rationale}</p>}
-          </article>
-        );
-      })}
+    <div>
+      {multipleUnit && <div style={{ ...EYEBROW_STYLE, marginBottom: 10 }}>Valued on {multipleUnit}</div>}
+      {cases?.ordering?.valid === false && (
+        <div
+          role="alert"
+          style={{ marginBottom: 12, padding: "11px 12px", color: "var(--down-400)", background: "color-mix(in srgb, var(--down-400) 12%, transparent)", border: "1px solid var(--down-400)", borderRadius: 10, fontSize: 11, fontWeight: 700, lineHeight: 1.5 }}
+        >
+          <div style={{ ...EYEBROW_STYLE, color: "var(--down-400)", marginBottom: 3 }}>Scenario ordering error</div>
+          {cases.ordering.message}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
+        {Object.entries(CASE_META).map(([key, meta]) => {
+          const scenario = cases?.[key];
+          const vsCurrent = Number.isFinite(scenario?.impliedPrice) && Number.isFinite(currentPrice) && currentPrice > 0
+            ? ((scenario.impliedPrice / currentPrice) - 1) * 100
+            : null;
+          const vsCurrentColor = vsCurrent > 0
+            ? "var(--up-400)"
+            : vsCurrent < 0
+              ? "var(--down-400)"
+              : "var(--ink-300)";
+          const exitMultiple = multipleUnit
+            ? `${formatRatio(scenario?.multipleValue)} ${multipleUnit}`
+            : formatRatio(scenario?.multipleValue);
+          const impliedPs = Number.isFinite(scenario?.impliedPs)
+            ? `${formatRatio(scenario.impliedPs)}${Number.isFinite(cases?.currentPs) ? ` (now ${formatRatio(cases.currentPs)})` : ""}`
+            : "—";
+          return (
+            <article key={key} style={{ border: `1px solid color-mix(in srgb, ${meta.color} 30%, var(--border-hairline))`, borderRadius: 14, padding: 14, background: "rgba(255,255,255,0.02)" }}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ ...EYEBROW_STYLE, color: meta.color }}>{meta.label} case</div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "7px 12px", alignItems: "baseline" }}>
+                <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Revenue CAGR</span>
+                <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatPercent(scenario?.revenueCagr)}</span>
+                <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Exit net margin</span>
+                <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatPercent(scenario?.exitNetMargin)}</span>
+                <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Exit multiple</span>
+                <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{exitMultiple}</span>
+                <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Projected FY revenue</span>
+                <span style={{ color: "var(--ink-200)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{formatMagnitude(scenario?.projectedRevenue, "currency")}</span>
+                <span style={{ color: "var(--ink-400)", fontSize: 10 }}>Implied P/S</span>
+                <span style={{ color: "var(--ink-200)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{impliedPs}</span>
+                <span style={{ color: "var(--ink-300)", fontSize: 10, fontWeight: 700 }}>Implied price</span>
+                <span style={{ textAlign: "right" }}>
+                  <span style={{ color: meta.color, fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800 }}>{formatPrice(scenario?.impliedPrice)}</span>
+                  {scenario?.impliedPrice == null && scenario?.methodError && (
+                    <span style={{ display: "block", maxWidth: 170, marginTop: 3, color: "var(--ink-400)", fontSize: 10, lineHeight: 1.35 }}>{scenario.methodError}</span>
+                  )}
+                </span>
+                <span style={{ color: "var(--ink-400)", fontSize: 10 }}>vs current</span>
+                <span style={{ color: vsCurrentColor, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, textAlign: "right" }}>{formatSignedPercent(vsCurrent)}</span>
+              </div>
+              {scenario?.rationale && <p style={{ margin: "12px 0 0", color: "var(--ink-300)", fontSize: 11, lineHeight: 1.55 }}>{scenario.rationale}</p>}
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
 }
