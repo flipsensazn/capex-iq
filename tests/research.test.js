@@ -475,7 +475,7 @@ async function requestResearch({
     await kv.put(`history_v1_${ticker.toUpperCase()}`, JSON.stringify(history), { expirationTtl: 3600 });
   }
   if (cachedResult) {
-    await kv.put(`research_v6_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+    await kv.put(`research_v7_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
 
   const originalFetch = globalThis.fetch;
@@ -540,7 +540,7 @@ async function requestResearch({
   }
 }
 
-function geminiAnalysisForCase(scenario) {
+function geminiAnalysisForCases(multipleType, scenarios) {
   return {
     summary: "Revenue and earnings were assessed from the supplied filed figures.",
     strengths: ["Revenue data was available."],
@@ -556,12 +556,21 @@ function geminiAnalysisForCase(scenario) {
     },
     quality: { score: 72, rationale: "The key pricing inputs were available." },
     cases: {
-      bear: { ...scenario, rationale: "Bear assumptions." },
-      base: { ...scenario, rationale: "Base assumptions." },
-      bull: { ...scenario, rationale: "Bull assumptions." },
+      multipleType,
+      bear: { ...scenarios.bear, rationale: scenarios.bear?.rationale ?? "Bear assumptions." },
+      base: { ...scenarios.base, rationale: scenarios.base?.rationale ?? "Base assumptions." },
+      bull: { ...scenarios.bull, rationale: scenarios.bull?.rationale ?? "Bull assumptions." },
     },
     dataGaps: [],
   };
+}
+
+function geminiAnalysisForCase(multipleType, scenario) {
+  return geminiAnalysisForCases(multipleType, {
+    bear: scenario,
+    base: scenario,
+    bull: scenario,
+  });
 }
 
 test("research rejects requests without a verified Access identity with zero Gemini calls", { concurrency: false }, async () => {
@@ -632,10 +641,9 @@ test("research returns server-derived price context and model technical and macr
     read: "Enterprise software demand and regulation provide qualitative context for the filing trend.",
     points: ["Competitive execution remains important.", "Supply-chain exposure is business-model dependent."],
   };
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
     revenueCagr: 5,
     exitNetMargin: 20,
-    multipleType: "pe",
     multipleValue: 20,
   });
   geminiAnalysis.technical = technical;
@@ -668,26 +676,72 @@ test("research returns server-derived price context and model technical and macr
   assert.deepEqual(body.analysis.technical, technical);
   assert.deepEqual(body.analysis.macro, macro);
   assert.match(geminiPrompts[0], /"priceContext":\{"price":400/);
+  assert.match(geminiPrompts[0], /Choose ONE valuation method for all three cases/);
+  assert.match(geminiPrompts[0], /P\/E of N at an exit net margin of M% implies a P\/S of N × M\/100/);
+  assert.match(geminiPrompts[0], /bear case must produce the lowest implied price/);
 });
 
-test("research rejects P/E pricing when projected earnings are negative", { concurrency: false }, async () => {
-  const geminiAnalysis = geminiAnalysisForCase({
-    revenueCagr: 5,
-    exitNetMargin: -5,
-    multipleType: "pe",
-    multipleValue: 5,
+test("research applies one set-level P/S method to all three cases", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCases("ps", {
+    bear: { revenueCagr: 0, exitNetMargin: -5, multipleValue: 1 },
+    base: { revenueCagr: 0, exitNetMargin: 0, multipleValue: 2 },
+    bull: { revenueCagr: 0, exitNetMargin: 10, multipleValue: 3 },
+  });
+  const { response } = await requestResearch({ geminiAnalysis });
+  const body = await response.json();
+  const cases = body.analysis.cases;
+  const expectedBasePrice = (1200 * 2) / 100;
+
+  assert.equal(response.status, 200);
+  assert.equal(cases.multipleType, "ps");
+  assert.equal(cases.currentPs, body.marketContext.currentPs);
+  assert.deepEqual([cases.bear.impliedPrice, cases.base.impliedPrice, cases.bull.impliedPrice], [12, 24, 36]);
+  assert.equal(cases.base.impliedPrice, expectedBasePrice);
+  assert.deepEqual([cases.bear.methodError, cases.base.methodError, cases.bull.methodError], [null, null, null]);
+  assert.equal("multipleType" in cases.base, false);
+});
+
+test("research rejects set-level P/E for a case with non-positive projected income without substituting P/S", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCases("pe", {
+    bear: { revenueCagr: 0, exitNetMargin: 0, multipleValue: 10 },
+    base: { revenueCagr: 0, exitNetMargin: 10, multipleValue: 20 },
+    bull: { revenueCagr: 0, exitNetMargin: 20, multipleValue: 25 },
   });
   const { response, geminiCalls } = await requestResearch({ geminiAnalysis });
   const body = await response.json();
-  const bear = body.analysis.cases.bear;
+  const cases = body.analysis.cases;
 
   assert.equal(response.status, 200);
   assert.equal(geminiCalls, 1);
-  assert.equal(body.currentPrice, 400);
-  assert.equal(body.latestFiscalYear, 2025);
-  assert.equal(bear.impliedPrice, null);
-  assert.ok(bear.methodError);
-  assert.ok(bear.impliedPrice == null || bear.impliedPrice >= 0);
+  assert.equal(cases.multipleType, "pe");
+  assert.equal(cases.bear.exitNetIncome, 0);
+  assert.equal(cases.bear.multipleValue, 10);
+  assert.equal(cases.bear.impliedPrice, null);
+  assert.equal(cases.bear.impliedPs, null);
+  assert.match(cases.bear.methodError, /P\/E.*non-positive projected earnings/i);
+  assert.equal(cases.base.impliedPrice, 24);
+  assert.equal(cases.bull.impliedPrice, 60);
+  assert.ok(cases.bear.impliedPrice == null || cases.bear.impliedPrice >= 0);
+});
+
+test("research rejects a legacy per-case multiple type instead of mixing methods", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCases("ps", {
+    bear: { revenueCagr: 0, exitNetMargin: 5, multipleValue: 1 },
+    base: { revenueCagr: 0, exitNetMargin: 10, multipleValue: 2 },
+    bull: { revenueCagr: 0, exitNetMargin: 15, multipleValue: 3 },
+  });
+  geminiAnalysis.cases.bear.multipleType = "pe";
+  const { response } = await requestResearch({ geminiAnalysis });
+  const body = await response.json();
+  const cases = body.analysis.cases;
+
+  assert.equal(response.status, 200);
+  assert.equal(cases.multipleType, "ps");
+  assert.equal(cases.bear.projectedRevenue, 1200);
+  assert.equal(cases.bear.impliedPrice, null);
+  assert.match(cases.bear.methodError, /cases level, not per case/i);
+  assert.equal("multipleType" in cases.bear, false);
+  assert.deepEqual([cases.base.impliedPrice, cases.bull.impliedPrice], [24, 36]);
 });
 
 test("research uses current shares outstanding for the per-share denominator", { concurrency: false }, async () => {
@@ -695,10 +749,9 @@ test("research uses current shares outstanding for the per-share denominator", {
   const shares = 84_569_237;
   const revenueCagr = 10;
   const multipleValue = 2.5;
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("ps", {
     revenueCagr,
     exitNetMargin: -2,
-    multipleType: "ps",
     multipleValue,
   });
   const { response } = await requestResearch({
@@ -721,10 +774,9 @@ test("research uses current shares outstanding for the per-share denominator", {
 });
 
 test("research falls back to the latest weighted-average diluted shares", { concurrency: false }, async () => {
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("ps", {
     revenueCagr: 0,
     exitNetMargin: 10,
-    multipleType: "ps",
     multipleValue: 1,
   });
   const { response } = await requestResearch({ geminiAnalysis });
@@ -743,10 +795,9 @@ test("research computes AAOI current P/S from price, chosen shares, and latest r
   const revenue = 455_715_000;
   const expectedMarketCap = price * shares;
   const expectedCurrentPs = expectedMarketCap / revenue;
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("ps", {
     revenueCagr: 10,
     exitNetMargin: -2,
-    multipleType: "ps",
     multipleValue: 2.5,
   });
   const { response, geminiPrompts } = await requestResearch({
@@ -764,10 +815,9 @@ test("research computes AAOI current P/S from price, chosen shares, and latest r
 });
 
 test("research reports null current P/E when latest net income is negative", { concurrency: false }, async () => {
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("ps", {
     revenueCagr: 10,
     exitNetMargin: -2,
-    multipleType: "ps",
     multipleValue: 2.5,
   });
   const { response } = await requestResearch({
@@ -782,10 +832,9 @@ test("research reports null current P/E when latest net income is negative", { c
 });
 
 test("research computes a P/E price from positive projected earnings", { concurrency: false }, async () => {
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
     revenueCagr: 10,
     exitNetMargin: 20,
-    multipleType: "pe",
     multipleValue: 20,
   });
   const { response } = await requestResearch({ geminiAnalysis });
@@ -799,13 +848,70 @@ test("research computes a P/E price from positive projected earnings", { concurr
   assert.equal(base.methodError, null);
 });
 
+test("research computes the implied P/S for a P/E-based case", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
+    revenueCagr: 0,
+    exitNetMargin: 3,
+    multipleValue: 25,
+  });
+  const { response } = await requestResearch({ geminiAnalysis });
+  const body = await response.json();
+  const base = body.analysis.cases.base;
+
+  assert.equal(response.status, 200);
+  assert.equal(base.impliedPrice, 9);
+  assert.ok(Math.abs(base.impliedPs - 0.75) < 1e-12);
+  assert.equal(body.analysis.cases.currentPs, body.marketContext.currentPs);
+});
+
+test("research detects inverted scenario ordering without altering prices", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCases("ps", {
+    bear: { revenueCagr: 0, exitNetMargin: 5, multipleValue: 3 },
+    base: { revenueCagr: 0, exitNetMargin: 10, multipleValue: 1 },
+    bull: { revenueCagr: 0, exitNetMargin: 15, multipleValue: 2 },
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  let response;
+
+  try {
+    console.warn = (...args) => warnings.push(args.join(" "));
+    ({ response } = await requestResearch({ geminiAnalysis }));
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const body = await response.json();
+  const cases = body.analysis.cases;
+
+  assert.equal(response.status, 200);
+  assert.equal(cases.ordering.valid, false);
+  assert.match(cases.ordering.message, /Bear \(\$36\.00\) exceeds bull \(\$24\.00\)/);
+  assert.deepEqual([cases.bear.impliedPrice, cases.base.impliedPrice, cases.bull.impliedPrice], [36, 12, 24]);
+  assert.ok(warnings.some(warning => warning.includes(cases.ordering.message)));
+});
+
+test("research marks monotonically ordered scenarios as valid", { concurrency: false }, async () => {
+  const geminiAnalysis = geminiAnalysisForCases("ps", {
+    bear: { revenueCagr: 0, exitNetMargin: 5, multipleValue: 1 },
+    base: { revenueCagr: 0, exitNetMargin: 10, multipleValue: 2 },
+    bull: { revenueCagr: 0, exitNetMargin: 15, multipleValue: 3 },
+  });
+  const { response } = await requestResearch({ geminiAnalysis });
+  const body = await response.json();
+  const cases = body.analysis.cases;
+
+  assert.equal(response.status, 200);
+  assert.deepEqual([cases.bear.impliedPrice, cases.base.impliedPrice, cases.bull.impliedPrice], [12, 24, 36]);
+  assert.deepEqual(cases.ordering, { valid: true, message: null });
+});
+
 test("research returns an explained null price when diluted shares are missing", { concurrency: false }, async () => {
   const companyFacts = companyFactsFixture();
   delete companyFacts.facts["us-gaap"].WeightedAverageNumberOfDilutedSharesOutstanding;
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
     revenueCagr: 10,
     exitNetMargin: 20,
-    multipleType: "pe",
     multipleValue: 20,
   });
   const { response } = await requestResearch({ geminiAnalysis, companyFacts });
@@ -818,10 +924,9 @@ test("research returns an explained null price when diluted shares are missing",
 });
 
 test("research drops hallucinated annotations and attaches real candidate data", { concurrency: false }, async () => {
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
     revenueCagr: 5,
     exitNetMargin: 20,
-    multipleType: "pe",
     multipleValue: 20,
   });
   const longLabel = "A genuinely informative period-high annotation label";
@@ -847,10 +952,9 @@ test("research drops hallucinated annotations and attaches real candidate data",
 });
 
 test("research computes a renormalised fundamentals and technical composite", { concurrency: false }, async () => {
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
     revenueCagr: 5,
     exitNetMargin: 20,
-    multipleType: "pe",
     multipleValue: 20,
   });
   geminiAnalysis.technical.score = 1;
@@ -895,10 +999,9 @@ test("research computes a renormalised fundamentals and technical composite", { 
 });
 
 test("research degrades gracefully when history is unavailable", { concurrency: false }, async () => {
-  const geminiAnalysis = geminiAnalysisForCase({
+  const geminiAnalysis = geminiAnalysisForCase("pe", {
     revenueCagr: 5,
     exitNetMargin: 20,
-    multipleType: "pe",
     multipleValue: 20,
   });
 

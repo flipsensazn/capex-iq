@@ -8,7 +8,7 @@ import { onRequest as pricesHandler } from "./prices.js";
 import { computeQualityScore } from "./quality-score.js";
 import { computeTechnicalScore } from "./technical-score.js";
 
-const CACHE_KEY_PREFIX = "research_v6_";
+const CACHE_KEY_PREFIX = "research_v7_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
 const MODEL = "gemini-3.5-flash-lite";
@@ -19,9 +19,11 @@ Reason ONLY from the supplied filed SEC figures, except that the technical secti
 When a supplied figure is null, say the data is unavailable rather than estimating or guessing it.
 The server computes every scenario price deterministically. Supply assumptions only and do NOT output a price.
 The quality score has been computed deterministically from the filed figures and is supplied as qualityScore. Write one sentence explaining what drives it, and do not contradict it or return a different score.
-The market currently values this company at the supplied marketContext.currentPs, and at marketContext.currentPe when available. Each chosen exit multiple MUST be reasoned relative to that current multiple, not picked from generic sector heuristics.
-If a chosen exit multiple differs materially from the current multiple, that case's rationale MUST state explicitly why the market's current multiple is expected to re-rate (compress or expand) and by roughly how much.
+The market currently values this company at the supplied marketContext.currentPs, and at marketContext.currentPe when available. The one selected scenario-set method and every chosen exit multiple MUST be reasoned relative to those current multiples, not picked from generic sector heuristics.
+A P/E of N at an exit net margin of M% implies a P/S of N × M/100. Compute that implied P/S for each case as a sanity check against marketContext.currentPs, and state in each rationale why the market's current P/S is expected to re-rate to that level.
+If the implied P/S differs materially from the current P/S, that case's rationale MUST state explicitly why the market's current multiple is expected to re-rate (compress or expand) and by roughly how much.
 After selecting assumptions, cross-check each resulting implied price against the supplied currentPrice. A case may land far from the current price ONLY when its rationale explicitly addresses that gap, for example by stating that the market is pricing in materially more growth than the filings support. A bull case far below the current price without such an explanation is incoherent and must be reconsidered.
+The bear case must produce the lowest implied price and the bull case the highest. If your assumptions do not yield bear <= base <= bull, reconsider them before answering.
 Do NOT contort assumptions merely to match the current price. An honest conclusion that the market is overpaying is acceptable and valuable when the rationale states it explicitly.
 The technical read must cite only the supplied priceContext figures and notablePoints. When a priceContext field is null, say the data is unavailable rather than inferring it.
 Annotations MUST reference only the supplied notablePoints ids. Do NOT invent dates, price levels, support/resistance values or patterns.
@@ -46,17 +48,20 @@ Return ONLY one valid JSON object, without markdown fences or prose outside the 
   },
   "quality": { "rationale": "one sentence explaining the supplied quality score" },
   "cases": {
-    "bear": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
-    "base": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
-    "bull": { "revenueCagr": 0, "exitNetMargin": 0, "multipleType": "pe", "multipleValue": 0, "rationale": "explicit assumptions and reasoning" }
+    "multipleType": "pe",
+    "bear": { "revenueCagr": 0, "exitNetMargin": 0, "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
+    "base": { "revenueCagr": 0, "exitNetMargin": 0, "multipleValue": 0, "rationale": "explicit assumptions and reasoning" },
+    "bull": { "revenueCagr": 0, "exitNetMargin": 0, "multipleValue": 0, "rationale": "explicit assumptions and reasoning" }
   },
   "dataGaps": ["concepts that were null and limited the analysis"]
 }
 
 Use percentage-point numbers for revenueCagr and exitNetMargin: 8.5 means 8.5%, not 0.085.
-For multipleType, use "pe" (price / earnings) ONLY when projected exit net income is positive.
-When projected exit net margin is zero or negative, you MUST use "ps" (price / sales, meaning market capitalisation divided by revenue), because P/E is undefined for loss-making companies.
-multipleValue is the numeric multiple for the selected multipleType.
+Choose ONE valuation method for all three cases so they are directly comparable, and return it once as cases.multipleType. Do not put multipleType inside an individual case.
+You MUST use "ps" (price / sales, meaning market capitalisation divided by revenue) if ANY of the three cases has non-positive projected exit net income, because P/E is undefined there and mixing methods makes the set incomparable.
+You may use "pe" (price / earnings) ONLY when all three cases have positive projected exit net income.
+multipleValue is each case's numeric exit multiple under the single cases.multipleType.
+For a P/E case, compute the implied P/S as multipleValue × exitNetMargin / 100, sanity-check it against marketContext.currentPs, and explain the re-rating in the rationale. Do not add implied P/S to the JSON; the server derives it deterministically.
 Do not calculate or return impliedPrice; the server will calculate it from the supplied assumptions and filed data.
 Keep financial claims tied to the supplied filed figures, ensure strengths and risks cite those figures explicitly, and follow the technical and macro sourcing rules above.`;
 
@@ -192,21 +197,20 @@ function finiteRatio(numerator, denominator) {
   return Number.isFinite(value) ? value : null;
 }
 
-function priceCase(modelCase, latestRevenue, latestShares) {
+function priceCase(modelCase, multipleType, latestRevenue, latestShares) {
   const validCase = modelCase && typeof modelCase === "object" && !Array.isArray(modelCase)
     ? modelCase
     : {};
   const revenueCagr = finiteNumber(validCase.revenueCagr);
   const exitNetMargin = finiteNumber(validCase.exitNetMargin);
-  const multipleType = validCase.multipleType === "pe" || validCase.multipleType === "ps"
-    ? validCase.multipleType
-    : null;
+  const hasPerCaseMultipleType = Object.prototype.hasOwnProperty.call(validCase, "multipleType");
   const multipleValue = finiteNumber(validCase.multipleValue);
   const revenue = finiteNumber(latestRevenue);
   const shares = finiteNumber(latestShares);
   let projectedRevenue = null;
   let exitNetIncome = null;
   let impliedPrice = null;
+  let impliedPs = null;
   let methodError = null;
 
   if (revenue == null) methodError = "Latest revenue is missing";
@@ -224,12 +228,14 @@ function priceCase(modelCase, latestRevenue, latestShares) {
 
   if (!methodError && (shares == null || shares <= 0)) {
     methodError = "Shares are missing or zero";
+  } else if (!methodError && hasPerCaseMultipleType) {
+    methodError = "Multiple type must be supplied once at the cases level, not per case";
   } else if (!methodError && multipleType == null) {
-    methodError = "Multiple type is missing or invalid";
+    methodError = "Set-level multiple type is missing or invalid";
   } else if (!methodError && multipleValue == null) {
     methodError = "Multiple value is missing";
   } else if (!methodError && multipleType === "pe" && exitNetIncome <= 0) {
-    methodError = "P/E is not meaningful for negative projected earnings";
+    methodError = "P/E is not meaningful for non-positive projected earnings";
   } else if (!methodError) {
     const price = multipleType === "pe"
       ? (exitNetIncome / shares) * multipleValue
@@ -238,20 +244,49 @@ function priceCase(modelCase, latestRevenue, latestShares) {
       methodError = "Computed price is not meaningful";
     } else {
       impliedPrice = Number(price.toFixed(2));
+      impliedPs = finiteRatio(finiteProduct(impliedPrice, shares), projectedRevenue);
     }
   }
 
   return {
     revenueCagr,
     exitNetMargin,
-    multipleType,
     multipleValue,
     rationale: typeof validCase.rationale === "string" ? validCase.rationale : "",
     impliedPrice,
+    impliedPs,
     projectedRevenue: Number.isFinite(projectedRevenue) ? Math.round(projectedRevenue) : null,
     exitNetIncome: Number.isFinite(exitNetIncome) ? Math.round(exitNetIncome) : null,
     methodError,
   };
+}
+
+function validateCaseOrdering(pricedCases) {
+  const orderedCases = [
+    ["bear", "Bear"],
+    ["base", "Base"],
+    ["bull", "Bull"],
+  ];
+  const violations = [];
+
+  for (let leftIndex = 0; leftIndex < orderedCases.length; leftIndex += 1) {
+    const [leftKey, leftLabel] = orderedCases[leftIndex];
+    const leftPrice = finiteNumber(pricedCases?.[leftKey]?.impliedPrice);
+    if (leftPrice == null) continue;
+
+    for (let rightIndex = leftIndex + 1; rightIndex < orderedCases.length; rightIndex += 1) {
+      const [rightKey] = orderedCases[rightIndex];
+      const rightPrice = finiteNumber(pricedCases?.[rightKey]?.impliedPrice);
+      if (rightPrice == null || leftPrice <= rightPrice) continue;
+      violations.push(`${leftLabel} ($${leftPrice.toFixed(2)}) exceeds ${rightKey} ($${rightPrice.toFixed(2)})`);
+    }
+  }
+
+  if (violations.length === 0) return { valid: true, message: null };
+
+  const message = `${violations.join("; ")} — the cases are not internally consistent`;
+  console.warn(`[research] ${message}`);
+  return { valid: false, message };
 }
 
 async function getPriceContext(request, env, ticker) {
@@ -504,7 +539,17 @@ export async function onRequest(context) {
 
   try {
     const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite);
-    const cases = modelAnalysis.cases || {};
+    const modelCases = modelAnalysis?.cases && typeof modelAnalysis.cases === "object" && !Array.isArray(modelAnalysis.cases)
+      ? modelAnalysis.cases
+      : {};
+    const multipleType = modelCases.multipleType === "pe" || modelCases.multipleType === "ps"
+      ? modelCases.multipleType
+      : null;
+    const pricedCases = {
+      bear: priceCase(modelCases.bear, multipleType, latestRevenue.value, shareCount),
+      base: priceCase(modelCases.base, multipleType, latestRevenue.value, shareCount),
+      bull: priceCase(modelCases.bull, multipleType, latestRevenue.value, shareCount),
+    };
     const modelTechnical = modelAnalysis?.technical && typeof modelAnalysis.technical === "object" && !Array.isArray(modelAnalysis.technical)
       ? modelAnalysis.technical
       : {};
@@ -528,10 +573,10 @@ export async function onRequest(context) {
           : "",
       },
       cases: {
-        ...cases,
-        bear: priceCase(cases.bear, latestRevenue.value, shareCount),
-        base: priceCase(cases.base, latestRevenue.value, shareCount),
-        bull: priceCase(cases.bull, latestRevenue.value, shareCount),
+        multipleType,
+        currentPs: marketContext.currentPs,
+        ...pricedCases,
+        ordering: validateCaseOrdering(pricedCases),
       },
     };
     const result = {
