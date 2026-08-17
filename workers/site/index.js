@@ -29,6 +29,7 @@ import * as presence       from "../../functions/presence.js";
 import * as prices         from "../../functions/prices.js";
 import * as quote          from "../../functions/quote.js";
 import * as register       from "../../functions/register.js";
+import * as research       from "../../functions/research.js";
 import * as roboticsCapex  from "../../functions/robotics-capex.js";
 import * as roboticsIntel  from "../../functions/robotics-intel.js";
 import * as scannerRanked  from "../../functions/scanner-ranked.js";
@@ -58,6 +59,7 @@ const ROUTES = {
   "/prices":          prices,
   "/quote":           quote,
   "/register":        register,
+  "/research":        research,
   "/robotics-capex":  roboticsCapex,
   "/robotics-intel":  roboticsIntel,
   "/scanner-ranked":  scannerRanked,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { onRequest as fundamentals } from "../functions/fundamentals.js";
+import { onRequest as research } from "../functions/research.js";
 
 const b64url = value => Buffer.from(value).toString("base64url");
 
@@ -71,6 +72,11 @@ function companyFactsFixture() {
         NetIncomeLoss: {
           units: {
             USD: [fact(200, 2024, "2024-06-30"), fact(300, 2025, "2025-06-30")],
+          },
+        },
+        WeightedAverageNumberOfDilutedSharesOutstanding: {
+          units: {
+            shares: [fact(100, 2024, "2024-06-30"), fact(100, 2025, "2025-06-30")],
           },
         },
         NetCashProvidedByUsedInOperatingActivities: {
@@ -264,4 +270,172 @@ test("fundamentals fills capex from an alternate tag", { concurrency: false }, a
   assert.equal(response.status, 200);
   assert.deepEqual(body.statements.cashFlow.capex, { 2024: 125, 2025: 150 });
   assert.deepEqual(body.statements.cashFlow.freeCashFlow, { 2024: 375, 2025: 450 });
+});
+
+async function requestResearchAsAdmin({
+  ticker = "MSFT",
+  geminiAnalysis,
+  cachedResult,
+  geminiKey = "test-gemini-key",
+}) {
+  const teamDomain = `research-${crypto.randomUUID()}.example.com`;
+  const accessAud = "research-audience";
+  const { jwt, jwk } = await createAccessJwt({
+    aud: accessAud,
+    email: "admin@example.com",
+    sub: "research-admin",
+  });
+  const kv = createKv();
+  await kv.put("priceCache_v10", JSON.stringify({
+    data: { MSFT: { price: 400, change: 0 } },
+    covered: ["MSFT"],
+    timestamp: Date.now(),
+  }), { expirationTtl: 60 });
+  if (cachedResult) {
+    await kv.put(`research_v1_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+  }
+
+  const originalFetch = globalThis.fetch;
+  const upstreamRequests = [];
+  let geminiCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    const href = String(url);
+    if (href === `https://${teamDomain}/cdn-cgi/access/certs`) {
+      return Response.json({ keys: [jwk] });
+    }
+    upstreamRequests.push(href);
+    if (href === "https://www.sec.gov/files/company_tickers.json") {
+      return Response.json({
+        0: { cik_str: 789019, ticker: "MSFT", title: "MICROSOFT CORP" },
+      });
+    }
+    if (href === "https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json") {
+      return Response.json(companyFactsFixture());
+    }
+    if (href.startsWith("https://generativelanguage.googleapis.com/")) {
+      geminiCalls += 1;
+      return Response.json({
+        candidates: [{
+          content: {
+            parts: [{ text: `<think>structured response follows</think>\n\`\`\`json\n${JSON.stringify(geminiAnalysis)}\n\`\`\`` }],
+          },
+        }],
+      });
+    }
+    throw new Error(`Unexpected upstream request: ${href}`);
+  };
+
+  try {
+    const response = await research({
+      request: new Request("https://capex-iq.us/research", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `CF_Authorization=${jwt}`,
+          Origin: "https://capex-iq.us",
+        },
+        body: JSON.stringify({ ticker }),
+      }),
+      env: {
+        ACCESS_TEAM_DOMAIN: teamDomain,
+        ACCESS_AUD: accessAud,
+        ADMIN_EMAILS: "admin@example.com",
+        ALLOWED_ORIGIN: "https://capex-iq.us",
+        GEMINI_API_KEY: geminiKey,
+        SHARED_DATA: kv,
+      },
+    });
+    return { response, kv, upstreamRequests, geminiCalls };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("research rejects a non-admin with zero Gemini calls", { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let geminiCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).startsWith("https://generativelanguage.googleapis.com/")) geminiCalls += 1;
+    throw new Error("Unexpected fetch");
+  };
+
+  try {
+    const response = await research({
+      request: new Request("https://capex-iq.us/research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "https://capex-iq.us" },
+        body: JSON.stringify({ ticker: "MSFT" }),
+      }),
+      env: {
+        ALLOWED_ORIGIN: "https://capex-iq.us",
+        ADMIN_EMAILS: "admin@example.com",
+        GEMINI_API_KEY: "test-gemini-key",
+      },
+    });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "Forbidden" });
+    assert.equal(geminiCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("research rejects an invalid ticker before upstream work", { concurrency: false }, async () => {
+  const { response, upstreamRequests, geminiCalls } = await requestResearchAsAdmin({
+    ticker: "bad ticker",
+  });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "Invalid ticker format" });
+  assert.equal(upstreamRequests.length, 0);
+  assert.equal(geminiCalls, 0);
+});
+
+test("research flags a case whose stated assumptions do not reconcile", { concurrency: false }, async () => {
+  const geminiAnalysis = {
+    summary: "Revenue increased from 1,000 in FY2024 to 1,200 in FY2025. Net income also increased from 200 to 300.",
+    strengths: ["FY2025 revenue was 1,200, up from 1,000 in FY2024.", "FY2025 net income was 300."],
+    risks: ["Gross profit data was unavailable.", "Long-term debt data was unavailable."],
+    quality: { score: 72, rationale: "Revenue and net income improved, but several filed concepts were unavailable." },
+    cases: {
+      bear: { revenueCagr: 0, exitNetMargin: 10, exitPe: 10, impliedPrice: 12, rationale: "No growth and a 10% margin." },
+      base: { revenueCagr: 10, exitNetMargin: 20, exitPe: 20, impliedPrice: 63.89, rationale: "Moderate growth and margin." },
+      bull: { revenueCagr: 20, exitNetMargin: 25, exitPe: 30, impliedPrice: 999, rationale: "High growth and margin." },
+    },
+    dataGaps: ["grossProfit", "longTermDebt"],
+  };
+  const { response, geminiCalls } = await requestResearchAsAdmin({ geminiAnalysis });
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(geminiCalls, 1);
+  assert.equal(body.currentPrice, 400);
+  assert.equal(body.latestFiscalYear, 2025);
+  assert.equal(body.analysis.cases.bull.impliedPrice, 999);
+  assert.equal(body.analysis.cases.bull.computedPrice, 155.52);
+  assert.equal(body.analysis.cases.bull.priceCheckFailed, true);
+  assert.equal(body.analysis.cases.base.priceCheckFailed, false);
+});
+
+test("research returns a cached result without calling Gemini", { concurrency: false }, async () => {
+  const cachedResult = {
+    ticker: "MSFT",
+    entityName: "MICROSOFT CORP",
+    currentPrice: null,
+    latestFiscalYear: 2025,
+    analysis: { summary: "Cached analysis" },
+    generatedAt: "2026-08-16T00:00:00.000Z",
+    model: "gemini-2.5-flash",
+    disclaimer: "This is a model-generated projection from filed data, not investment advice.",
+  };
+  const { response, upstreamRequests, geminiCalls } = await requestResearchAsAdmin({
+    cachedResult,
+    geminiKey: undefined,
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), cachedResult);
+  assert.equal(geminiCalls, 0);
+  assert.equal(upstreamRequests.length, 0);
 });

@@ -4,6 +4,7 @@ import BottleneckScout from "./components/BottleneckScout";
 import CapexSankey from "./components/CapexSankey";
 import CompositeMovers from "./components/CompositeMovers";
 import FearGreedGauge from "./components/FearGreedGauge";
+import ResearchPanel from "./components/ResearchPanel";
 import SignalScoreboard from "./components/SignalScoreboard";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
@@ -1429,6 +1430,7 @@ export default function App() {
   }, []);
   
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminChecked, setAdminChecked] = useState(false);
   const [appNotice, setAppNotice] = useState(null);
 
   // Admin identity comes entirely from Cloudflare Access now: the whole /app
@@ -1440,15 +1442,16 @@ export default function App() {
     fetch("/me")
       .then(res => res.json())
       .then(data => {
-        if (data.isAdmin) setIsAdmin(true);
+        setIsAdmin(Boolean(data.isAdmin));
       })
-      .catch(() => {});
+      .catch(() => setIsAdmin(false))
+      .finally(() => setAdminChecked(true));
   }, []);
 
   // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
-  // robotics · "earnings" = the calendar · "scanner" = pre-market gap scanner.
-  // The last two are standalone views that render no capex-map panels.
-  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "scanner"];
+  // robotics · "earnings" = the calendar · "scanner" = pre-market gap scanner
+  // · "research" = the admin-only SEC financial research workspace.
+  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "scanner", "research"];
   const [view, setView] = useState(() => {
     const h = window.location.hash.replace("#", "");
     return VALID_VIEWS.includes(h) ? h : "ai";
@@ -1474,6 +1477,10 @@ export default function App() {
   }, []);
 
   const [activeTrack, setActiveTrack] = useState(null);
+  useEffect(() => {
+    if (adminChecked && !isAdmin && view === "research") switchView("ai");
+  }, [adminChecked, isAdmin, view]);
+
   const [timeline, setTimeline] = useState("1D");
   const [activeFilter, setActiveFilter] = useState(null);
   const [popup, setPopup] = useState(null);
@@ -1735,8 +1742,9 @@ export default function App() {
   // ticker universe, so it borrows the AI map without rendering its panels.
   const isEarnings = view === "earnings";
   const isScanner = view === "scanner";
-  // Both standalone views skip the capex-map panels below.
-  const isMapView = !isEarnings && !isScanner;
+  const isResearch = view === "research";
+  // Standalone views skip the capex-map panels below.
+  const isMapView = !isEarnings && !isScanner && !isResearch;
   const activeLiveData = isRobotics ? liveRoboticsData : isMusk ? liveMuskData : liveCapexData;
   const activeIntelStatus = isRobotics ? roboticsIntelStatus : isMusk ? muskIntelStatus : capexIntelStatus;
   const activeIntel = isRobotics ? roboticsIntel : isMusk ? muskIntel : capexIntel;
@@ -1789,6 +1797,14 @@ export default function App() {
   const watchlistTickers = useMemo(() => getAllTickers(activeMapData), [activeMapData]);
   const activeData = activeLiveData.tracks.find(t => t.id === activeTrack);
   const tickerEntries = Object.entries(prices);
+  const viewTabs = [
+    { value: "ai", label: "AI Capex", icon: "⚡" },
+    { value: "musk", label: "Musk Galaxy", icon: "🚀" },
+    { value: "robotics", label: "Robotics", icon: "🦾" },
+    { value: "earnings", label: "Earnings", icon: "🗓" },
+    { value: "scanner", label: "Scanner", icon: "🔍" },
+    ...(isAdmin ? [{ value: "research", label: "Research", icon: "🔬" }] : []),
+  ];
 
   return (
     <MobileCtx.Provider value={isMobileApp}>
@@ -1812,13 +1828,7 @@ export default function App() {
         <nav className="dash-nav">
           <div className="dash-nav-inner">
             <div className="dash-tabs" role="tablist" aria-label="Dashboard views">
-              {[
-                { value: "ai", label: "AI Capex", icon: "⚡" },
-                { value: "musk", label: "Musk Galaxy", icon: "🚀" },
-                { value: "robotics", label: "Robotics", icon: "🦾" },
-                { value: "earnings", label: "Earnings", icon: "🗓" },
-                { value: "scanner", label: "Scanner", icon: "🔍" },
-              ].map(t => {
+              {viewTabs.map(t => {
                 const on = view === t.value;
                 return (
                   <button
@@ -1864,6 +1874,8 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {isResearch && isAdmin && <ResearchPanel />}
 
           {isMapView && <>
           {/* HERO: capex flow Sankey — spenders → tracks, with guidance trend */}
