@@ -9,8 +9,8 @@ import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./acce
 
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
-const MODEL_AGENT = "gemini-2.5-flash";
-const MODEL_SYNTH = "gemini-2.5-flash";
+const MODEL_AGENT = "gemini-3.5-flash-lite";
+const MODEL_SYNTH = "gemini-3.5-flash-lite";
 const MAX_BODY_BYTES = 8 * 1024;
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
 
@@ -23,7 +23,7 @@ function normalizeContextValue(value) {
 
 // ── JSON EXTRACTOR ────────────────────────────────────────────────────────────
 // Finds the first balanced { } or [ ] block in a string, ignoring surrounding
-// text, markdown fences, and thinking-mode tokens that gemini-2.5 can emit.
+// text, markdown fences, and thinking-mode tokens that Gemini can emit.
 function extractJson(text) {
   const start = text.search(/[{\[]/);
   if (start === -1) return null;
