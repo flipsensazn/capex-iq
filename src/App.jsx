@@ -3,6 +3,7 @@ import BottleneckScout from "./components/BottleneckScout";
 import CapexSankey from "./components/CapexSankey";
 import CompositeMovers from "./components/CompositeMovers";
 import FearGreedGauge from "./components/FearGreedGauge";
+import RadarPanel from "./components/RadarPanel";
 import ResearchPanel from "./components/ResearchPanel";
 import SignalScoreboard from "./components/SignalScoreboard";
 import StatusBanner from "./components/StatusBanner";
@@ -1266,10 +1267,12 @@ export default function App() {
       .finally(() => setAdminChecked(true));
   }, []);
 
+  const canRadar = Boolean(features?.radar);
+
   // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
-  // robotics · "earnings" = the calendar
+  // robotics · "earnings" = the calendar · "radar" = the members screener
   // · "research" = the members-only SEC financial research workspace.
-  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "research"];
+  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "radar", "research"];
   const [view, setView] = useState(() => {
     const h = window.location.hash.replace("#", "");
     return VALID_VIEWS.includes(h) ? h : "ai";
@@ -1298,6 +1301,9 @@ export default function App() {
   useEffect(() => {
     if (adminChecked && !canResearch && view === "research") switchView("ai");
   }, [adminChecked, canResearch, view]);
+  useEffect(() => {
+    if (adminChecked && !canRadar && view === "radar") switchView("ai");
+  }, [adminChecked, canRadar, view]);
 
   const [timeline, setTimeline] = useState("1D");
   const [activeFilter, setActiveFilter] = useState(null);
@@ -1563,9 +1569,10 @@ export default function App() {
   // The earnings view is a standalone calendar — it still needs a map for the
   // ticker universe, so it borrows the AI map without rendering its panels.
   const isEarnings = view === "earnings";
+  const isRadar = view === "radar";
   const isResearch = view === "research";
   // Standalone views skip the capex-map panels below.
-  const isMapView = !isEarnings && !isResearch;
+  const isMapView = !isEarnings && !isRadar && !isResearch;
   const dashboardDataNotice = useMemo(
     () => isMapView ? buildDashboardDataNotice(datasetHealth) : null,
     [datasetHealth, isMapView]
@@ -1630,6 +1637,7 @@ export default function App() {
     { value: "musk", label: "Musk Galaxy", icon: "🚀" },
     { value: "robotics", label: "Robotics", icon: "🦾" },
     { value: "earnings", label: "Earnings", icon: "🗓" },
+    ...(canRadar ? [{ value: "radar", label: "Radar", icon: "📡" }] : []),
     ...(canResearch ? [{ value: "research", label: "Research", icon: "🔬" }] : []),
   ];
 
@@ -1692,6 +1700,8 @@ export default function App() {
             />
           )}
 
+
+          {isRadar && canRadar && <RadarPanel onTickerClick={openPopup} onOpenResearch={openResearch} />}
 
           {isResearch && canResearch && <ResearchPanel initialTicker={researchTicker} />}
 

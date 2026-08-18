@@ -35,6 +35,7 @@ export default defineConfig({
       '/robotics-intel': 'http://localhost:8788',
       '/composite':   'http://localhost:8788',
       '/scoreboard':  'http://localhost:8788',
+      '/radar':       'http://localhost:8788',
       '/me':          'http://localhost:8788',
       '/register':    'http://localhost:8788',
     },

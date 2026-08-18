@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const PANEL_STYLE = {
+export const PANEL_STYLE = {
   background: "var(--surface-card)",
   border: "1px solid var(--border-hairline)",
   borderRadius: "var(--radius-2xl)",
   boxShadow: "var(--shadow-panel)",
 };
 
-const EYEBROW_STYLE = {
+export const EYEBROW_STYLE = {
   color: "var(--ink-400)",
   fontFamily: "var(--font-condensed)",
   fontSize: 9,
@@ -673,7 +673,7 @@ function AnalysisLens({ eyebrow, lens, beforeRead, children }) {
   );
 }
 
-function ScoreBreakdown({ title, scoreObject }) {
+export function ScoreBreakdown({ title, scoreObject }) {
   const components = Array.isArray(scoreObject?.components) ? scoreObject.components : [];
   if (!components.length) return null;
 
