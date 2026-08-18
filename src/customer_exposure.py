@@ -222,6 +222,61 @@ HTML_RE   = re.compile(r"<[^>]+>")
 ENTITY_RE = re.compile(r"&(?:nbsp|#160|amp|#38|lt|gt|#\d+|[a-z]+);", re.I)
 WS_RE     = re.compile(r"\s+")
 PERCENT_VALUE_RE = re.compile(r"\b(100|\d{1,2})(?:\.(\d+))?\s*(?:%|percent\b)", re.I)
+ALLOCATION_PERCENT_PATTERN = PERCENT_VALUE_RE.pattern
+REVENUE_BASIS_PATTERN = r"(?:revenues?|sales)"
+RECEIVABLES_BASIS_PATTERN = r"(?:accounts?\s+receivable|receivables)"
+ALLOCATION_BASIS_PATTERN = (
+    rf"(?:{REVENUE_BASIS_PATTERN}|{RECEIVABLES_BASIS_PATTERN})"
+)
+ALLOCATION_VERB_PATTERN = (
+    r"(?:account(?:ed|ing)?\s+for|represent(?:ed|ing)?|"
+    r"compris(?:e|ed|es|ing)|constitut(?:e|ed|es|ing)|"
+    r"generat(?:e|ed|es|ing)|contribut(?:e|ed|es|ing)|"
+    r"(?:made|make|making)\s+up)"
+)
+ALLOCATION_NON_VERB_CHAR_PATTERN = (
+    rf"(?:(?!\b{ALLOCATION_VERB_PATTERN}\b)[^.!?;])"
+)
+ALLOCATION_VERB_PERCENT_BASIS_PATTERN = (
+    rf"\b{ALLOCATION_VERB_PATTERN}\b"
+    rf"{ALLOCATION_NON_VERB_CHAR_PATTERN}{{0,100}}?"
+    rf"{ALLOCATION_PERCENT_PATTERN}[^.!?;]{{0,100}}?"
+    rf"\b{ALLOCATION_BASIS_PATTERN}\b"
+)
+ALLOCATION_PERCENT_BASIS_SOURCE_PATTERN = (
+    rf"{ALLOCATION_PERCENT_PATTERN}[^.!?;]{{0,100}}?"
+    rf"\b{ALLOCATION_BASIS_PATTERN}\b[^.!?;]{{0,100}}?"
+    r"\b(?:was|were)\s+(?:attributable\s+to|derived\s+from|generated\s+by)\b"
+)
+ALLOCATION_TABLE_LEAD_IN_PATTERN = (
+    rf"\bcustomers?\b[^.!?;]*?\b{ALLOCATION_VERB_PATTERN}\b"
+    rf"[^.!?;]{{0,120}}?\b{ALLOCATION_BASIS_PATTERN}\b"
+)
+ALLOCATION_RECEIVABLES_PARENTHETICAL_PATTERN = (
+    rf"\b{RECEIVABLES_BASIS_PATTERN}\b"
+    r"[^.!?;]*?\bfrom\b[^.!?;]*?\bcustomers?\b"
+    r"[^.!?;()]{0,160}?\((?P<values>[^.!?;)]{0,160})\)"
+)
+CUSTOMER_COUNT_PATTERN = (
+    r"(?:two|three|four|five|six|seven|eight|nine|ten|\d+)"
+)
+PER_CUSTOMER_EACH_PATTERN = (
+    rf"(?:\b{CUSTOMER_COUNT_PATTERN}\s+"
+    r"(?:(?:largest|major|significant)\s+)?customers?\b"
+    rf"[^.!?;]{{0,40}}\b(?:each|individually)\b|"
+    rf"\bcustomers?\b[^.!?;]{{0,60}}\b(?:each|individually)\b)"
+    rf"{ALLOCATION_NON_VERB_CHAR_PATTERN}{{0,40}}"
+    rf"{ALLOCATION_VERB_PERCENT_BASIS_PATTERN}"
+)
+GENERIC_CUSTOMER_LABELS = frozenset({
+    "unnamed customer", "one customer", "a customer", "single customer",
+    "individual customer", "major customer", "significant customer",
+})
+EACH_GENERIC_CUSTOMER_LABELS = frozenset({
+    "unnamed customer", "one customer", "a customer", "single customer",
+    "individual customer",
+})
+MAX_QUOTED_DROP_LOGS = 20
 
 NORMALIZE_TRANSLATION = str.maketrans({
     "\u00a0": " ",
@@ -254,7 +309,7 @@ def normalize_verbatim(value):
     return WS_RE.sub(" ", normalized.translate(NORMALIZE_TRANSLATION)).strip().casefold()
 
 
-def statement_semantics(text):
+def statement_semantics(text, label=None):
     """Classify a concentration sentence before it can become a filed fact."""
     normalized = normalize_verbatim(text)
     if not normalized:
@@ -263,16 +318,13 @@ def statement_semantics(text):
     negative_subject = (
         r"(?:\bno\s+(?:(?:single|individual|one)\s+)?customers?\b|"
         r"\bnone\s+of\s+(?:our\s+|the\s+)?customers?\b|"
-        r"\bcustomers?\b[^.;]{0,40}\b(?:did|does|do|was|were)\s+not\b|"
-        r"\b(?:did|does|do|was|were)\s+not\b[^.;]{0,40}\bcustomers?\b)"
+        r"\bcustomers?\b[^.!?;]{0,40}\b(?:did|does|do|was|were)\s+not\b|"
+        r"\b(?:did|does|do|was|were)\s+not\b[^.!?;]{0,40}\bcustomers?\b)"
     )
     negative_share_clause = re.search(
-        rf"{negative_subject}[^.;]{{0,100}}"
-        r"\b(?:account(?:ed)?\s+for|represent(?:ed)?|compris(?:ed|e)|"
-        r"constitut(?:ed|e)|generat(?:ed|e)|contribut(?:ed|e)|"
-        r"made\s+up|make\s+up)\b"
-        rf"[^.;]{{0,80}}{PERCENT_VALUE_RE.pattern}[^.;]{{0,90}}"
-        r"\b(?:revenues?|sales|accounts?\s+receivable|receivables)\b",
+        rf"{negative_subject}[^.!?;]{{0,100}}\b{ALLOCATION_VERB_PATTERN}\b"
+        rf"[^.!?;]{{0,80}}{ALLOCATION_PERCENT_PATTERN}[^.!?;]{{0,90}}"
+        rf"\b{ALLOCATION_BASIS_PATTERN}\b",
         normalized,
     )
     if negative_share_clause:
@@ -280,10 +332,30 @@ def statement_semantics(text):
 
     if re.search(
         r"\b(?:defined|considered|regarded)\s+as\b|"
-        r"\b(?:major|significant)\s+customer\s+(?:is|means)\b|"
+        r"\b(?:major|significant)\s+customer\s+(?:is|means)\b",
+        normalized,
+    ):
+        return "threshold"
+
+    allocation_values = _allocation_percentage_values(normalized)
+    has_customer = bool(re.search(r"\bcustomers?\b", normalized))
+    if re.search(
+        r"\b(?:collectively|combined|in\s+aggregate|as\s+a\s+group)\b",
+        normalized,
+    ):
+        return "aggregate"
+
+    if allocation_values and has_customer and (
+        _has_per_customer_each_allocation(normalized)
+        or _table_has_per_customer_breakout(normalized, label=label)
+        or bool(_receivables_parenthetical_values(normalized))
+    ):
+        return "single_customer"
+
+    if re.search(
         r"\b(?:more|greater|less)\s+than\s+\d|"
         r"\bat\s+least\s+\d|\bin\s+excess\s+of\s+\d|"
-        r"\d+(?:\.\d+)?\s*(?:%|percent)\s+or\s+(?:more|greater|less)\b",
+        rf"{ALLOCATION_PERCENT_PATTERN}\s+or\s+(?:more|greater|less)\b",
         normalized,
     ):
         return "threshold"
@@ -292,33 +364,22 @@ def statement_semantics(text):
     if respectively and _respective_customer_pairs(normalized):
         return "single_customer"
     aggregate = re.search(
-        r"\b(?:collectively|combined|in\s+aggregate|as\s+a\s+group)\b|"
-        r"\b(?:top\s+)?(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+        rf"\b(?:top\s+)?{CUSTOMER_COUNT_PATTERN}\s+"
         r"(?:largest\s+|major\s+|significant\s+)?customers\b|"
         r"\bcustomer\b.{0,60}\band\s+(?:another\s+)?customer\b|"
-        r"\bcustomer\s+[^.;]{0,40}\band\b[^.;]{0,40}"
-        r"\b(?:accounted|represented|comprised|constituted|generated)\b",
+        rf"\bcustomer\s+[^.!?;]{{0,40}}\band\b[^.!?;]{{0,40}}"
+        rf"\b{ALLOCATION_VERB_PATTERN}\b",
         normalized,
     )
     plural_fact = re.search(
-        r"\bcustomers\b.{0,100}\b(?:accounted|represented|comprised|constituted|generated)\b",
+        rf"\bcustomers\b[^.!?;]{{0,100}}\b{ALLOCATION_VERB_PATTERN}\b",
         normalized,
     )
     one_of_customers = re.search(r"\bone\s+of\s+(?:our\s+|the\s+)?customers\b", normalized)
     if aggregate or (plural_fact and not respectively and not one_of_customers):
         return "aggregate"
 
-    percentage_pattern = PERCENT_VALUE_RE.pattern
-    basis_pattern = r"\b(?:revenues?|sales|accounts?\s+receivable|receivables)\b"
-    share_construction = re.search(
-        rf"\b(?:accounted\s+for|represented|comprised|constituted|generated|contributed|made\s+up)\b"
-        rf"[^.;]{{0,90}}{percentage_pattern}[^.;]{{0,90}}{basis_pattern}|"
-        rf"{percentage_pattern}[^.;]{{0,90}}{basis_pattern}[^.;]{{0,90}}"
-        rf"\b(?:was|were)\s+(?:attributable\s+to|derived\s+from|generated\s+by)\b",
-        normalized,
-    )
-    has_customer = bool(re.search(r"\bcustomer\b", normalized))
-    if share_construction and has_customer:
+    if allocation_values and has_customer:
         return "single_customer"
     return "unknown"
 
@@ -370,11 +431,9 @@ def fetch_filing_text(cik, accession, primary_doc):
 # A concentration disclosure is a percentage near "customer" plus revenue or
 # receivable language. Windows keep the Gemini payload tiny and on-target.
 
-PCT_RE = re.compile(
-    r"\b(?:100|\d{1,2})(?:\.\d{1,2})?\s*(?:%|percent\b)", re.I
-)
+PCT_RE = PERCENT_VALUE_RE
 WINDOW_BASIS_RE = re.compile(
-    r"\b(?:revenues?|sales|accounts?\s+receivable|receivables)\b", re.I
+    rf"\b{ALLOCATION_BASIS_PATTERN}\b", re.I
 )
 WINDOW = 450
 MAX_EXCERPT_CHARS = 9000
@@ -454,19 +513,8 @@ def _allocation_clauses(quote):
 
 def _basis_in_clause(clause, basis):
     if basis == "accounts_receivable":
-        return bool(re.search(r"\b(?:accounts?\s+receivable|receivables)\b", clause))
-    return bool(re.search(r"\b(?:revenues?|sales)\b", clause))
-
-
-ALLOCATION_VERB_PATTERN = (
-    r"(?:account(?:ed|ing)?\s+for|represent(?:ed|ing)?|"
-    r"compris(?:e|ed|es|ing)|constitut(?:e|ed|es|ing)|"
-    r"generat(?:e|ed|es|ing)|contribut(?:e|ed|es|ing)|"
-    r"(?:made|make|making)\s+up)"
-)
-ALLOCATION_BASIS_PATTERN = (
-    r"(?:revenues?|sales|accounts?\s+receivable|receivables)"
-)
+        return bool(re.search(rf"\b{RECEIVABLES_BASIS_PATTERN}\b", clause))
+    return bool(re.search(rf"\b{REVENUE_BASIS_PATTERN}\b", clause))
 
 
 def _customer_subject_key(value):
@@ -492,8 +540,9 @@ def _respective_customer_pairs(clause):
         return []
     subject_phrase = prefix[customer_matches[0].start():]
     if re.search(
-        r"\b(?:revenues?|sales|receivables?|increased|decreased|grew|declined|while|whereas)\b|"
-        + PERCENT_VALUE_RE.pattern,
+        rf"\b(?:{ALLOCATION_BASIS_PATTERN}|increased|decreased|grew|declined|"
+        r"while|whereas)\b|"
+        + ALLOCATION_PERCENT_PATTERN,
         subject_phrase,
     ):
         return []
@@ -520,41 +569,103 @@ def _respective_customer_pairs(clause):
     return list(zip(subjects, percentages))
 
 
+def _table_allocation_sections(clause):
+    sections = []
+    for match in re.finditer(ALLOCATION_TABLE_LEAD_IN_PATTERN, clause, re.I):
+        suffix = clause[match.end():]
+        percentages = _percentage_values(suffix)
+        if percentages:
+            sections.append((suffix, percentages))
+    return sections
+
+
+def _receivables_parenthetical_values(clause):
+    values = []
+    for match in re.finditer(
+        ALLOCATION_RECEIVABLES_PARENTHETICAL_PATTERN, clause, re.I
+    ):
+        values.extend(_percentage_values(match.group("values")))
+    return values
+
+
+def _has_per_customer_each_allocation(clause):
+    return bool(re.search(PER_CUSTOMER_EACH_PATTERN, clause, re.I))
+
+
+def _table_has_per_customer_breakout(clause, label=None):
+    for suffix, _ in _table_allocation_sections(clause):
+        if re.search(
+            rf"\bcustomer\s+[a-z]\b.{{0,80}}?{ALLOCATION_PERCENT_PATTERN}",
+            suffix,
+            re.I,
+        ):
+            return True
+        candidates = []
+        normalized_label = normalize_verbatim(label)
+        if normalized_label and normalized_label not in GENERIC_CUSTOMER_LABELS:
+            candidates.append(normalized_label)
+        candidates.extend(alias for alias, _ in CUSTOMER_ALIASES)
+        for candidate in candidates:
+            if re.search(
+                rf"(?<!\w){re.escape(candidate)}(?!\w)"
+                rf".{{0,80}}?{ALLOCATION_PERCENT_PATTERN}",
+                suffix,
+                re.I,
+            ):
+                return True
+    return False
+
+
+def _table_percentage_values_for_label(clause, label):
+    normalized_label = normalize_verbatim(label)
+    if not normalized_label or normalized_label in GENERIC_CUSTOMER_LABELS:
+        return []
+    named_labels = {normalized_label}
+    named_labels.update(normalize_verbatim(alias) for alias, _ in CUSTOMER_ALIASES)
+    named_pattern = "|".join(
+        rf"(?<!\w){re.escape(candidate)}(?!\w)"
+        for candidate in sorted(named_labels, key=len, reverse=True)
+    )
+    marker_pattern = rf"\bcustomer\s+[a-z]\b|(?:{named_pattern})"
+    values = []
+    for suffix, _ in _table_allocation_sections(clause):
+        normalized_suffix = normalize_verbatim(suffix)
+        markers = list(re.finditer(marker_pattern, normalized_suffix, re.I))
+        for position, marker in enumerate(markers):
+            if normalize_verbatim(marker.group(0)) != normalized_label:
+                continue
+            end = (
+                markers[position + 1].start()
+                if position + 1 < len(markers) else len(normalized_suffix)
+            )
+            values.extend(_percentage_values(
+                normalized_suffix[marker.end():end]
+            ))
+    return values
+
+
 def _allocation_percentage_values(clause):
     values = []
-    patterns = (
-        rf"\b{ALLOCATION_VERB_PATTERN}\b[^.;]{{0,100}}?"
-        rf"{PERCENT_VALUE_RE.pattern}[^.;]{{0,100}}?\b{ALLOCATION_BASIS_PATTERN}\b",
-        rf"{PERCENT_VALUE_RE.pattern}[^.;]{{0,100}}?\b{ALLOCATION_BASIS_PATTERN}\b"
-        r"[^.;]{0,100}?\b(?:was|were)\s+(?:attributable\s+to|derived\s+from|generated\s+by)\b",
-    )
-    for pattern in patterns:
+    for pattern in (
+        ALLOCATION_VERB_PERCENT_BASIS_PATTERN,
+        ALLOCATION_PERCENT_BASIS_SOURCE_PATTERN,
+    ):
         for match in re.finditer(pattern, clause, re.I):
             values.extend(_percentage_values(match.group(0)))
-
-    table_pattern = (
-        rf"\bcustomers?\b[^.!?;]*?\b{ALLOCATION_VERB_PATTERN}\b"
-        rf"[^.!?;]{{0,120}}?\b{ALLOCATION_BASIS_PATTERN}\b"
-    )
-    for match in re.finditer(table_pattern, clause, re.I):
-        values.extend(_percentage_values(clause[match.end():]))
-
-    receivables_pattern = (
-        r"\b(?:accounts?\s+receivable|receivables)\b"
-        r"[^.!?;]*?\bfrom\b[^.!?;]*?\bcustomers?\b"
-        r"[^.!?;()]{0,160}?\((?P<values>[^.!?;)]{0,160})\)"
-    )
-    for match in re.finditer(receivables_pattern, clause, re.I):
-        values.extend(_percentage_values(match.group("values")))
+    for _, percentages in _table_allocation_sections(clause):
+        values.extend(percentages)
+    values.extend(_receivables_parenthetical_values(clause))
     return values
 
 
 def _label_in_clause(clause, label):
     normalized_label = normalize_verbatim(label)
-    if normalized_label in {
-        "unnamed customer", "one customer", "a customer", "single customer",
-        "individual customer", "major customer", "significant customer",
-    }:
+    if normalized_label in GENERIC_CUSTOMER_LABELS:
+        if (
+            normalized_label in EACH_GENERIC_CUSTOMER_LABELS
+            and _has_per_customer_each_allocation(clause)
+        ):
+            return True
         return bool(re.search(
             r"\b(?:(?:one|a|single|individual)(?:\s+(?:major|significant))?|"
             r"major|significant)\s+customer\b",
@@ -568,7 +679,7 @@ def _label_in_clause(clause, label):
 def _matching_allocation_clause(clauses, semantics, pct, basis, period, label=None):
     normalized_period = normalize_verbatim(period)
     for clause in clauses:
-        if statement_semantics(clause) != semantics:
+        if statement_semantics(clause, label=label) != semantics:
             continue
         if normalized_period not in clause or not _basis_in_clause(clause, basis):
             continue
@@ -578,6 +689,12 @@ def _matching_allocation_clause(clauses, semantics, pct, basis, period, label=No
             if not any(
                 subject == label_key and abs(value - pct) < 0.0001
                 for subject, value in respective_pairs
+            ):
+                continue
+        elif _table_allocation_sections(clause) and label is not None:
+            if not any(
+                abs(value - pct) < 0.0001
+                for value in _table_percentage_values_for_label(clause, label)
             ):
                 continue
         else:
@@ -615,8 +732,11 @@ def _validated_disclosure(r, index, excerpts, report_date):
     quote = str(r.get("quote") or "").strip()
     if not quote or len(quote) > 500 or not _quote_is_verbatim(quote, excerpts):
         raise ValueError(f"model row {index} quote is not verbatim from the filing excerpt")
+    label = str(r.get("customer") or "").strip()
     clauses = _allocation_clauses(quote)
-    clause_semantics = {statement_semantics(clause) for clause in clauses}
+    clause_semantics = {
+        statement_semantics(clause, label=label) for clause in clauses
+    }
     if not clause_semantics.intersection(("single_customer", "negative")):
         raise ValueError(f"model row {index} is not a qualifying allocation statement")
 
@@ -641,13 +761,16 @@ def _validated_disclosure(r, index, excerpts, report_date):
     if not any(abs(value - pct) < 0.0001 for value in _percentage_values(quote)):
         raise ValueError(f"model row {index} pct is not verbatim in the quote")
     if basis == "accounts_receivable":
-        basis_present = re.search(r"\b(?:accounts?\s+receivable|receivables)\b", normalized_quote)
+        basis_present = re.search(
+            rf"\b{RECEIVABLES_BASIS_PATTERN}\b", normalized_quote
+        )
     else:
-        basis_present = re.search(r"\b(?:revenues?|sales)\b", normalized_quote)
+        basis_present = re.search(
+            rf"\b{REVENUE_BASIS_PATTERN}\b", normalized_quote
+        )
     if not basis_present:
         raise ValueError(f"model row {index} basis is not verbatim in the quote")
 
-    label = str(r.get("customer") or "").strip()
     single_clause = None
     if label and len(label) <= 120:
         single_clause = _matching_allocation_clause(
@@ -691,11 +814,16 @@ def _validated_disclosure(r, index, excerpts, report_date):
     }
 
 
-def extract_disclosures(ticker, form, excerpts, report_date=None, diagnostics=None):
+def extract_disclosures(
+    ticker, form, excerpts, report_date=None, diagnostics=None,
+    _drop_log_state=None,
+):
     raw = call_gemini(EXTRACT_PROMPT.format(ticker=ticker, form=form,
                                             excerpts="\n---\n".join(excerpts)))
     if not isinstance(raw, list):
         raise ValueError("model response must be a JSON array")
+    if _drop_log_state is None:
+        _drop_log_state = {"quoted_drops": 0}
     rows = []
     dropped_rows = 0
     for index, model_row in enumerate(raw):
@@ -705,7 +833,18 @@ def extract_disclosures(ticker, form, excerpts, report_date=None, diagnostics=No
             )
         except ValueError as exc:
             dropped_rows += 1
-            print(f"{ticker} {form}: dropped model row {index} — {exc}")
+            if _drop_log_state.get("quoted_drops", 0) < MAX_QUOTED_DROP_LOGS:
+                quote = (
+                    str(model_row.get("quote") or "")
+                    if isinstance(model_row, dict) else ""
+                )
+                print(
+                    f"{ticker} {form}: dropped model row {index} — {exc} "
+                    f":: {quote[:160]}"
+                )
+                _drop_log_state["quoted_drops"] = (
+                    _drop_log_state.get("quoted_drops", 0) + 1
+                )
             continue
         rows.append(row)
     if diagnostics is not None:
@@ -880,6 +1019,7 @@ def scan_ticker(ticker, cik, diagnostics=None):
     time.sleep(SEC_PAUSE)
     candidates = []
     degraded = False
+    drop_log_state = {"quoted_drops": 0}
     for form, accession, primary_doc, filed, report_date in filings:
         try:
             text, url = fetch_filing_text(cik, accession, primary_doc)
@@ -914,6 +1054,7 @@ def scan_ticker(ticker, cik, diagnostics=None):
             rows = extract_disclosures(
                 ticker, form, windows, report_date=report_date,
                 diagnostics=extraction_diagnostics,
+                _drop_log_state=drop_log_state,
             )
             time.sleep(GEMINI_PAUSE)
         dropped_rows = extraction_diagnostics.get("dropped_rows", 0)
