@@ -417,6 +417,262 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
                 self.assertEqual(rows[0]["pct"], model_row["pct"])
                 self.assertEqual(diagnostics["dropped_rows"], 0)
 
+    def test_numbered_customer_lists_stage_each_listed_percentage(self):
+        cases = (
+            (
+                "NVDA receivables",
+                "Three direct customers accounted for 30 %, 18 %, and 16 % of "
+                "our accounts receivable balance as of April 26, 2026.",
+                (30, 18, 16),
+                "accounts_receivable",
+                "as of April 26, 2026",
+                "2026-04-26",
+                date(2026, 4, 26),
+            ),
+            (
+                "AMAT revenue",
+                "Two customers accounted for approximately 21 % and 15 %, "
+                "respectively, of our revenue for the six months ended April "
+                "26, 2026.",
+                (21, 15),
+                "revenue",
+                "six months ended April 26, 2026",
+                "2026-04-26",
+                date(2026, 4, 26),
+            ),
+            (
+                "LRCX receivables",
+                "As of June 28, 2026, five customers accounted for approximately "
+                "20 %, 16 %, 15 %, 11 %, and 10 % of accounts receivable, "
+                "respectively.",
+                (20, 16, 15, 11, 10),
+                "accounts_receivable",
+                "As of June 28, 2026",
+                "2026-06-28",
+                date(2026, 6, 28),
+            ),
+            (
+                "NVDA revenue",
+                "For the first quarter of fiscal year 2027, three direct "
+                "customers represented 21 %, 17 %, and 16 % of total revenue",
+                (21, 17, 16),
+                "revenue",
+                "first quarter of fiscal year 2027",
+                "2026-04-26",
+                date(2026, 4, 26),
+            ),
+        )
+
+        for shape, quote, percentages, basis, period, report_date, period_end in cases:
+            model_rows = [
+                {
+                    "customer": "unnamed customer", "pct": pct,
+                    "basis": basis, "period": period, "quote": quote,
+                }
+                for pct in percentages
+            ]
+            with (
+                self.subTest(shape=shape),
+                mock.patch.object(
+                    customer_exposure, "call_gemini", return_value=model_rows
+                ),
+            ):
+                diagnostics = {}
+                rows = customer_exposure.extract_disclosures(
+                    "TEST", "10-Q", [quote], report_date=report_date,
+                    diagnostics=diagnostics,
+                )
+
+                self.assertEqual([row["pct"] for row in rows], list(percentages))
+                self.assertEqual({row["label"] for row in rows}, {"unnamed customer"})
+                self.assertEqual({row["period_end"] for row in rows}, {period_end})
+                self.assertEqual(diagnostics["dropped_rows"], 0)
+
+    def test_negative_subject_variants_stage_negative_markers(self):
+        cases = (
+            (
+                "MSFT",
+                "No sales to an individual customer or country other than the "
+                "United States accounted for more than 10% of revenue for fiscal "
+                "years 2026, 2025, or 2024.",
+                ("fiscal years 2026", "2025", "2024"),
+                "2026-06-30",
+            ),
+            (
+                "GOOG",
+                "No in dividual customer or groups of affiliated customers "
+                "represented more than 10% of our revenues in 2023",
+                ("2023",),
+                "2023-12-31",
+            ),
+            (
+                "AMAT",
+                "No other customer accounted for greater than 10% of our revenue "
+                "for the six months ended April 26, 2026.",
+                ("six months ended April 26, 2026",),
+                "2026-04-26",
+            ),
+        )
+
+        for ticker, quote, periods, report_date in cases:
+            model_rows = [
+                {
+                    "statement_type": "negative", "pct": 10,
+                    "basis": "revenue", "period": period, "quote": quote,
+                }
+                for period in periods
+            ]
+            with (
+                self.subTest(ticker=ticker),
+                mock.patch.object(
+                    customer_exposure, "call_gemini", return_value=model_rows
+                ),
+            ):
+                diagnostics = {}
+                rows = customer_exposure.extract_disclosures(
+                    ticker, "10-K", [quote], report_date=report_date,
+                    diagnostics=diagnostics,
+                )
+
+                self.assertEqual(len(rows), len(model_rows))
+                self.assertTrue(all(
+                    row["statement_type"] == "negative" for row in rows
+                ))
+                self.assertEqual(diagnostics["dropped_rows"], 0)
+
+    def test_compound_customer_allocations_bind_each_label_to_its_value(self):
+        quote = (
+            "One customer accounted for approximately 11 % and another customer "
+            "accounted for 24 % of the total consolidated accounts receivable "
+            "balance as of December 27, 2025"
+        )
+        base_rows = (
+            {"customer": "one customer", "pct": 11},
+            {"customer": "another customer", "pct": 24},
+        )
+        model_rows = [dict(
+            row, basis="accounts_receivable",
+            period="as of December 27, 2025", quote=quote,
+        ) for row in base_rows]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=model_rows
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "AMD", "10-K", [quote], report_date="2025-12-27"
+            )
+
+        self.assertEqual(
+            [(row["label"], row["pct"]) for row in rows],
+            [("one customer", 11), ("another customer", 24)],
+        )
+
+        swapped_rows = [dict(row, pct=35 - row["pct"]) for row in model_rows]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=swapped_rows
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "AMD", "10-K", [quote], report_date="2025-12-27",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 2)
+
+    def test_basis_from_customer_values_bind_respective_periods(self):
+        quote = (
+            "Revenue from one customer was 10 % and 16 % (primarily included in "
+            "the CMBU segment) of total revenue for the first nine months of 2026 "
+            "and 2025, respectively."
+        )
+        model_rows = [
+            {
+                "customer": "one customer", "pct": 10, "basis": "revenue",
+                "period": "first nine months of 2026", "quote": quote,
+            },
+            {
+                "customer": "one customer", "pct": 16, "basis": "revenue",
+                "period": "2025", "quote": quote,
+            },
+        ]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=model_rows
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "MU", "10-Q", [quote], report_date="2026-05-28"
+            )
+
+        self.assertEqual(
+            [(row["pct"], row["period"], row["period_end"]) for row in rows],
+            [
+                (10, "first nine months of 2026", date(2026, 5, 28)),
+                (16, "2025", date(2025, 5, 28)),
+            ],
+        )
+
+        swapped_rows = [
+            dict(model_rows[0], period="2025"),
+            dict(model_rows[1], period="first nine months of 2026"),
+        ]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=swapped_rows
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "MU", "10-Q", [quote], report_date="2026-05-28",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 2)
+
+    def test_period_date_anchor_accepts_singular_model_period(self):
+        quote = (
+            "No customer represented 10% or more of total revenue or accounts "
+            "receivable for the years ended December 31, 2025, 2024, and 2023."
+        )
+        model_rows = [
+            {
+                "statement_type": "negative", "pct": 10, "basis": basis,
+                "period": "year ended December 31, 2025", "quote": quote,
+            }
+            for basis in ("revenue", "accounts_receivable")
+        ]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=model_rows
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "META", "10-K", [quote], report_date="2025-12-31"
+            )
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            {row["period_end"] for row in rows}, {date(2025, 12, 31)}
+        )
+
+    def test_table_prompt_requires_context_and_bare_cells_still_fail(self):
+        self.assertIn(
+            "table's verbatim lead-in or column context naming the basis and "
+            "exact period alongside the customer row values",
+            customer_exposure.EXTRACT_PROMPT,
+        )
+        bare_cells = ("Customer A 22 %", "Direct Customer: Customer A 16% 16%")
+        for quote in bare_cells:
+            model_row = {
+                "customer": "Customer A", "pct": 22 if "22" in quote else 16,
+                "basis": "revenue", "period": "fiscal 2026", "quote": quote,
+            }
+            with (
+                self.subTest(quote=quote),
+                mock.patch.object(
+                    customer_exposure, "call_gemini", return_value=[model_row]
+                ),
+            ):
+                self.assertEqual(
+                    customer_exposure.extract_disclosures(
+                        "TEST", "10-K", [quote], report_date="2026-12-31"
+                    ),
+                    [],
+                )
+
     def test_table_breakout_binds_each_customer_to_its_values(self):
         quote = (
             "our three largest customers accounted for the following percentages "
@@ -513,6 +769,26 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
                 "2025 and 12 table of contents 2024, respectively",
                 30,
                 "fiscal years 2026",
+            ),
+            (
+                "countries",
+                "Net revenue for individual countries included in Other did not "
+                "exceed 10% of the Company s net revenue for any of the fiscal "
+                "periods presented.",
+                10,
+                "fiscal periods presented",
+            ),
+            (
+                "single aggregate total",
+                "two customers accounted for 30% of revenue in aggregate",
+                30,
+                "fiscal 2025",
+            ),
+            (
+                "count mismatch",
+                "three customers accounted for 30% and 20% of revenue in fiscal 2025",
+                30,
+                "fiscal 2025",
             ),
         )
 

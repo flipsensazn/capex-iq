@@ -240,7 +240,8 @@ ALLOCATION_NON_VERB_CHAR_PATTERN = (
 ALLOCATION_VERB_PERCENT_BASIS_PATTERN = (
     rf"\b{ALLOCATION_VERB_PATTERN}\b"
     rf"{ALLOCATION_NON_VERB_CHAR_PATTERN}{{0,100}}?"
-    rf"{ALLOCATION_PERCENT_PATTERN}[^.!?;]{{0,100}}?"
+    rf"{ALLOCATION_PERCENT_PATTERN}"
+    rf"{ALLOCATION_NON_VERB_CHAR_PATTERN}{{0,100}}?"
     rf"\b{ALLOCATION_BASIS_PATTERN}\b"
 )
 ALLOCATION_PERCENT_BASIS_SOURCE_PATTERN = (
@@ -257,8 +258,37 @@ ALLOCATION_RECEIVABLES_PARENTHETICAL_PATTERN = (
     r"[^.!?;]*?\bfrom\b[^.!?;]*?\bcustomers?\b"
     r"[^.!?;()]{0,160}?\((?P<values>[^.!?;)]{0,160})\)"
 )
+ALLOCATION_BASIS_FROM_CUSTOMER_PATTERN = (
+    rf"\b{REVENUE_BASIS_PATTERN}\s+(?:from|to)\b"
+    r"(?P<customer_context>[^.!?;]{0,60}?\bcustomers?\b)"
+    r"[^.!?;]{0,60}?\b(?:was|were)\b"
+    rf"(?P<allocation_values>[^.!?;]{{0,160}}?{ALLOCATION_PERCENT_PATTERN}"
+    r"[^.!?;]{0,160}?)"
+    rf"\b(?:of\s+(?:the\s+)?(?:total\s+)?)?{REVENUE_BASIS_PATTERN}\b"
+)
 CUSTOMER_COUNT_PATTERN = (
     r"(?:two|three|four|five|six|seven|eight|nine|ten|\d+)"
+)
+CUSTOMER_COUNT_VALUES = {
+    "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+NUMBERED_CUSTOMER_SUBJECT_PATTERN = (
+    rf"\b(?P<count>{CUSTOMER_COUNT_PATTERN})\s+"
+    r"(?:(?:direct|indirect|largest|major|significant)\s+)*customers?\b"
+)
+COMPOUND_CUSTOMER_LABEL_PATTERN = (
+    r"(?:(?:one|another|a|single|individual|other)\s+customer|customer\s+[a-z])"
+)
+COMPOUND_CUSTOMER_FACT_PATTERN = (
+    rf"\b(?P<label>{COMPOUND_CUSTOMER_LABEL_PATTERN})\b"
+    rf"{ALLOCATION_NON_VERB_CHAR_PATTERN}{{0,60}}?"
+    rf"\b{ALLOCATION_VERB_PATTERN}\b"
+    rf"{ALLOCATION_NON_VERB_CHAR_PATTERN}{{0,80}}?"
+    rf"(?P<pct>{ALLOCATION_PERCENT_PATTERN})"
+)
+SINGLE_CUSTOMER_REFERENCE_PATTERN = (
+    r"\b(?:(?:one|a|single|individual)\s+customer|customer\s+[a-z])\b"
 )
 PER_CUSTOMER_EACH_PATTERN = (
     rf"(?:\b{CUSTOMER_COUNT_PATTERN}\s+"
@@ -316,7 +346,7 @@ def statement_semantics(text, label=None):
         return "unknown"
 
     negative_subject = (
-        r"(?:\bno\s+(?:(?:single|individual|one)\s+)?customers?\b|"
+        r"(?:\bno\b[^.!?;]{0,60}?\bcustomers?\b|"
         r"\bnone\s+of\s+(?:our\s+|the\s+)?customers?\b|"
         r"\bcustomers?\b[^.!?;]{0,40}\b(?:did|does|do|was|were)\s+not\b|"
         r"\b(?:did|does|do|was|were)\s+not\b[^.!?;]{0,40}\bcustomers?\b)"
@@ -344,6 +374,12 @@ def statement_semantics(text, label=None):
         normalized,
     ):
         return "aggregate"
+
+    if (
+        _numbered_customer_percentage_values(normalized)
+        or _compound_customer_percentage_pairs(normalized)
+    ):
+        return "single_customer"
 
     if allocation_values and has_customer and (
         _has_per_customer_each_allocation(normalized)
@@ -409,8 +445,20 @@ def resolved_period_end(period, report_date=None):
     )}
     if report_period is None or len(years) != 1:
         return None
+    period_year = years.pop()
+    if (
+        period_year == report_period.year + 1
+        and re.search(
+            r"\b(?:first|second|third|fourth)\s+quarter(?:\s+of)?\s+"
+            r"fiscal\s+year\b",
+            normalize_verbatim(period),
+        )
+    ):
+        # The SEC reportDate is the calendar end for quarters whose fiscal-year
+        # label rolls ahead of the calendar year.
+        return report_period
     try:
-        return date(years.pop(), report_period.month, report_period.day)
+        return date(period_year, report_period.month, report_period.day)
     except ValueError:
         return None
 
@@ -479,6 +527,7 @@ Extract EVERY factual SINGLE-CUSTOMER statement of the form "a customer accounte
 - period: copy the exact period wording printed in the quote, e.g. "fiscal 2025" or "three months ended March 31, 2026". If several periods are given for the same customer, emit one row per period.
 - pct: the number only.
 - quote: a SHORT VERBATIM fragment (≤220 chars) containing the customer, figure, basis, and exact period. Never paraphrase or omit words with ellipses.
+- For a table, the quote must include the table's verbatim lead-in or column context naming the basis and exact period alongside the customer row values; row values alone are invalid.
 
 Respond with ONLY a valid JSON array (empty array if nothing qualifies):
 [{{"statement_type": "single_customer", "customer": "...", "pct": 38.0, "basis": "revenue", "period": "fiscal 2025", "quote": "..."}}]
@@ -492,6 +541,78 @@ def _percentage_values(text):
     for match in PERCENT_VALUE_RE.finditer(normalize_verbatim(text)):
         whole, decimal = match.groups()
         values.append(float(f"{whole}.{decimal}" if decimal else whole))
+    return values
+
+
+def _numbered_customer_percentage_values(clause):
+    """Return individually attributable values from a count-matched list."""
+    normalized = normalize_verbatim(clause)
+    for subject in re.finditer(
+        NUMBERED_CUSTOMER_SUBJECT_PATTERN, normalized, re.I
+    ):
+        token = subject.group("count").lower()
+        count = CUSTOMER_COUNT_VALUES.get(token)
+        if count is None:
+            try:
+                count = int(token)
+            except ValueError:
+                continue
+        if count < 2:
+            continue
+        allocation = re.search(
+            ALLOCATION_VERB_PERCENT_BASIS_PATTERN,
+            normalized[subject.end():],
+            re.I,
+        )
+        if allocation is None or allocation.start() > 80:
+            continue
+        values = _percentage_values(allocation.group(0))
+        if len(values) == count:
+            return values
+    return []
+
+
+def _compound_customer_percentage_pairs(clause):
+    """Bind repeated customer subjects to their own verbs and percentages."""
+    normalized = normalize_verbatim(clause)
+    matches = list(re.finditer(
+        COMPOUND_CUSTOMER_FACT_PATTERN, normalized, re.I
+    ))
+    if len(matches) < 2:
+        return []
+    if any(
+        not re.fullmatch(r"[\s,]*(?:and\s+)?", normalized[left.end():right.start()])
+        for left, right in zip(matches, matches[1:])
+    ):
+        return []
+    if not re.search(
+        rf"[^.!?;]{{0,120}}\b{ALLOCATION_BASIS_PATTERN}\b",
+        normalized[matches[-1].end():],
+        re.I,
+    ):
+        return []
+    return [
+        (
+            normalize_verbatim(match.group("label")),
+            _percentage_values(match.group("pct"))[0],
+        )
+        for match in matches
+    ]
+
+
+def _basis_from_customer_percentage_values(clause):
+    """Return values from a narrow revenue-from-one-customer construction."""
+    values = []
+    for match in re.finditer(
+        ALLOCATION_BASIS_FROM_CUSTOMER_PATTERN, clause, re.I
+    ):
+        if not re.search(
+            SINGLE_CUSTOMER_REFERENCE_PATTERN,
+            match.group("customer_context"),
+            re.I,
+        ):
+            continue
+        values.extend(_percentage_values(match.group("allocation_values")))
     return values
 
 
@@ -646,15 +767,20 @@ def _table_percentage_values_for_label(clause, label):
 
 def _allocation_percentage_values(clause):
     values = []
-    for pattern in (
-        ALLOCATION_VERB_PERCENT_BASIS_PATTERN,
-        ALLOCATION_PERCENT_BASIS_SOURCE_PATTERN,
-    ):
-        for match in re.finditer(pattern, clause, re.I):
-            values.extend(_percentage_values(match.group(0)))
+    compound_pairs = _compound_customer_percentage_pairs(clause)
+    if compound_pairs:
+        values.extend(value for _, value in compound_pairs)
+    else:
+        for pattern in (
+            ALLOCATION_VERB_PERCENT_BASIS_PATTERN,
+            ALLOCATION_PERCENT_BASIS_SOURCE_PATTERN,
+        ):
+            for match in re.finditer(pattern, clause, re.I):
+                values.extend(_percentage_values(match.group(0)))
     for _, percentages in _table_allocation_sections(clause):
         values.extend(percentages)
     values.extend(_receivables_parenthetical_values(clause))
+    values.extend(_basis_from_customer_percentage_values(clause))
     return values
 
 
@@ -663,7 +789,10 @@ def _label_in_clause(clause, label):
     if normalized_label in GENERIC_CUSTOMER_LABELS:
         if (
             normalized_label in EACH_GENERIC_CUSTOMER_LABELS
-            and _has_per_customer_each_allocation(clause)
+            and (
+                _has_per_customer_each_allocation(clause)
+                or _numbered_customer_percentage_values(clause)
+            )
         ):
             return True
         return bool(re.search(
@@ -676,15 +805,55 @@ def _label_in_clause(clause, label):
     ))
 
 
-def _matching_allocation_clause(clauses, semantics, pct, basis, period, label=None):
+def _period_is_anchored(period, text, report_date=None):
+    """Require the printed period wording or its resolved date in one clause."""
     normalized_period = normalize_verbatim(period)
+    normalized_text = normalize_verbatim(text)
+    if normalized_period and normalized_period in normalized_text:
+        return True
+    resolved = resolved_period_end(period, report_date)
+    if resolved is None:
+        return False
+    if period_end(period) is not None:
+        month = next(
+            name for name, number in MONTH_NUMBERS.items()
+            if number == resolved.month
+        )
+        return bool(re.search(
+            rf"\b{month}\s+{resolved.day},?\s+{resolved.year}\b",
+            normalized_text,
+        ))
+    return bool(re.search(rf"\b{resolved.year}\b", normalized_text))
+
+
+def _matching_allocation_clause(
+    clauses, semantics, pct, basis, period, label=None, report_date=None,
+):
     for clause in clauses:
         if statement_semantics(clause, label=label) != semantics:
             continue
-        if normalized_period not in clause or not _basis_in_clause(clause, basis):
+        if (
+            not _period_is_anchored(period, clause, report_date)
+            or not _basis_in_clause(clause, basis)
+        ):
             continue
+        compound_pairs = _compound_customer_percentage_pairs(clause)
+        numbered_values = _numbered_customer_percentage_values(clause)
         respective_pairs = _respective_customer_pairs(clause)
-        if respective_pairs:
+        if compound_pairs:
+            label_key = normalize_verbatim(label)
+            if not any(
+                subject == label_key and abs(value - pct) < 0.0001
+                for subject, value in compound_pairs
+            ):
+                continue
+        elif numbered_values:
+            if (
+                normalize_verbatim(label) not in EACH_GENERIC_CUSTOMER_LABELS
+                or not any(abs(value - pct) < 0.0001 for value in numbered_values)
+            ):
+                continue
+        elif respective_pairs:
             label_key = _customer_subject_key(label)
             if not any(
                 subject == label_key and abs(value - pct) < 0.0001
@@ -712,12 +881,23 @@ def _matching_allocation_clause(clauses, semantics, pct, basis, period, label=No
 def _validate_respective_period(quote, period, pct):
     """Reject a model-swapped value when one quote lists parallel periods."""
     normalized_quote = normalize_verbatim(quote)
-    if "respectively" not in normalized_quote:
+    respectively_match = re.search(r"\brespectively\b", normalized_quote)
+    if respectively_match is None:
         return
-    percentages = _percentage_values(normalized_quote)
-    quote_years = re.findall(r"\b(?:19|20)\d{2}\b", normalized_quote)
+    prefix = normalized_quote[:respectively_match.start()]
+    percentage_matches = list(PERCENT_VALUE_RE.finditer(prefix))
+    if len(percentage_matches) < 2:
+        return
+    percentages = _allocation_percentage_values(normalized_quote)
+    quote_years = re.findall(
+        r"\b(?:19|20)\d{2}\b", prefix[percentage_matches[-1].end():]
+    )
     period_years = re.findall(r"\b(?:19|20)\d{2}\b", normalize_verbatim(period))
-    if len(percentages) < 2 or len(percentages) != len(quote_years) or not period_years:
+    if not quote_years or not period_years:
+        return
+    if len(percentages) != len(quote_years):
+        if _basis_from_customer_percentage_values(normalized_quote):
+            raise ValueError("allocation values do not map unambiguously to periods")
         return
     pct_indexes = {i for i, value in enumerate(percentages) if abs(value - pct) < 0.0001}
     year_indexes = {i for i, value in enumerate(quote_years) if value == period_years[-1]}
@@ -755,8 +935,7 @@ def _validated_disclosure(r, index, excerpts, report_date):
         raise ValueError(f"model row {index} has an invalid basis")
 
     normalized_quote = normalize_verbatim(quote)
-    normalized_period = normalize_verbatim(period)
-    if normalized_period not in normalized_quote:
+    if not _period_is_anchored(period, normalized_quote, report_date):
         raise ValueError(f"model row {index} period is not verbatim in the quote")
     if not any(abs(value - pct) < 0.0001 for value in _percentage_values(quote)):
         raise ValueError(f"model row {index} pct is not verbatim in the quote")
@@ -774,10 +953,11 @@ def _validated_disclosure(r, index, excerpts, report_date):
     single_clause = None
     if label and len(label) <= 120:
         single_clause = _matching_allocation_clause(
-            clauses, "single_customer", pct, basis, period, label=label
+            clauses, "single_customer", pct, basis, period, label=label,
+            report_date=report_date,
         )
     negative_clause = _matching_allocation_clause(
-        clauses, "negative", pct, basis, period
+        clauses, "negative", pct, basis, period, report_date=report_date
     )
     if single_clause is not None:
         semantics, matched_clause = "single_customer", single_clause
