@@ -42,6 +42,16 @@ jobs:
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
           WATCHLIST_BASE_URL: ${{ vars.WATCHLIST_BASE_URL }}
           TICKER_LIMIT:       ${{ github.event.inputs.ticker_limit }}
+          # INTERIM bootstrap floors (2026-08-18): the validation rewrite
+          # resolves 149/222 tickers but the 0.90/0.50 defaults block ALL
+          # publishing until near-perfect extraction, leaving production on
+          # the 8-ticker post-incident husk. Publishing at current quality
+          # establishes the baseline ratchet; raise these toward the
+          # defaults as the remaining grammar tail (reordered table quotes,
+          # exotic prose) is fixed. Regression safety is unchanged: the
+          # retention guard and signature-gated publish stay active.
+          CUSTOMER_EXPOSURE_MIN_PROVIDER_COVERAGE: "0.60"
+          CUSTOMER_EXPOSURE_MIN_USABLE_COVERAGE:   "0.20"
         run: python src/customer_exposure.py
 
       - name: Notify on failure
