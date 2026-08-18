@@ -28,6 +28,7 @@ import * as news           from "../../functions/news.js";
 import * as presence       from "../../functions/presence.js";
 import * as prices         from "../../functions/prices.js";
 import * as quote          from "../../functions/quote.js";
+import * as radar          from "../../functions/radar.js";
 import * as register       from "../../functions/register.js";
 import * as research       from "../../functions/research.js";
 import * as roboticsCapex  from "../../functions/robotics-capex.js";
@@ -57,6 +58,7 @@ const ROUTES = {
   "/presence":        presence,
   "/prices":          prices,
   "/quote":           quote,
+  "/radar":           radar,
   "/register":        register,
   "/research":        research,
   "/robotics-capex":  roboticsCapex,
