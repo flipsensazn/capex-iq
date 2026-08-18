@@ -316,6 +316,10 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
                     customer_exposure._allocation_percentage_values(quote),
                     expected,
                 )
+                self.assertEqual(
+                    customer_exposure.statement_semantics(quote),
+                    "single_customer",
+                )
         self.assertTrue(
             customer_exposure._basis_in_clause(
                 intc_receivables, "accounts_receivable"
@@ -338,6 +342,203 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
             with self.subTest(quote=quote):
                 self.assertEqual(
                     customer_exposure._allocation_percentage_values(quote), []
+                )
+
+    def test_real_disclosure_shapes_survive_full_validation(self):
+        nvda_sentence = (
+            "we generate a significant amount of our revenue from a limited "
+            "number of indirect customers, some individually representing 10% "
+            "or more of our revenue."
+        )
+        cases = (
+            (
+                "participle",
+                f"For fiscal 2025, {nvda_sentence}",
+                {
+                    "customer": "unnamed customer", "pct": 10,
+                    "basis": "revenue", "period": "fiscal 2025",
+                },
+                "2025-01-26",
+            ),
+            (
+                "table",
+                "our three largest customers accounted for the following "
+                "percentages of our net revenue: years ended dec 27, 2025 "
+                "customer a 19 % 19 % 19 % customer b 12 % 14 % 11 %",
+                {
+                    "customer": "customer a", "pct": 19,
+                    "basis": "revenue",
+                    "period": "years ended dec 27, 2025",
+                },
+                "2025-12-27",
+            ),
+            (
+                "named table",
+                "our three largest customers accounted for the following "
+                "percentages of our net revenue: years ended dec 27, 2025 "
+                "microsoft 19 % google 12 %",
+                {
+                    "customer": "microsoft", "pct": 19,
+                    "basis": "revenue",
+                    "period": "years ended dec 27, 2025",
+                },
+                "2025-12-27",
+            ),
+            (
+                "each",
+                "two customers each accounted for 10% or more of our net sales "
+                "for the quarter ended March 29, 2025.",
+                {
+                    "customer": "unnamed customer", "pct": 10,
+                    "basis": "revenue",
+                    "period": "quarter ended March 29, 2025",
+                },
+                "2025-03-29",
+            ),
+        )
+
+        for shape, quote, model_row, report_date in cases:
+            with (
+                self.subTest(shape=shape),
+                mock.patch.object(
+                    customer_exposure,
+                    "call_gemini",
+                    return_value=[dict(model_row, quote=quote)],
+                ),
+            ):
+                diagnostics = {}
+                rows = customer_exposure.extract_disclosures(
+                    "TEST", "10-K", [quote], report_date=report_date,
+                    diagnostics=diagnostics,
+                )
+
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["label"], model_row["customer"])
+                self.assertEqual(rows[0]["pct"], model_row["pct"])
+                self.assertEqual(diagnostics["dropped_rows"], 0)
+
+    def test_table_breakout_binds_each_customer_to_its_values(self):
+        quote = (
+            "our three largest customers accounted for the following percentages "
+            "of our net revenue: years ended dec 27, 2025 customer a 19 % 19 % "
+            "19 % customer b 12 % 14 % 11 %"
+        )
+        swapped_rows = (
+            {"customer": "customer a", "pct": 12},
+            {"customer": "customer b", "pct": 19},
+        )
+
+        for model_row in swapped_rows:
+            model_row.update({
+                "basis": "revenue", "period": "years ended dec 27, 2025",
+                "quote": quote,
+            })
+            with (
+                self.subTest(customer=model_row["customer"]),
+                mock.patch.object(
+                    customer_exposure, "call_gemini", return_value=[model_row]
+                ),
+            ):
+                diagnostics = {}
+                rows = customer_exposure.extract_disclosures(
+                    "TEST", "10-K", [quote], report_date="2025-12-27",
+                    diagnostics=diagnostics,
+                )
+
+                self.assertEqual(rows, [])
+                self.assertEqual(diagnostics["dropped_rows"], 1)
+
+    def test_each_construction_cannot_borrow_another_customer_allocation(self):
+        quote = (
+            "two customers each accounted for support, while Customer A "
+            "represented 10% of revenue for fiscal 2025."
+        )
+        model_row = {
+            "customer": "unnamed customer", "pct": 10, "basis": "revenue",
+            "period": "fiscal 2025", "quote": quote,
+        }
+
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [quote], report_date="2025-12-31",
+                diagnostics=diagnostics,
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+    def test_participle_negative_survives_full_validation(self):
+        quote = (
+            "For fiscal 2025, no individual customer was identified as "
+            "individually representing 10% or more of revenue."
+        )
+        model_row = {
+            "statement_type": "negative", "pct": 10, "basis": "revenue",
+            "period": "fiscal 2025", "quote": quote,
+        }
+
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [quote], report_date="2025-12-31"
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["statement_type"], "negative")
+
+    def test_non_allocation_controls_fail_full_validation(self):
+        cases = (
+            (
+                "collective",
+                "three customers collectively accounted for approximately 40% "
+                "of our revenues",
+                40,
+                "fiscal 2025",
+            ),
+            (
+                "growth",
+                "dcai revenue increased 5% from 2024 driven by higher server "
+                "revenue due to higher hyperscale customer-related demand",
+                5,
+                "2024",
+            ),
+            (
+                "geographic",
+                "our revenue from sales of products and provision of services to "
+                "customers in china was 30%, 33% and 43% for fiscal years 2026, "
+                "2025 and 12 table of contents 2024, respectively",
+                30,
+                "fiscal years 2026",
+            ),
+        )
+
+        for shape, quote, pct, period in cases:
+            model_row = {
+                "customer": "Customer A", "pct": pct, "basis": "revenue",
+                "period": period, "quote": quote,
+            }
+            with (
+                self.subTest(shape=shape),
+                mock.patch.object(
+                    customer_exposure, "call_gemini", return_value=[model_row]
+                ),
+                mock.patch("builtins.print") as output,
+            ):
+                diagnostics = {}
+                rows = customer_exposure.extract_disclosures(
+                    "TEST", "10-K", [quote], report_date="2026-12-31",
+                    diagnostics=diagnostics,
+                )
+
+                self.assertEqual(rows, [])
+                self.assertEqual(diagnostics["dropped_rows"], 1)
+                self.assertIn(
+                    "is not a qualifying allocation statement",
+                    output.call_args.args[0],
                 )
 
     def test_plural_revenues_is_valid_basis_language(self):
@@ -414,6 +615,43 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
         self.assertIn("model row 3 fields do not share one allocation clause", logs)
         self.assertIn("model row 4 pct must be between 1 and 100", logs)
         self.assertIn("model row 5 has an invalid pct", logs)
+
+    def test_dropped_row_quote_logs_are_capped_without_capping_diagnostics(self):
+        quote = SINGLE_EXCERPT[:-1] + " " + ("x" * 180) + " TAIL_SENTINEL."
+        model_rows = [dict(
+            customer="Customer A", pct=0, basis="revenue",
+            period="year ended December 31, 2025", quote=quote,
+        ) for _ in range(25)]
+        diagnostics = {}
+        drop_log_state = {}
+
+        with (
+            mock.patch.object(
+                customer_exposure, "call_gemini",
+                side_effect=[model_rows[:20], model_rows[20:]],
+            ),
+            mock.patch("builtins.print") as output,
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [quote], diagnostics=diagnostics,
+                _drop_log_state=drop_log_state,
+            )
+            rows.extend(customer_exposure.extract_disclosures(
+                "TEST", "10-Q", [quote], diagnostics=diagnostics,
+                _drop_log_state=drop_log_state,
+            ))
+
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 25)
+        self.assertEqual(output.call_count, 20)
+        first_log = output.call_args_list[0].args[0]
+        self.assertIn("model row 0 pct must be between 1 and 100", first_log)
+        self.assertIn(f":: {quote[:160]}", first_log)
+        logs = "\n".join(call.args[0] for call in output.call_args_list)
+        self.assertIn("dropped model row 19", logs)
+        self.assertNotIn("dropped model row 20", logs)
+        self.assertNotIn("TEST 10-Q", logs)
+        self.assertNotIn("TAIL_SENTINEL", logs)
 
     def test_respective_multi_customer_pairs_are_bound_without_swaps(self):
         period = "year ended December 31, 2025"
