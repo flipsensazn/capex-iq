@@ -16,12 +16,6 @@ export default defineConfig({
   server: {
     proxy: {
       '/prices':      'http://localhost:8788',
-      '/scanner':     'http://localhost:8788',
-      '/scanner-ranked': 'http://localhost:8788',
-      // Not matched by '/scanner' — the prefix differs, so it needs its own
-      // entry or the dev server answers with the SPA fallback and the panel
-      // fails on res.json().
-      '/gap-scanner': 'http://localhost:8788',
       '/shortlist':   'http://localhost:8788',
       '/capex':       'http://localhost:8788',
       '/capex-intel': 'http://localhost:8788',

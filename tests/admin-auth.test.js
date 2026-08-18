@@ -90,8 +90,8 @@ test("isTrustedOrigin validates Origin and Referer with local-dev degradation", 
   assert.equal(isTrustedOrigin(new Request("http://localhost/capex"), {}), true);
 });
 
-test("isAuthorizedAdmin preserves the headless scanner password path without Origin", async () => {
-  const request = jsonRequest("https://capex-iq.us/gap-scanner", {
+test("isAuthorizedAdmin preserves the headless admin password path without Origin", async () => {
+  const request = jsonRequest("https://capex-iq.us/shortlist", {
     password: "correct-password",
   });
 

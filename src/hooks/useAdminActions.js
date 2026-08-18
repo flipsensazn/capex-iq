@@ -7,7 +7,6 @@ import { useCallback } from "react";
 // lapsed — drop the editing flag so the UI reflects read-only until reload.
 export function useAdminActions({
   setIsAdmin,
-  setScannerPool,
   setShortList,
   setCapexData,
   setMuskCapexData,
@@ -16,27 +15,6 @@ export function useAdminActions({
   showNotice,
   refresh,
 }) {
-  const saveGlobalScanner = useCallback(async (newList) => {
-    try {
-      const res = await fetch("/scanner", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickers: newList }),
-      });
-      const json = await res.json().catch(() => ({}));
-
-      if (res.ok) {
-        setScannerPool(newList);
-        showNotice("Scanner pool updated.", "success");
-        refresh();
-      } else {
-        showNotice(json.error || "Scanner update failed.");
-        if (res.status === 401) setIsAdmin(false);
-      }
-    } catch {
-      showNotice("Network error while updating the scanner.");
-    }
-  }, [refresh, setIsAdmin, setScannerPool, showNotice]);
 
   const saveGlobalShortlist = useCallback(async (newList) => {
     try {
@@ -128,7 +106,6 @@ export function useAdminActions({
   }, [refresh, setIsAdmin, setRoboticsCapexData, showNotice]);
 
   return {
-    saveGlobalScanner,
     saveGlobalShortlist,
     saveGlobalCapex,
     saveGlobalMuskCapex,

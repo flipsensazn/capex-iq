@@ -1,7 +1,7 @@
 // watchlist-prewarm — scheduled Worker that keeps the /prices KV cache warm.
 //
 // Every 2 minutes during market hours it assembles the FULL ticker universe
-// (all three capex maps + scanner pool + shortlist + market strip + pinned
+// (all three capex maps + shortlist + market strip + pinned
 // hubs) and makes one /prices request through the public site. That request
 // populates the shared KV quote cache with a covered-set that is a superset
 // of anything a real visitor asks for, so client refreshes are cache hits.
@@ -47,8 +47,6 @@ async function warm() {
     }
   }
 
-  const scanner = await getJson("/scanner");
-  for (const t of scanner?.tickers ?? []) tickers.add(t);
   const shortlist = await getJson("/shortlist");
   for (const t of shortlist?.tickers ?? []) tickers.add(t);
 

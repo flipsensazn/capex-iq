@@ -1,7 +1,7 @@
 # capex-iq
 
 React watchlist app with Cloudflare Pages Functions for market data, capex intel,
-news, and scanner APIs.
+and news APIs.
 
 ## Deployment
 
@@ -11,7 +11,7 @@ https://capex-iq.us (custom domain on the `capex-iq` Worker).
 - Frontend: Vite build output from `dist/`, served as Worker static assets
   (SPA fallback enabled)
 - Backend: the files in `functions/` are unchanged Pages-style functions;
-  `workers/site/index.js` routes `/prices`, `/scanner`, `/capex-intel`, etc.
+  `workers/site/index.js` routes `/prices`, `/capex-intel`, etc.
   to them with a Pages-compatible context shim
 - Deploys: `.github/workflows/deploy-site.yml` builds and runs
   `wrangler deploy` from `workers/site/` on every merge to main (requires the
@@ -282,7 +282,7 @@ verified coverage of the watchlist universe including the small caps.
 
 GitHub Actions secrets for the workflow:
 
-- `DATABASE_URL` — Neon Postgres (same as scanner ETL). Required.
+- `DATABASE_URL` — Neon Postgres. Required.
 - `GEMINI_API_KEY` — optional; without it scores are lexicon-only (capped at 40)
 - `API_NINJAS_KEY` / `EARNINGSCALL_API_KEY` — optional PAID fallback transcript
   providers, only consulted for tickers defeatbeta doesn't carry
@@ -293,10 +293,4 @@ GitHub Actions secrets for the workflow:
 
 - The Bloomberg market-news endpoint prefers same-day headlines in New York market
   time, but falls back to the latest available headlines on weekends and holidays.
-- The ETL pipeline can now bootstrap the `ranked_candidates` table in a fresh
-  Neon database before loading scanner results.
-- Ranked ETL runs fail when successful SEC companyfacts responses cover less
-  than 90% of candidates (override with
-  `RANKED_ETL_MIN_SEC_RESPONSE_COVERAGE`) and publish daily state, counts,
-  errors, and last-success freshness to `ranked_etl_runs`.
 - Full setup guide: [docs/cloudflare-setup.md](docs/cloudflare-setup.md)

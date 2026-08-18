@@ -33,13 +33,6 @@ const PINNED_TICKERS = [...new Set([
   ...ROBOTICS_COMPANIES.filter(c => c.isPublic).map(c => c.ticker ?? c.id),
 ])];
 
-// The default Multibagger Scanner list
-const DEFAULT_MULTIBAGGER = [
-  "YELP", "NVRI", "CXM", "SFL", "WWW", "FIVN", "STGW", "ECVT", "CRI", 
-  "TRIP", "OLPX", "LZ", "GLDD", "ARHS", "ACEL", "CRCT", "PGY", "TDAY", 
-  "NABL", "NRDS", "STKL", "UDMY", "GOGO", "YEXT", "EHAB", "AHH", "RIGL", 
-  "RPD", "AKBA"
-];
 
 // ── PRICE FETCHING ────────────────────────────────────────
 async function fetchAllPrices(tickers) {
@@ -1105,154 +1098,6 @@ function Watchlist({ prices, capexData, onTickerClick, isAdmin, shortList, onSav
   );
 }
 
-// ── PRE-MARKET GAP SCANNER PANEL ──────────────────────────
-const TJL_BADGES = {
-  PASS:          { label: "PASS",     color: "var(--pos)", title: "Trend Join Long: daily breakout + intraday breakout confirmed" },
-  fail_daily:    { label: "FAIL · D", color: "var(--down-300)", title: "Failed daily leg: below prev daily high or close under 200 SMA" },
-  fail_intraday: { label: "FAIL · I", color: "#fbbf24", title: "Failed intraday leg: below premarket high or high-of-day" },
-};
-
-function GapScannerPanel({ prices, onTickerClick }) {
-  const isMobile = useMobile();
-  const [scan, setScan]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
-
-  const fetchScan = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res  = await fetch("/gap-scanner");
-      const json = await res.json();
-      if (json.success && json.data?.gappers?.length > 0) {
-        setScan(json.data);
-      } else {
-        setError(json.message || "No gap scan available yet.");
-        setScan(null);
-      }
-    } catch (err) {
-      setError("Could not reach gap-scanner API. Check your Cloudflare deployment.");
-      setScan(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { fetchScan(); }, []);
-
-  const scannedAgo = scan?.scanned_at
-    ? (() => {
-        const diffMin = Math.floor((Date.now() - new Date(scan.scanned_at).getTime()) / 60000);
-        if (diffMin >= 60) return `${Math.floor(diffMin / 60)}h ${diffMin % 60}m ago`;
-        if (diffMin >= 1) return `${diffMin}m ago`;
-        return "just now";
-      })()
-    : null;
-
-  const passCount = scan?.gappers?.filter(g => g.tjl?.result === "PASS").length ?? 0;
-  const fmtVol = v => v == null ? "—" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? (v / 1e3).toFixed(0) + "K" : String(v);
-
-  return (
-    <div style={{ borderRadius: "var(--radius-2xl)", border: "1px solid var(--border-hairline)", background: "var(--bg-raised)", padding: isMobile ? "12px 8px" : 20, display: "flex", flexDirection: "column", height: "100%", boxSizing: "border-box", width: "100%", overflowX: "hidden" }}>
-
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8, flexShrink: 0, minWidth: 0 }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#fbbf24" }}>Pre-market Gap Scanner</h3>
-            <span style={{ fontSize: 9, color: "var(--info)", background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.3)", borderRadius: 4, padding: "2px 7px", fontWeight: 700, letterSpacing: "0.1em" }}>● TJL STRATEGY</span>
-            {passCount > 0 && (
-              <span style={{ fontSize: 9, color: "var(--pos)", background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 4, padding: "2px 7px", fontWeight: 700, letterSpacing: "0.1em" }}>
-                {passCount} PASS{passCount > 1 ? "ES" : ""}
-              </span>
-            )}
-          </div>
-          <p style={{ fontSize: 11, color: "var(--ink-500)", marginTop: 3 }}>
-            Gap &gt;5% · price &gt;$3 · vol &gt;25K · Trend Join Long: above prev daily high, 200 SMA, PMH &amp; HOD
-            {scannedAgo ? ` · scanned ${scannedAgo}` : ""}
-          </p>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => fetchScan()}
-            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-hairline)", color: "var(--ink-400)", borderRadius: 8, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
-            ↻ Refresh
-          </button>
-        </div>
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto", overflowX: "auto", minHeight: 400, paddingRight: isMobile ? 0 : 4, WebkitOverflowScrolling: "touch" }}>
-        {error && (
-          <div style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-300)", fontSize: 12 }}>⚠ {error}</div>
-        )}
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: isMobile ? 10 : 11, textAlign: "left" }}>
-          <thead>
-            <tr style={{ color: "var(--ink-500)", borderBottom: "1px solid rgba(255,255,255,0.05)", position: "sticky", top: 0, background: "rgba(14,17,23,0.95)", zIndex: 10 }}>
-              {['#','TICKER','PRICE','GAP %','PM VOL','CATALYST','PREV HIGH','SMA200','PMH','HOD'].map(h => <th key={h} style={{ padding: isMobile ? '6px 4px' : '10px 8px', whiteSpace: 'nowrap' }}>{h}</th>)}
-              <th style={{ padding: isMobile ? '6px 4px' : '10px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>TJL</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan="11" style={{ padding: 20, color: "var(--ink-500)" }}>
-                Loading gap scan…
-              </td></tr>
-            ) : !scan?.gappers?.length ? (
-              <tr><td colSpan="11" style={{ padding: 20, color: "var(--ink-500)" }}>
-                No gappers today (or the morning pipeline hasn't pushed yet).
-              </td></tr>
-            ) : scan.gappers.map(g => {
-              const priceEntry = prices[g.symbol];
-              const livePrice  = priceEntry?.price ?? g.tjl?.curr_price ?? g.price;
-              const change     = priceEntry?.change;
-              const tjl        = g.tjl || {};
-              const badge      = TJL_BADGES[tjl.result] || { label: "—", color: "var(--ink-500)", title: "TJL not evaluated" };
-              const fmtPx = v => v == null ? "—" : "$" + Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-              return (
-                <tr key={g.symbol}
-                  style={{ borderBottom: "1px solid rgba(255,255,255,0.03)", transition: "background .15s", background: tjl.result === "PASS" ? "rgba(52,211,153,0.05)" : "" }}
-                  onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
-                  onMouseLeave={e => e.currentTarget.style.background = tjl.result === "PASS" ? "rgba(52,211,153,0.05)" : ""}>
-
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-600)", fontSize: 10 }}>{g.rank ?? "—"}</td>
-
-                  <td onClick={e => onTickerClick(g.symbol, e.currentTarget.getBoundingClientRect())}
-                    style={{ padding: isMobile ? "8px 4px" : "12px 8px", cursor: "pointer" }}>
-                    <span style={{ fontWeight: 700, color: "var(--ink-050)" }}>{g.symbol}</span>
-                    {change !== undefined && (
-                      <div style={{ fontSize: 9, color: change >= 0 ? "var(--pos)" : "var(--down-300)" }}>
-                        {change >= 0 ? "+" : ""}{change}%
-                      </div>
-                    )}
-                  </td>
-
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-100)", fontWeight: 600 }}>{fmtPx(livePrice)}</td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--pos)", fontWeight: 700 }}>+{Number(g.gap_pct).toFixed(1)}%</td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-200)" }}>{fmtVol(g.premarket_volume)}</td>
-
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-300)", maxWidth: isMobile ? 120 : 260 }} title={g.catalyst || undefined}>
-                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.catalyst || "—"}</div>
-                  </td>
-
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-200)" }}>{fmtPx(tjl.prev_daily_high)}</td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-200)" }}>{fmtPx(tjl.sma200)}</td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-200)" }}>{fmtPx(tjl.pmh)}</td>
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", color: "var(--ink-200)" }}>{fmtPx(tjl.today_hod)}</td>
-
-                  <td style={{ padding: isMobile ? "8px 4px" : "12px 8px", textAlign: "right" }}>
-                    <span title={badge.title} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: badge.color, background: badge.color + "18", border: `1px solid ${badge.color}55`, borderRadius: 4, padding: "2px 8px", whiteSpace: "nowrap" }}>
-                      {badge.label}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
 
 // ── GLOBAL STYLES ─────────────────────────────────────────
 const GLOBAL_STYLES = `
@@ -1422,9 +1267,9 @@ export default function App() {
   }, []);
 
   // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
-  // robotics · "earnings" = the calendar · "scanner" = pre-market gap scanner
+  // robotics · "earnings" = the calendar
   // · "research" = the members-only SEC financial research workspace.
-  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "scanner", "research"];
+  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "research"];
   const [view, setView] = useState(() => {
     const h = window.location.hash.replace("#", "");
     return VALID_VIEWS.includes(h) ? h : "ai";
@@ -1460,8 +1305,6 @@ export default function App() {
   const [researchTicker, setResearchTicker] = useState(null);
 
   const {
-    scannerPool,
-    setScannerPool,
     shortList,
     setShortList,
     capexData,
@@ -1492,11 +1335,9 @@ export default function App() {
     refresh,
     capexDataRef,
     activeViewRef,
-    scannerPoolRef,
     shortListRef,
   } = useDashboardData({
     activeView: view,
-    defaultScannerPool: DEFAULT_MULTIBAGGER,
     defaultCapexData: CAPEX_DATA,
     defaultMuskData: MUSK_CAPEX_DATA,
     defaultRoboticsData: ROBOTICS_CAPEX_DATA,
@@ -1522,14 +1363,12 @@ export default function App() {
   }, []);
 
   const {
-    saveGlobalScanner,
     saveGlobalShortlist,
     saveGlobalCapex,
     saveGlobalMuskCapex,
     saveGlobalRoboticsCapex,
   } = useAdminActions({
     setIsAdmin,
-    setScannerPool,
     setShortList,
     setCapexData,
     setMuskCapexData,
@@ -1724,10 +1563,9 @@ export default function App() {
   // The earnings view is a standalone calendar — it still needs a map for the
   // ticker universe, so it borrows the AI map without rendering its panels.
   const isEarnings = view === "earnings";
-  const isScanner = view === "scanner";
   const isResearch = view === "research";
   // Standalone views skip the capex-map panels below.
-  const isMapView = !isEarnings && !isScanner && !isResearch;
+  const isMapView = !isEarnings && !isResearch;
   const dashboardDataNotice = useMemo(
     () => isMapView ? buildDashboardDataNotice(datasetHealth) : null,
     [datasetHealth, isMapView]
@@ -1792,7 +1630,6 @@ export default function App() {
     { value: "musk", label: "Musk Galaxy", icon: "🚀" },
     { value: "robotics", label: "Robotics", icon: "🦾" },
     { value: "earnings", label: "Earnings", icon: "🗓" },
-    { value: "scanner", label: "Scanner", icon: "🔍" },
     ...(canResearch ? [{ value: "research", label: "Research", icon: "🔬" }] : []),
   ];
 
@@ -1855,16 +1692,6 @@ export default function App() {
             />
           )}
 
-          {/* Scanner is its own view: the gap scanner full width, no capex map.
-              It keeps panel-wrapper/panel-inner so it holds the same 600px box
-              and the same responsive overrides it had inside the grid. */}
-          {isScanner && (
-            <div className="panel-wrapper">
-              <div className="panel-inner">
-                <GapScannerPanel prices={prices} onTickerClick={openPopup} />
-              </div>
-            </div>
-          )}
 
           {isResearch && canResearch && <ResearchPanel initialTicker={researchTicker} />}
 

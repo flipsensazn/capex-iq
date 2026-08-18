@@ -22,8 +22,8 @@
   "kv_namespaces": [
     {
       "binding": "SHARED_DATA",
-      // The SAME namespace the Pages project uses — maps, caches, shortlist
-      // and scanner data carry over with no migration.
+      // The SAME namespace the Pages project uses — maps, caches, and shortlist
+      // data carry over with no migration.
       "id": "1dadc46e52b146bea2fbc4b8511c7d90"
     }
   ],
