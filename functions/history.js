@@ -30,7 +30,7 @@ async function writeKvJson(kv, key, value) {
   }
 }
 
-function buildPoints(timestamps, closes, volumes) {
+export function buildPoints(timestamps, closes, volumes) {
   if (!Array.isArray(timestamps) || !Array.isArray(closes)) return [];
 
   const points = [];

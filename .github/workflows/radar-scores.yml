@@ -1,0 +1,68 @@
+name: Weekly Radar Scores ETL
+
+on:
+  schedule:
+    # Sunday ~14:17 UTC — after the XBRL gauges, off the :00 mark
+    - cron: '17 14 * * 0'
+
+  # Manual trigger for testing / backfills
+  workflow_dispatch:
+    inputs:
+      ticker_limit:
+        description: 'Limit run to first N tickers (testing)'
+        required: false
+        default: ''
+
+concurrency:
+  group: radar-scores-etl
+  cancel-in-progress: false
+
+jobs:
+  run-radar-scores:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate Ticker Limit
+        env:
+          TICKER_LIMIT: ${{ github.event.inputs.ticker_limit }}
+        run: |
+          if [[ -n "$TICKER_LIMIT" && ! "$TICKER_LIMIT" =~ ^(0|[1-9][0-9]*)$ ]]; then
+            echo "ticker_limit must be empty, 0, or a canonical positive integer"
+            exit 1
+          fi
+
+      - name: Run Radar Scores ETL
+        env:
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          WATCHLIST_BASE_URL: ${{ vars.WATCHLIST_BASE_URL }}
+          TICKER_LIMIT:       ${{ github.event.inputs.ticker_limit }}
+        run: python src/radar_scores.py
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -s -X POST "$SLACK_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d '{"text":"⚠️ Wizzles Watchlist Radar scores ETL failed — check the GitHub Actions log for details."}'
+          fi
