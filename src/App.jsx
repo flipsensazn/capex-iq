@@ -1394,6 +1394,7 @@ export default function App() {
   
   const [isAdmin, setIsAdmin] = useState(false);
   const [canResearch, setCanResearch] = useState(false);
+  const [features, setFeatures] = useState({});
   const [identityEmail, setIdentityEmail] = useState(null);
   const [adminChecked, setAdminChecked] = useState(false);
   const [appNotice, setAppNotice] = useState(null);
@@ -1409,6 +1410,7 @@ export default function App() {
       .then(data => {
         setIsAdmin(Boolean(data.isAdmin));
         setCanResearch(Boolean(data.canResearch));
+        setFeatures(data.features || {});
         setIdentityEmail(typeof data.email === "string" && data.email ? data.email : null);
       })
       .catch(() => {
