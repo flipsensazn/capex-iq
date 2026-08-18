@@ -165,6 +165,11 @@ class RadarScoresRegressionTests(unittest.TestCase):
 
     def test_chunking_invokes_node_scorer_once_per_twenty_five(self):
         records = [{"ticker": f"T{index}"} for index in range(53)]
+        records[0].update({
+            "hasCik": False,
+            "shortName": "VistaShares Electrification Sup",
+            "longName": "VistaShares Electrification Supercycle ETF",
+        })
 
         def fake_score(batch):
             return [{"ticker": row["ticker"], "coverage": "scored"} for row in batch]
@@ -179,12 +184,26 @@ class RadarScoresRegressionTests(unittest.TestCase):
             [result["ticker"] for result in results],
             [record["ticker"] for record in records],
         )
+        self.assertFalse(results[0]["hasCik"])
+        self.assertEqual(
+            results[0]["shortName"], "VistaShares Electrification Sup"
+        )
+        self.assertEqual(
+            results[0]["longName"],
+            "VistaShares Electrification Supercycle ETF",
+        )
 
     def test_chart_without_bars_still_preserves_fund_instrument_type(self):
         response = FakeResponse({
             "chart": {
                 "result": [{
-                    "meta": {"instrumentType": "ETF"},
+                    "meta": {
+                        "instrumentType": "ETF",
+                        "shortName": "VistaShares Electrification Sup",
+                        "longName": (
+                            "VistaShares Electrification Supercycle ETF"
+                        ),
+                    },
                     "timestamp": [],
                     "indicators": {"quote": [{"close": []}]},
                 }],
@@ -193,9 +212,16 @@ class RadarScoresRegressionTests(unittest.TestCase):
         })
         with mock.patch.object(radar_scores.requests, "get", return_value=response):
             chart, instrument_type = radar_scores.fetch_chart("FUND")
+            _, _, short_name, long_name = radar_scores._fetch_chart_with_meta(
+                "FUND"
+            )
 
         self.assertIsNone(chart)
         self.assertEqual(instrument_type, "ETF")
+        self.assertEqual(short_name, "VistaShares Electrification Sup")
+        self.assertEqual(
+            long_name, "VistaShares Electrification Supercycle ETF"
+        )
 
     def test_yahoo_session_collects_cookie_before_fetching_crumb(self):
         session = mock.Mock()
@@ -301,6 +327,150 @@ class RadarScoresRegressionTests(unittest.TestCase):
         self.assertEqual(results[0]["fund_profile"], profiles[0])
         self.assertIsNone(results[1]["fund_profile"])
         self.assertEqual(results[2]["fund_profile"], profiles[1])
+        self.assertEqual(stats.degraded, 0)
+
+    def test_no_cik_equity_probe_promotes_fund_and_reuses_profile(self):
+        stats = radar_scores.RunStats()
+        result = scored_result("LAZR", "no_filings")
+        result.update({
+            "hasCik": False,
+            "instrumentType": "EQUITY",
+            "shortName": "Tema Photonics & Optical Fund",
+        })
+        profile = {
+            "expenseRatio": 0.0075,
+            "totalAssets": 50_000_000,
+            "category": "Technology",
+            "yield": None,
+            "legalType": None,
+        }
+        session = object()
+
+        with mock.patch.object(
+            radar_scores, "get_yahoo_session", return_value=(session, "crumb")
+        ) as get_session, mock.patch.object(
+            radar_scores, "fetch_fund_profile", return_value=profile
+        ) as fetch_profile:
+            enriched = radar_scores.enrich_fund_profiles([result], stats)
+
+        self.assertEqual(enriched[0]["coverage"], "fund")
+        self.assertIs(enriched[0]["fund_profile"], profile)
+        get_session.assert_called_once_with()
+        fetch_profile.assert_called_once_with("LAZR", session, "crumb")
+        self.assertEqual(stats.degraded, 0)
+
+    def test_no_cik_equity_uses_etf_name_fallback_when_probe_fails(self):
+        stats = radar_scores.RunStats()
+        result = scored_result("NASA", "no_filings")
+        result.update({
+            "hasCik": False,
+            "instrumentType": "EQUITY",
+            "shortName": "Tema Space Innovators ETF",
+        })
+        session = object()
+
+        with mock.patch.object(
+            radar_scores, "get_yahoo_session", return_value=(session, "crumb")
+        ), mock.patch.object(
+            radar_scores,
+            "fetch_fund_profile",
+            side_effect=RuntimeError("HTTP 503"),
+        ) as fetch_profile, mock.patch("builtins.print") as log:
+            enriched = radar_scores.enrich_fund_profiles([result], stats)
+
+        self.assertEqual(enriched[0]["coverage"], "fund")
+        self.assertIsNone(enriched[0]["fund_profile"])
+        fetch_profile.assert_called_once_with("NASA", session, "crumb")
+        self.assertEqual(stats.degraded, 1)
+        log.assert_called_once_with(
+            "NASA: Yahoo fund profile unavailable (HTTP 503)"
+        )
+
+    def test_no_cik_equity_uses_long_name_when_short_name_is_truncated(self):
+        stats = radar_scores.RunStats()
+        result = scored_result("POW", "no_filings")
+        result.update({
+            "hasCik": False,
+            "instrumentType": "EQUITY",
+            "shortName": "VistaShares Electrification Sup",
+            "longName": "VistaShares Electrification Supercycle ETF",
+        })
+        empty_profile = {
+            "expenseRatio": None,
+            "totalAssets": None,
+            "category": None,
+            "yield": None,
+            "legalType": None,
+        }
+        session = object()
+
+        with mock.patch.object(
+            radar_scores, "get_yahoo_session", return_value=(session, "crumb")
+        ), mock.patch.object(
+            radar_scores, "fetch_fund_profile", return_value=empty_profile
+        ) as fetch_profile, mock.patch("builtins.print") as log:
+            enriched = radar_scores.enrich_fund_profiles([result], stats)
+
+        self.assertEqual(enriched[0]["coverage"], "fund")
+        self.assertIsNone(enriched[0]["fund_profile"])
+        fetch_profile.assert_called_once_with("POW", session, "crumb")
+        self.assertEqual(stats.degraded, 1)
+        log.assert_called_once_with(
+            "POW: Yahoo fund profile unavailable "
+            "(missing legalType/category)"
+        )
+
+    def test_no_cik_adr_empty_probe_remains_no_filings(self):
+        stats = radar_scores.RunStats()
+        result = scored_result("EVKIF", "no_filings")
+        result.update({
+            "hasCik": False,
+            "instrumentType": "EQUITY",
+            "shortName": "Evonik Industries AG",
+            "longName": "Evonik Industries AG",
+        })
+        empty_profile = {
+            "expenseRatio": None,
+            "totalAssets": None,
+            "category": None,
+            "yield": None,
+            "legalType": None,
+        }
+        session = object()
+
+        with mock.patch.object(
+            radar_scores, "get_yahoo_session", return_value=(session, "crumb")
+        ), mock.patch.object(
+            radar_scores, "fetch_fund_profile", return_value=empty_profile
+        ) as fetch_profile, mock.patch("builtins.print") as log:
+            enriched = radar_scores.enrich_fund_profiles([result], stats)
+
+        self.assertEqual(enriched[0]["coverage"], "no_filings")
+        self.assertIsNone(enriched[0]["fund_profile"])
+        fetch_profile.assert_called_once_with("EVKIF", session, "crumb")
+        self.assertEqual(stats.degraded, 0)
+        log.assert_not_called()
+
+    def test_cik_equity_is_never_fund_probed(self):
+        stats = radar_scores.RunStats()
+        result = scored_result("OPERATING", "no_filings")
+        result.update({
+            "hasCik": True,
+            "instrumentType": "EQUITY",
+            "shortName": "Operating Company",
+        })
+
+        with mock.patch.object(
+            radar_scores, "get_yahoo_session"
+        ) as get_session, mock.patch.object(
+            radar_scores, "fetch_fund_profile"
+        ) as fetch_profile:
+            enriched = radar_scores.enrich_fund_profiles([result], stats)
+
+        self.assertEqual(enriched[0]["coverage"], "no_filings")
+        self.assertIsNone(enriched[0]["fund_profile"])
+        get_session.assert_not_called()
+        fetch_profile.assert_not_called()
         self.assertEqual(stats.degraded, 0)
 
     def test_quote_summary_failure_keeps_fund_and_marks_run_degraded(self):
