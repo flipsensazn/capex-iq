@@ -48,9 +48,11 @@ from etl_health import (
     CoverageError,
     RunStats,
     begin_run,
+    evaluate_health,
     finish_run,
     record_failure_safely,
     threshold_from_env,
+    write_run,
 )
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -391,16 +393,19 @@ def concentration_windows(text):
             spans[-1] = (spans[-1][0], hi)  # merge overlap
         else:
             spans.append((lo, hi))
-    out, total = [], 0
+    out, total, truncated = [], 0, False
     for lo, hi in spans:
         chunk = text[lo:hi].strip()
-        if total + len(chunk) > MAX_EXCERPT_CHARS:
-            raise IncompleteExposureScan(
-                "qualifying filing excerpts exceed the extraction cap"
-            )
+        remaining = MAX_EXCERPT_CHARS - total
+        if len(chunk) > remaining:
+            if remaining >= WINDOW:
+                out.append(chunk[:remaining])
+                total += remaining
+            truncated = True
+            break
         out.append(chunk)
         total += len(chunk)
-    return out
+    return out, truncated
 
 
 # ── GEMINI EXTRACTION ─────────────────────────────────────
@@ -587,94 +592,110 @@ def _validate_respective_period(quote, period, pct):
         raise ValueError("model pct does not match the verbatim respectively period")
 
 
-def extract_disclosures(ticker, form, excerpts, report_date=None):
+def _validated_disclosure(r, index, excerpts, report_date):
+    if not isinstance(r, dict):
+        raise ValueError(f"model row {index} must be an object")
+
+    quote = str(r.get("quote") or "").strip()
+    if not quote or len(quote) > 500 or not _quote_is_verbatim(quote, excerpts):
+        raise ValueError(f"model row {index} quote is not verbatim from the filing excerpt")
+    clauses = _allocation_clauses(quote)
+    clause_semantics = {statement_semantics(clause) for clause in clauses}
+    if not clause_semantics.intersection(("single_customer", "negative")):
+        raise ValueError(f"model row {index} is not a qualifying allocation statement")
+
+    try:
+        pct = float(r.get("pct"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"model row {index} has an invalid pct") from exc
+    if not (1 <= pct <= 100):
+        raise ValueError(f"model row {index} pct must be between 1 and 100")
+
+    period = str(r.get("period") or "").strip()
+    basis = r.get("basis")
+    if not period or len(period) > 120:
+        raise ValueError(f"model row {index} has an invalid period")
+    if basis not in ("revenue", "accounts_receivable"):
+        raise ValueError(f"model row {index} has an invalid basis")
+
+    normalized_quote = normalize_verbatim(quote)
+    normalized_period = normalize_verbatim(period)
+    if normalized_period not in normalized_quote:
+        raise ValueError(f"model row {index} period is not verbatim in the quote")
+    if not any(abs(value - pct) < 0.0001 for value in _percentage_values(quote)):
+        raise ValueError(f"model row {index} pct is not verbatim in the quote")
+    if basis == "accounts_receivable":
+        basis_present = re.search(r"\b(?:accounts?\s+receivable|receivables)\b", normalized_quote)
+    else:
+        basis_present = re.search(r"\b(?:revenues?|sales)\b", normalized_quote)
+    if not basis_present:
+        raise ValueError(f"model row {index} basis is not verbatim in the quote")
+
+    label = str(r.get("customer") or "").strip()
+    single_clause = None
+    if label and len(label) <= 120:
+        single_clause = _matching_allocation_clause(
+            clauses, "single_customer", pct, basis, period, label=label
+        )
+    negative_clause = _matching_allocation_clause(
+        clauses, "negative", pct, basis, period
+    )
+    if single_clause is not None:
+        semantics, matched_clause = "single_customer", single_clause
+    elif negative_clause is not None:
+        semantics, matched_clause = "negative", negative_clause
+    else:
+        raise ValueError(
+            f"model row {index} fields do not share one allocation clause"
+        )
+
+    parsed_period_end = resolved_period_end(period, report_date)
+    if parsed_period_end is None:
+        raise ValueError(
+            f"model row {index} period has no explicit end date or SEC reportDate"
+        )
+    _validate_respective_period(matched_clause, period, pct)
+
+    if semantics == "negative":
+        # This marker participates in newest-vintage selection and remains
+        # as provenance after a newer negative clears older positive facts.
+        # CBS/API consumers explicitly admit only single_customer rows.
+        return {
+            "label": "__negative__", "ticker": None, "pct": pct,
+            "basis": basis, "period": period, "period_end": parsed_period_end,
+            "quote": quote, "statement_type": "negative",
+        }
+
+    if not label or len(label) > 120:
+        raise ValueError(f"model row {index} has an invalid customer label")
+    return {
+        "label": label, "ticker": map_customer(label), "pct": pct,
+        "basis": basis, "period": period, "period_end": parsed_period_end,
+        "quote": quote, "statement_type": "single_customer",
+    }
+
+
+def extract_disclosures(ticker, form, excerpts, report_date=None, diagnostics=None):
     raw = call_gemini(EXTRACT_PROMPT.format(ticker=ticker, form=form,
                                             excerpts="\n---\n".join(excerpts)))
     if not isinstance(raw, list):
         raise ValueError("model response must be a JSON array")
     rows = []
-    for index, r in enumerate(raw):
-        if not isinstance(r, dict):
-            raise ValueError(f"model row {index} must be an object")
-
-        quote = str(r.get("quote") or "").strip()
-        if not quote or len(quote) > 500 or not _quote_is_verbatim(quote, excerpts):
-            raise ValueError(f"model row {index} quote is not verbatim from the filing excerpt")
-        clauses = _allocation_clauses(quote)
-        clause_semantics = {statement_semantics(clause) for clause in clauses}
-        if not clause_semantics.intersection(("single_customer", "negative")):
-            continue
-
+    dropped_rows = 0
+    for index, model_row in enumerate(raw):
         try:
-            pct = float(r.get("pct"))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"model row {index} has an invalid pct") from exc
-        if not (1 <= pct <= 100):
-            raise ValueError(f"model row {index} pct must be between 1 and 100")
-
-        period = str(r.get("period") or "").strip()
-        basis = r.get("basis")
-        if not period or len(period) > 120:
-            raise ValueError(f"model row {index} has an invalid period")
-        if basis not in ("revenue", "accounts_receivable"):
-            raise ValueError(f"model row {index} has an invalid basis")
-
-        normalized_quote = normalize_verbatim(quote)
-        normalized_period = normalize_verbatim(period)
-        if normalized_period not in normalized_quote:
-            raise ValueError(f"model row {index} period is not verbatim in the quote")
-        if not any(abs(value - pct) < 0.0001 for value in _percentage_values(quote)):
-            raise ValueError(f"model row {index} pct is not verbatim in the quote")
-        if basis == "accounts_receivable":
-            basis_present = re.search(r"\b(?:accounts?\s+receivable|receivables)\b", normalized_quote)
-        else:
-            basis_present = re.search(r"\b(?:revenues?|sales)\b", normalized_quote)
-        if not basis_present:
-            raise ValueError(f"model row {index} basis is not verbatim in the quote")
-
-        label = str(r.get("customer") or "").strip()
-        single_clause = None
-        if label and len(label) <= 120:
-            single_clause = _matching_allocation_clause(
-                clauses, "single_customer", pct, basis, period, label=label
+            row = _validated_disclosure(
+                model_row, index, excerpts, report_date
             )
-        negative_clause = _matching_allocation_clause(
-            clauses, "negative", pct, basis, period
-        )
-        if single_clause is not None:
-            semantics, matched_clause = "single_customer", single_clause
-        elif negative_clause is not None:
-            semantics, matched_clause = "negative", negative_clause
-        else:
-            raise ValueError(
-                f"model row {index} fields do not share one allocation clause"
-            )
-
-        parsed_period_end = resolved_period_end(period, report_date)
-        if parsed_period_end is None:
-            raise ValueError(
-                f"model row {index} period has no explicit end date or SEC reportDate"
-            )
-        _validate_respective_period(matched_clause, period, pct)
-
-        if semantics == "negative":
-            # This marker participates in newest-vintage selection and remains
-            # as provenance after a newer negative clears older positive facts.
-            # CBS/API consumers explicitly admit only single_customer rows.
-            rows.append({
-                "label": "__negative__", "ticker": None, "pct": pct,
-                "basis": basis, "period": period, "period_end": parsed_period_end,
-                "quote": quote, "statement_type": "negative",
-            })
+        except ValueError as exc:
+            dropped_rows += 1
+            print(f"{ticker} {form}: dropped model row {index} — {exc}")
             continue
-
-        if not label or len(label) > 120:
-            raise ValueError(f"model row {index} has an invalid customer label")
-        rows.append({
-            "label": label, "ticker": map_customer(label), "pct": pct,
-            "basis": basis, "period": period, "period_end": parsed_period_end,
-            "quote": quote, "statement_type": "single_customer",
-        })
+        rows.append(row)
+    if diagnostics is not None:
+        diagnostics["dropped_rows"] = (
+            diagnostics.get("dropped_rows", 0) + dropped_rows
+        )
     return rows
 
 
@@ -837,11 +858,12 @@ def load_ticker(conn, ticker, rows):
         raise
 
 
-def scan_ticker(ticker, cik):
+def scan_ticker(ticker, cik, diagnostics=None):
     """Scan every selected filing, returning only a complete replacement set."""
     filings = latest_filings(cik)
     time.sleep(SEC_PAUSE)
     candidates = []
+    degraded = False
     for form, accession, primary_doc, filed, report_date in filings:
         try:
             text, url = fetch_filing_text(cik, accession, primary_doc)
@@ -861,13 +883,35 @@ def scan_ticker(ticker, cik):
             "filed": filed,
             "report_date": report_date,
         }
-        windows = concentration_windows(text)
+        windows, truncated = concentration_windows(text)
+        if truncated:
+            degraded = True
+            if diagnostics is not None:
+                diagnostics["degraded"] = True
+            print(
+                f"{ticker} {form}: qualifying excerpts truncated at "
+                f"{MAX_EXCERPT_CHARS} characters"
+            )
+        extraction_diagnostics = {}
         rows = []
         if windows:
             rows = extract_disclosures(
-                ticker, form, windows, report_date=report_date
+                ticker, form, windows, report_date=report_date,
+                diagnostics=extraction_diagnostics,
             )
             time.sleep(GEMINI_PAUSE)
+        dropped_rows = extraction_diagnostics.get("dropped_rows", 0)
+        if dropped_rows:
+            degraded = True
+        if truncated and not rows:
+            raise IncompleteExposureScan(
+                f"truncated filing scan produced no valid rows for {ticker} "
+                f"accession {accession}"
+            )
+        if dropped_rows and not rows:
+            raise IncompleteExposureScan(
+                f"all model rows failed validation for {ticker} accession {accession}"
+            )
         for row in rows:
             row.update({
                 "form": form,
@@ -878,7 +922,11 @@ def scan_ticker(ticker, cik):
         # Original annual forms are the authoritative complete concentration
         # disclosure. Their absence is an observation in the same vintage
         # race; a silent amendment or quarter is not.
-        if form in AUTHORITATIVE_ANNUAL_FORMS:
+        if (
+            form in AUTHORITATIVE_ANNUAL_FORMS
+            and not truncated
+            and not dropped_rows
+        ):
             rows.extend(confirmed_empty_markers(
                 [filing_provenance],
                 present_bases={row["basis"] for row in rows},
@@ -889,6 +937,8 @@ def scan_ticker(ticker, cik):
         raise IncompleteExposureScan(
             "completed scan has no annual or explicit disclosure provenance"
         )
+    if diagnostics is not None:
+        diagnostics["degraded"] = degraded
     return sorted(
         selected,
         key=lambda row: (row["basis"], row.get("statement_type", ""), row["label"]),
@@ -1072,14 +1122,26 @@ def explicit_negative_tickers(staged_rows):
     }
 
 
-def enforce_positive_retention(prior_positive, staged_rows, minimum_retention):
+def enforce_positive_retention(
+    prior_positive,
+    staged_rows,
+    minimum_retention,
+    *,
+    provider_coverage,
+    minimum_provider_coverage,
+):
     """Fail before any replacement if prior scoring-ticker retention is unsafe."""
     projected = projected_positive_tickers(prior_positive, staged_rows)
     retained_prior = set(prior_positive) & projected
     # A normalized, verbatim explicit negative is deterministic evidence that
     # clearing this ticker is intentional rather than a model-wide empty-array
-    # regression. Credit it for the guard without calling it a positive fact.
-    negative_evidence = set(prior_positive) & explicit_negative_tickers(staged_rows)
+    # regression. Credit it only when provider coverage is healthy, without
+    # calling it a positive fact.
+    negative_evidence = set()
+    if provider_coverage >= minimum_provider_coverage:
+        negative_evidence = (
+            set(prior_positive) & explicit_negative_tickers(staged_rows)
+        )
     effective_retained = retained_prior | negative_evidence
     baseline_count = len(prior_positive)
     required = math.ceil(baseline_count * minimum_retention)
@@ -1116,6 +1178,7 @@ def main():
     context = None
     limited_run = int(os.environ.get("TICKER_LIMIT") or 0) > 0
     loaded = cleared = explicit_negative = skipped = 0
+    degraded_tickers = set()
 
     conn = connect_db(DATABASE_URL)
     try:
@@ -1127,6 +1190,15 @@ def main():
         })
         minimum_positive_retention = threshold_from_env(
             os.environ, "CUSTOMER_EXPOSURE_MIN_POSITIVE_RETENTION", 0.75
+        )
+        minimum_provider_coverage = threshold_from_env(
+            os.environ, "CUSTOMER_EXPOSURE_MIN_PROVIDER_COVERAGE", 0.90
+        )
+        minimum_usable_coverage = threshold_from_env(
+            os.environ, "CUSTOMER_EXPOSURE_MIN_USABLE_COVERAGE", 0.50
+        )
+        minimum_baseline_retention = threshold_from_env(
+            os.environ, "CUSTOMER_EXPOSURE_MIN_BASELINE_RETENTION", 0.75
         )
         staged_rows = {}
 
@@ -1145,8 +1217,9 @@ def main():
                 stats.known_no_data += 1
                 continue
             stats.attempted += 1
+            scan_diagnostics = {}
             try:
-                final = scan_ticker(ticker, cik)
+                final = scan_ticker(ticker, cik, diagnostics=scan_diagnostics)
             except NoSupportedFilings as exc:
                 print(f"[{n}/{len(universe)}] {ticker}: {exc} — skipped")
                 skipped += 1
@@ -1157,9 +1230,15 @@ def main():
             except Exception as e:
                 print(f"[{n}/{len(universe)}] {ticker}: error — {e}")
                 skipped += 1
+                if scan_diagnostics.get("degraded"):
+                    degraded_tickers.add(ticker)
+                    stats.degraded = len(degraded_tickers)
                 stats.transient_failures += 1
                 continue
 
+            if scan_diagnostics.get("degraded"):
+                degraded_tickers.add(ticker)
+                stats.degraded = len(degraded_tickers)
             staged_rows[ticker] = final
             scoring_final = scoring_rows(final)
             if scoring_final:
@@ -1179,7 +1258,8 @@ def main():
         )
         for ticker, reasons in vintage_rejections.items():
             skipped += 1
-            stats.degraded += 1
+            degraded_tickers.add(ticker)
+            stats.degraded = len(degraded_tickers)
             print(f"{ticker}: stored rows preserved — {'; '.join(reasons)}")
         for final in staged_rows.values():
             if scoring_rows(final):
@@ -1189,11 +1269,21 @@ def main():
             if any(row.get("statement_type") == "negative" for row in final):
                 explicit_negative += 1
 
+        decision = evaluate_health(
+            stats,
+            context.baseline_usable,
+            minimum_provider_coverage=minimum_provider_coverage,
+            minimum_usable_coverage=minimum_usable_coverage,
+            minimum_baseline_retention=minimum_baseline_retention,
+            limited_run=limited_run,
+        )
         projected_positive = projected_positive_tickers(prior_positive, staged_rows)
         retained_prior = len(set(prior_positive) & projected_positive)
-        credited_negative = len(
-            set(prior_positive) & explicit_negative_tickers(staged_rows)
-        )
+        credited_negative = 0
+        if decision.provider_coverage >= minimum_provider_coverage:
+            credited_negative = len(
+                set(prior_positive) & explicit_negative_tickers(staged_rows)
+            )
         effective_retained = retained_prior + credited_negative
         baseline_count = len(prior_positive)
         stats.details.update({
@@ -1209,9 +1299,26 @@ def main():
             "vintageRejectedTickers": len(vintage_rejections),
             "explicitNegative": explicit_negative,
             "skipped": skipped,
+            "loaded": loaded,
+            "confirmedEmpty": cleared,
         })
+        if decision.state == "failure":
+            write_run(conn, context, "failure", stats, decision=decision)
+            print(
+                f"ETL health: pipeline={context.pipeline} state={decision.state} "
+                f"provider={decision.provider_coverage:.1%} "
+                f"usable={decision.usable_coverage:.1%} "
+                f"counts={stats.usable}/{stats.expected}"
+            )
+            raise CoverageError(
+                f"{context.pipeline} coverage failed: {decision.reason}"
+            )
         enforce_positive_retention(
-            prior_positive, staged_rows, minimum_positive_retention
+            prior_positive,
+            staged_rows,
+            minimum_positive_retention,
+            provider_coverage=decision.provider_coverage,
+            minimum_provider_coverage=minimum_provider_coverage,
         )
 
         # The complete run has passed its prior-positive safety gate. Only now
@@ -1241,15 +1348,9 @@ def main():
             conn,
             context,
             stats,
-            minimum_provider_coverage=threshold_from_env(
-                os.environ, "CUSTOMER_EXPOSURE_MIN_PROVIDER_COVERAGE", 0.90
-            ),
-            minimum_usable_coverage=threshold_from_env(
-                os.environ, "CUSTOMER_EXPOSURE_MIN_USABLE_COVERAGE", 0.50
-            ),
-            minimum_baseline_retention=threshold_from_env(
-                os.environ, "CUSTOMER_EXPOSURE_MIN_BASELINE_RETENTION", 0.75
-            ),
+            minimum_provider_coverage=minimum_provider_coverage,
+            minimum_usable_coverage=minimum_usable_coverage,
+            minimum_baseline_retention=minimum_baseline_retention,
             limited_run=limited_run,
         )
     except CoverageError:
