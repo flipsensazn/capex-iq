@@ -14,7 +14,7 @@ import { hasFeature } from "./entitlements.js";
 
 const PIPELINE = "radar_scores";
 const STALE_AFTER_HOURS = 9 * 24;
-const CACHE_KEY = "radarView_v1";
+const CACHE_KEY = "radarView_v2";
 const CACHE_TTL_SECONDS = 60 * 60;
 const CACHE_CONTROL = "private, max-age=300";
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
@@ -142,6 +142,7 @@ function buildScreenerPayload(rows, manifest) {
       chainCount: numberOrNull(row.chain_count) ?? 0,
       chains: jsonArray(row.chains),
       memberships: jsonObject(row.memberships),
+      fundProfile: row.fund_profile == null ? null : jsonObject(row.fund_profile),
       price: numberOrNull(row.price),
       marketCap: numberOrNull(row.market_cap),
       asOf: latestDate,
@@ -195,7 +196,7 @@ async function serveScreener(env, headers) {
       SELECT ticker, as_of_date, coverage,
              quality_score, technical_score,
              chain_count, chains, memberships,
-             price, market_cap, computed_at
+             fund_profile, price, market_cap, computed_at
       FROM radar_scores
       WHERE as_of_date IN (SELECT as_of_date FROM recent_dates)
       ORDER BY as_of_date DESC, ticker
@@ -263,7 +264,7 @@ async function serveDetail(env, headers, ticker) {
       SELECT ticker, as_of_date, coverage,
              quality_score, quality_components,
              technical_score, technical_components,
-             fiscal_year_basis
+             fiscal_year_basis, fund_profile
       FROM radar_scores
       WHERE ticker = $1
       ORDER BY as_of_date DESC
@@ -294,6 +295,7 @@ async function serveDetail(env, headers, ticker) {
       qualityComponents: jsonArray(latest.quality_components),
       technicalComponents: jsonArray(latest.technical_components),
       fiscalYearBasis: numberOrNull(latest.fiscal_year_basis),
+      fundProfile: latest.fund_profile == null ? null : jsonObject(latest.fund_profile),
       asOf: latest.as_of_date == null ? null : String(latest.as_of_date),
       trend: rows.slice(0, 12).map(row => ({
         asOf: row.as_of_date == null ? null : String(row.as_of_date),

@@ -36,9 +36,10 @@ def live_maps():
 
 
 class FakeResponse:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, text=""):
         self.payload = payload
         self.status_code = status_code
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -196,6 +197,134 @@ class RadarScoresRegressionTests(unittest.TestCase):
         self.assertIsNone(chart)
         self.assertEqual(instrument_type, "ETF")
 
+    def test_yahoo_session_collects_cookie_before_fetching_crumb(self):
+        session = mock.Mock()
+        session.headers = {}
+        session.get.side_effect = [
+            FakeResponse({}, status_code=404),
+            FakeResponse({}, text="crumb-token\n"),
+        ]
+
+        with mock.patch.object(
+            radar_scores.requests, "Session", return_value=session
+        ) as session_factory:
+            actual_session, crumb = radar_scores.get_yahoo_session()
+
+        session_factory.assert_called_once_with()
+        self.assertIs(actual_session, session)
+        self.assertEqual(crumb, "crumb-token")
+        self.assertEqual(session.headers, radar_scores.YAHOO_HEADERS)
+        self.assertEqual(
+            session.get.call_args_list,
+            [
+                mock.call("https://fc.yahoo.com", timeout=30),
+                mock.call(
+                    "https://query1.finance.yahoo.com/v1/test/getcrumb",
+                    timeout=30,
+                ),
+            ],
+        )
+
+    def test_fund_profile_unwraps_raw_values_and_uses_expense_fallback(self):
+        response = FakeResponse({
+            "quoteSummary": {
+                "result": [{
+                    "fundProfile": {
+                        "categoryName": "Technology",
+                        "legalType": "Exchange Traded Fund",
+                        "feesExpensesInvestment": {},
+                    },
+                    "defaultKeyStatistics": {
+                        "annualReportExpenseRatio": {
+                            "raw": 0.0065,
+                            "fmt": "0.65%",
+                        },
+                    },
+                    "summaryDetail": {
+                        "totalAssets": {"raw": 1_200_000_000, "fmt": "1.2B"},
+                        "yield": {"raw": 0.0123, "fmt": "1.23%"},
+                    },
+                }],
+                "error": None,
+            }
+        })
+        session = mock.Mock()
+        session.get.return_value = response
+
+        profile = radar_scores.fetch_fund_profile("FUND", session, "crumb")
+
+        self.assertEqual(profile, {
+            "expenseRatio": 0.0065,
+            "totalAssets": 1_200_000_000,
+            "category": "Technology",
+            "yield": 0.0123,
+            "legalType": "Exchange Traded Fund",
+        })
+        session.get.assert_called_once_with(
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/FUND",
+            params={
+                "modules": "fundProfile,defaultKeyStatistics,summaryDetail",
+                "crumb": "crumb",
+            },
+            timeout=30,
+        )
+
+    def test_fund_enrichment_fetches_one_session_and_reuses_it(self):
+        stats = radar_scores.RunStats()
+        results = [
+            scored_result("ETF1", "fund"),
+            scored_result("STOCK", "scored"),
+            scored_result("ETF2", "fund"),
+        ]
+        session = object()
+        profiles = [
+            {"expenseRatio": 0.001, "totalAssets": 100},
+            {"expenseRatio": 0.002, "totalAssets": 200},
+        ]
+
+        with mock.patch.object(
+            radar_scores, "get_yahoo_session", return_value=(session, "crumb")
+        ) as get_session, mock.patch.object(
+            radar_scores, "fetch_fund_profile", side_effect=profiles
+        ) as fetch_profile, mock.patch.object(
+            radar_scores.time, "sleep"
+        ) as sleep:
+            enriched = radar_scores.enrich_fund_profiles(results, stats)
+
+        self.assertIs(enriched, results)
+        get_session.assert_called_once_with()
+        self.assertEqual(fetch_profile.call_args_list, [
+            mock.call("ETF1", session, "crumb"),
+            mock.call("ETF2", session, "crumb"),
+        ])
+        sleep.assert_called_once_with(0.3)
+        self.assertEqual(results[0]["fund_profile"], profiles[0])
+        self.assertIsNone(results[1]["fund_profile"])
+        self.assertEqual(results[2]["fund_profile"], profiles[1])
+        self.assertEqual(stats.degraded, 0)
+
+    def test_quote_summary_failure_keeps_fund_and_marks_run_degraded(self):
+        stats = radar_scores.RunStats(expected=1, attempted=1)
+        results = radar_scores.apply_result_stats(
+            stats, [scored_result("ETF", "fund")]
+        )
+
+        with mock.patch.object(
+            radar_scores, "get_yahoo_session", return_value=(object(), "crumb")
+        ), mock.patch.object(
+            radar_scores, "fetch_fund_profile", side_effect=RuntimeError("HTTP 503")
+        ), mock.patch("builtins.print") as log:
+            enriched = radar_scores.enrich_fund_profiles(results, stats)
+
+        self.assertEqual([result["ticker"] for result in enriched], ["ETF"])
+        self.assertIsNone(enriched[0]["fund_profile"])
+        self.assertEqual(stats.known_no_data, 1)
+        self.assertEqual(stats.transient_failures, 0)
+        self.assertEqual(stats.degraded, 1)
+        log.assert_called_once_with(
+            "ETF: Yahoo fund profile unavailable (HTTP 503)"
+        )
+
     def test_manifest_stats_map_coverage_and_errors(self):
         stats = radar_scores.RunStats(expected=5, attempted=5)
         results = [
@@ -230,7 +359,7 @@ class RadarScoresRegressionTests(unittest.TestCase):
             persisted = radar_scores.persist_radar_rows(conn, [row])
 
         self.assertEqual(persisted, [("ALL",)])
-        self.assertEqual(len(row), 16)
+        self.assertEqual(len(row), 17)
         self.assertEqual(
             row[:4], ("ALL", date(2026, 8, 18), "scored", 81)
         )
@@ -239,7 +368,8 @@ class RadarScoresRegressionTests(unittest.TestCase):
         self.assertEqual(json_value(row[6]), result["technicalScore"]["components"])
         self.assertEqual(row[7:9], (3, ["ai", "musk", "robotics"]))
         self.assertEqual(json_value(row[9]), result["memberships"])
-        self.assertEqual(row[10:], (
+        self.assertIsNone(row[10])
+        self.assertEqual(row[11:], (
             20.5, 2050, 2025, "radar-v1", "method-sig", "input-sig"
         ))
         self.assertIn(
@@ -259,6 +389,28 @@ class RadarScoresRegressionTests(unittest.TestCase):
             fetch=True,
         )
         self.assertEqual(conn.commits, 1)
+
+    def test_fund_profile_is_json_in_upsert_row(self):
+        result = scored_result("ETF", "fund")
+        result["fund_profile"] = {
+            "expenseRatio": 0.0065,
+            "totalAssets": 1_200_000_000,
+            "category": "Technology",
+            "yield": None,
+            "legalType": "Exchange Traded Fund",
+        }
+
+        row = radar_scores.radar_row(result, date(2026, 8, 18))
+
+        self.assertEqual(json_value(row[10]), result["fund_profile"])
+        self.assertIn("fund_profile", radar_scores.UPSERT_SQL)
+
+    def test_migration_adds_fund_profile_column(self):
+        normalized_sql = " ".join(radar_scores.MIGRATION_SQL.split())
+        self.assertIn(
+            "ALTER TABLE radar_scores ADD COLUMN IF NOT EXISTS fund_profile JSONB",
+            normalized_sql,
+        )
 
 
 if __name__ == "__main__":
