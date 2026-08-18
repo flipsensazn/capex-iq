@@ -45,6 +45,8 @@ YAHOO_HEADERS = {
     )
 }
 YAHOO_PAUSE = 0.2
+FUND_PROFILE_PAUSE = 0.3
+FUND_PROFILE_MODULES = "fundProfile,defaultKeyStatistics,summaryDetail"
 
 CHUNK_SIZE = 25
 PIPELINE = "radar_scores"
@@ -234,6 +236,105 @@ def fetch_chart(ticker):
     )
 
 
+def get_yahoo_session():
+    """Create one cookie-and-crumb Yahoo session for fund profile requests."""
+    session = requests.Session()
+    session.headers.update(YAHOO_HEADERS)
+    # Yahoo commonly returns a non-success status here while still setting the
+    # cookies needed by getcrumb, so intentionally do not raise on this response.
+    session.get("https://fc.yahoo.com", timeout=30)
+    crumb_response = session.get(
+        "https://query1.finance.yahoo.com/v1/test/getcrumb",
+        timeout=30,
+    )
+    crumb_response.raise_for_status()
+    crumb = crumb_response.text.strip()
+    if not crumb:
+        raise ValueError("Yahoo returned an empty crumb")
+    return session, crumb
+
+
+def _yahoo_raw(value):
+    """Unwrap Yahoo's numeric ``{raw, fmt}`` shape."""
+    if isinstance(value, dict):
+        return value.get("raw")
+    return value
+
+
+def fetch_fund_profile(ticker, session, crumb):
+    """Fetch the requested Yahoo quoteSummary fields for one fund."""
+    encoded_ticker = quote(ticker, safe="")
+    response = session.get(
+        "https://query1.finance.yahoo.com/v10/finance/quoteSummary/"
+        f"{encoded_ticker}",
+        params={"modules": FUND_PROFILE_MODULES, "crumb": crumb},
+        timeout=30,
+    )
+    response.raise_for_status()
+    quote_summary = response.json().get("quoteSummary") or {}
+    if quote_summary.get("error"):
+        raise ValueError(f"Yahoo quoteSummary error: {quote_summary['error']}")
+    results = quote_summary.get("result") or []
+    if not results or not isinstance(results[0], dict):
+        raise ValueError("Yahoo quoteSummary has no result")
+
+    result = results[0]
+    fund_profile = result.get("fundProfile") or {}
+    fees = fund_profile.get("feesExpensesInvestment") or {}
+    key_statistics = result.get("defaultKeyStatistics") or {}
+    summary_detail = result.get("summaryDetail") or {}
+
+    expense_ratio = _yahoo_raw(fees.get("annualReportExpenseRatio"))
+    if expense_ratio is None:
+        expense_ratio = _yahoo_raw(
+            key_statistics.get("annualReportExpenseRatio")
+        )
+    return {
+        "expenseRatio": expense_ratio,
+        "totalAssets": _yahoo_raw(summary_detail.get("totalAssets")),
+        "category": fund_profile.get("categoryName"),
+        "yield": _yahoo_raw(summary_detail.get("yield")),
+        "legalType": fund_profile.get("legalType"),
+    }
+
+
+def enrich_fund_profiles(results, stats):
+    """Attach fund profiles without allowing Yahoo failures to drop a row."""
+    fund_results = []
+    for result in results:
+        result["fund_profile"] = None
+        if result.get("coverage") == "fund":
+            fund_results.append(result)
+    if not fund_results:
+        return results
+
+    try:
+        session, crumb = get_yahoo_session()
+    except Exception as error:
+        for result in fund_results:
+            stats.degraded += 1
+            print(
+                f"{result.get('ticker')}: Yahoo fund profile unavailable "
+                f"({error})"
+            )
+        return results
+
+    for index, result in enumerate(fund_results):
+        if index:
+            time.sleep(FUND_PROFILE_PAUSE)
+        try:
+            result["fund_profile"] = fetch_fund_profile(
+                result["ticker"], session, crumb
+            )
+        except Exception as error:
+            stats.degraded += 1
+            print(
+                f"{result.get('ticker')}: Yahoo fund profile unavailable "
+                f"({error})"
+            )
+    return results
+
+
 def build_scorer_input(ticker, metadata, cik_map):
     """Fetch one ticker's provider inputs; SEC failures remain fatal per row."""
     companyfacts = None
@@ -380,6 +481,11 @@ def radar_row(result, as_of_date):
         int(result.get("chainCount") or 0),
         list(result.get("chains") or []),
         psycopg2.extras.Json(result.get("memberships") or {}),
+        (
+            psycopg2.extras.Json(result["fund_profile"])
+            if result.get("fund_profile") is not None
+            else None
+        ),
         result.get("price"),
         result.get("marketCap"),
         result.get("fiscalYearBasis"),
@@ -396,11 +502,18 @@ BOOTSTRAP_SQL = """
         quality_score NUMERIC, quality_components JSONB,
         technical_score NUMERIC, technical_components JSONB,
         chain_count INTEGER NOT NULL, chains TEXT[] NOT NULL, memberships JSONB,
+        fund_profile JSONB,
         price NUMERIC, market_cap NUMERIC, fiscal_year_basis INTEGER,
         methodology_version TEXT, methodology_signature TEXT, input_signature TEXT,
         computed_at TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (ticker, as_of_date)
     );
+"""
+
+
+MIGRATION_SQL = """
+    ALTER TABLE radar_scores
+        ADD COLUMN IF NOT EXISTS fund_profile JSONB;
 """
 
 
@@ -410,6 +523,7 @@ UPSERT_SQL = """
          quality_score, quality_components,
          technical_score, technical_components,
          chain_count, chains, memberships,
+         fund_profile,
          price, market_cap, fiscal_year_basis,
          methodology_version, methodology_signature, input_signature)
     VALUES %s
@@ -422,6 +536,7 @@ UPSERT_SQL = """
         chain_count = EXCLUDED.chain_count,
         chains = EXCLUDED.chains,
         memberships = EXCLUDED.memberships,
+        fund_profile = EXCLUDED.fund_profile,
         price = EXCLUDED.price,
         market_cap = EXCLUDED.market_cap,
         fiscal_year_basis = EXCLUDED.fiscal_year_basis,
@@ -474,6 +589,7 @@ def main():
     try:
         with conn.cursor() as cursor:
             cursor.execute(BOOTSTRAP_SQL)
+            cursor.execute(MIGRATION_SQL)
         conn.commit()
         context = begin_run(
             conn,
@@ -502,6 +618,7 @@ def main():
             on_chunk_error=chunk_failed,
         )
         valid_results = apply_result_stats(stats, results)
+        enrich_fund_profiles(valid_results, stats)
         rows = [radar_row(result, as_of_date) for result in valid_results]
         persisted = persist_radar_rows(conn, rows)
         stats.details.update({

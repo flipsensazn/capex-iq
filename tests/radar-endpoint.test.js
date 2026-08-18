@@ -259,6 +259,13 @@ test("radar enforces preflight, method, authentication, origin, and membership g
 });
 
 test("radar assembles the latest snapshot and previous scores from the two newest dates", { concurrency: false }, async () => {
+  const fundProfile = {
+    expenseRatio: 0.0065,
+    totalAssets: 850000000,
+    category: "Technology",
+    yield: 0.004,
+    legalType: "Exchange Traded Fund",
+  };
   const radarRows = [
     {
       ticker: "OLD",
@@ -295,6 +302,7 @@ test("radar assembles the latest snapshot and previous scores from the two newes
       chain_count: "1",
       chains: ["ai"],
       memberships: { ai: ["Funds"] },
+      fund_profile: JSON.stringify(fundProfile),
       price: "51.25",
       market_cap: null,
       computed_at: "2099-01-15T08:00:00Z",
@@ -334,6 +342,7 @@ test("radar assembles the latest snapshot and previous scores from the two newes
         chainCount: 1,
         chains: ["ai"],
         memberships: { ai: ["Funds"] },
+        fundProfile,
         price: 51.25,
         marketCap: null,
         asOf: "2099-01-15",
@@ -348,6 +357,7 @@ test("radar assembles the latest snapshot and previous scores from the two newes
         chainCount: 2,
         chains: ["ai", "robotics"],
         memberships: { ai: ["Semiconductors"], robotics: ["Compute"] },
+        fundProfile: null,
         price: 950.5,
         marketCap: 2300000000000,
         asOf: "2099-01-15",
@@ -359,10 +369,11 @@ test("radar assembles the latest snapshot and previous scores from the two newes
 
     const dataQuery = harness.queries.find(({ query }) => !query.includes("etl_run_manifest"));
     assert.match(dataQuery.query, /SELECT DISTINCT as_of_date/);
+    assert.match(dataQuery.query, /fund_profile/);
     assert.match(dataQuery.query, /LIMIT 2/);
     assert.equal(dataQuery.params, undefined);
     assert.equal(harness.kv.puts.length, 1);
-    assert.equal(harness.kv.puts[0].key, "radarView_v1");
+    assert.equal(harness.kv.puts[0].key, "radarView_v2");
     assert.deepEqual(harness.kv.puts[0].options, { expirationTtl: 3600 });
     assert.deepEqual(JSON.parse(harness.kv.puts[0].value), body);
   });
@@ -425,6 +436,13 @@ test("radar treats a missing table before the first manifest-backed run as boots
 });
 
 test("radar detail returns full component JSON and a newest-first twelve-point trend", { concurrency: false }, async () => {
+  const fundProfile = {
+    expenseRatio: 0.0019,
+    totalAssets: 1250000000,
+    category: "Large Blend",
+    yield: 0.012,
+    legalType: "Exchange Traded Fund",
+  };
   const qualityComponents = [
     { key: "growth", label: "Growth", score: 91, weight: 0.4, detail: "Strong filed growth." },
     { key: "returns", label: "Returns", score: 84, weight: 0.6, detail: "Healthy returns." },
@@ -442,6 +460,7 @@ test("radar detail returns full component JSON and a newest-first twelve-point t
     technical_score: String(86 - index),
     technical_components: index === 0 ? technicalComponents : [],
     fiscal_year_basis: "2098",
+    fund_profile: index === 0 ? fundProfile : null,
   }));
   const harness = await createHarness({ radarRows });
 
@@ -463,6 +482,7 @@ test("radar detail returns full component JSON and a newest-first twelve-point t
       qualityComponents,
       technicalComponents,
       fiscalYearBasis: 2098,
+      fundProfile,
       asOf: "2099-01-15",
       trend: radarRows.slice(0, 12).map(row => ({
         asOf: row.as_of_date,
@@ -473,9 +493,10 @@ test("radar detail returns full component JSON and a newest-first twelve-point t
     assert.equal(harness.queries.length, 1);
     assert.deepEqual(harness.queries[0].params, ["NVDA"]);
     assert.match(harness.queries[0].query, /ORDER BY as_of_date DESC/);
+    assert.match(harness.queries[0].query, /fund_profile/);
     assert.match(harness.queries[0].query, /LIMIT 12/);
     assert.equal(harness.kv.puts.length, 0);
-    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v1"), false);
+    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v2"), false);
   });
 });
 
@@ -507,7 +528,7 @@ test("radar rejects an invalid detail ticker before querying Neon", { concurrenc
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { error: "Invalid ticker format" });
     assert.equal(harness.queries.length, 0);
-    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v1"), false);
+    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v2"), false);
   });
 });
 
@@ -525,13 +546,14 @@ test("radar serves the screener KV cache without querying Neon", { concurrency: 
       chainCount: 2,
       chains: ["ai", "robotics"],
       memberships: { ai: ["Semiconductors"], robotics: ["Compute"] },
+      fundProfile: null,
       price: 950,
       marketCap: 2300000000000,
       asOf: "2099-01-15",
     }],
     health: { pipeline: "radar_scores", state: "success", stale: false },
   };
-  const harness = await createHarness({ initialKv: { radarView_v1: cached } });
+  const harness = await createHarness({ initialKv: { radarView_v2: cached } });
 
   await withFetch(harness.fetchStub, async () => {
     const response = await radar({ request: radarRequest(harness.access.jwt), env: harness.env });
@@ -542,5 +564,6 @@ test("radar serves the screener KV cache without querying Neon", { concurrency: 
     assert.equal(harness.queries.length, 0);
     assert.equal(harness.jwksFetches, 1);
     assert.equal(harness.kv.puts.length, 0);
+    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v2"), true);
   });
 });

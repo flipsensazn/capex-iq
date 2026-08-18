@@ -1268,6 +1268,7 @@ export default function App() {
   }, []);
 
   const canRadar = Boolean(features?.radar);
+  const canFunds = Boolean(features?.funds);
 
   // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
   // robotics · "earnings" = the calendar · "radar" = the members screener
@@ -1701,7 +1702,7 @@ export default function App() {
           )}
 
 
-          {isRadar && canRadar && <RadarPanel onTickerClick={openPopup} onOpenResearch={openResearch} />}
+          {isRadar && canRadar && <RadarPanel onTickerClick={openPopup} onOpenResearch={openResearch} showFunds={canFunds} />}
 
           {isResearch && canResearch && <ResearchPanel initialTicker={researchTicker} />}
 
