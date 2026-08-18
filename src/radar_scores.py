@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -47,6 +48,7 @@ YAHOO_HEADERS = {
 YAHOO_PAUSE = 0.2
 FUND_PROFILE_PAUSE = 0.3
 FUND_PROFILE_MODULES = "fundProfile,defaultKeyStatistics,summaryDetail"
+ETF_NAME_PATTERN = re.compile(r"\bETF\b", re.IGNORECASE)
 
 CHUNK_SIZE = 25
 PIPELINE = "radar_scores"
@@ -208,7 +210,7 @@ def fetch_companyfacts(cik):
     return response.json()
 
 
-def fetch_chart(ticker):
+def _fetch_chart_with_meta(ticker):
     encoded_ticker = quote(ticker, safe="")
     response = requests.get(
         "https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -222,18 +224,30 @@ def fetch_chart(ticker):
     if not results:
         raise ValueError(payload.get("error") or "Yahoo chart has no result")
     result = results[0]
-    instrument_type = (result.get("meta") or {}).get("instrumentType")
+    meta = result.get("meta") or {}
+    instrument_type = meta.get("instrumentType")
+    short_name = meta.get("shortName")
+    long_name = meta.get("longName")
     quotes = ((result.get("indicators") or {}).get("quote") or [])
     if not quotes:
-        return None, instrument_type
+        return None, instrument_type, short_name, long_name
     timestamps = result.get("timestamp") or []
     closes = quotes[0].get("close") or []
     if not timestamps or not closes:
-        return None, instrument_type
+        return None, instrument_type, short_name, long_name
     return (
         {"timestamps": timestamps, "closes": closes},
         instrument_type,
+        short_name,
+        long_name,
     )
+
+
+def fetch_chart(ticker):
+    chart, instrument_type, _short_name, _long_name = _fetch_chart_with_meta(
+        ticker
+    )
+    return chart, instrument_type
 
 
 def get_yahoo_session():
@@ -298,20 +312,37 @@ def fetch_fund_profile(ticker, session, crumb):
     }
 
 
+def _has_etf_name(result):
+    for key in ("shortName", "longName"):
+        name = result.get(key)
+        if isinstance(name, str) and ETF_NAME_PATTERN.search(name):
+            return True
+    return False
+
+
 def enrich_fund_profiles(results, stats):
-    """Attach fund profiles without allowing Yahoo failures to drop a row."""
-    fund_results = []
+    """Detect no-CIK funds and attach profiles without dropping a row."""
+    profile_requests = []
     for result in results:
         result["fund_profile"] = None
+        if result.get("error"):
+            continue
         if result.get("coverage") == "fund":
-            fund_results.append(result)
-    if not fund_results:
+            profile_requests.append((result, True))
+        elif (
+            result.get("coverage") == "no_filings"
+            and result.get("hasCik") is False
+        ):
+            profile_requests.append((result, False))
+    if not profile_requests:
         return results
 
     try:
         session, crumb = get_yahoo_session()
     except Exception as error:
-        for result in fund_results:
+        for result, known_fund in profile_requests:
+            if not known_fund and _has_etf_name(result):
+                result["coverage"] = "fund"
             stats.degraded += 1
             print(
                 f"{result.get('ticker')}: Yahoo fund profile unavailable "
@@ -319,18 +350,36 @@ def enrich_fund_profiles(results, stats):
             )
         return results
 
-    for index, result in enumerate(fund_results):
+    for index, (result, known_fund) in enumerate(profile_requests):
         if index:
             time.sleep(FUND_PROFILE_PAUSE)
         try:
-            result["fund_profile"] = fetch_fund_profile(
+            profile = fetch_fund_profile(
                 result["ticker"], session, crumb
             )
         except Exception as error:
+            if not known_fund and _has_etf_name(result):
+                result["coverage"] = "fund"
             stats.degraded += 1
             print(
                 f"{result.get('ticker')}: Yahoo fund profile unavailable "
                 f"({error})"
+            )
+            continue
+
+        if known_fund:
+            result["fund_profile"] = profile
+        elif isinstance(profile, dict) and (
+            profile.get("legalType") or profile.get("category")
+        ):
+            result["coverage"] = "fund"
+            result["fund_profile"] = profile
+        elif _has_etf_name(result):
+            result["coverage"] = "fund"
+            stats.degraded += 1
+            print(
+                f"{result.get('ticker')}: Yahoo fund profile unavailable "
+                "(missing legalType/category)"
             )
     return results
 
@@ -347,8 +396,12 @@ def build_scorer_input(ticker, metadata, cik_map):
 
     chart = None
     instrument_type = None
+    short_name = None
+    long_name = None
     try:
-        chart, instrument_type = fetch_chart(ticker)
+        chart, instrument_type, short_name, long_name = (
+            _fetch_chart_with_meta(ticker)
+        )
     except Exception as error:
         # Chart absence is an allowed partial input: quality can still score and
         # the JavaScript module will renormalize technical components.
@@ -367,6 +420,9 @@ def build_scorer_input(ticker, metadata, cik_map):
             for chain, memberships in entry["memberships"].items()
         },
         "instrumentType": instrument_type,
+        "hasCik": bool(cik),
+        "shortName": short_name,
+        "longName": long_name,
     }
 
 
@@ -428,7 +484,12 @@ def score_records_in_chunks(records, chunk_size=CHUNK_SIZE, on_chunk_error=None)
     results = []
     for batch in _chunks(records, chunk_size):
         try:
-            results.extend(score_chunk(batch))
+            batch_results = score_chunk(batch)
+            for record, result in zip(batch, batch_results):
+                for key in ("hasCik", "shortName", "longName"):
+                    if key in record:
+                        result[key] = record[key]
+            results.extend(batch_results)
         except Exception as error:
             if on_chunk_error is None:
                 raise
@@ -617,8 +678,8 @@ def main():
             scorer_inputs(universe, metadata, cik_map, stats),
             on_chunk_error=chunk_failed,
         )
+        enrich_fund_profiles(results, stats)
         valid_results = apply_result_stats(stats, results)
-        enrich_fund_profiles(valid_results, stats)
         rows = [radar_row(result, as_of_date) for result in valid_results]
         persisted = persist_radar_rows(conn, rows)
         stats.details.update({
