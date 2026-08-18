@@ -714,6 +714,496 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertEqual(diagnostics["dropped_rows"], 2)
 
+    def test_distributor_year_values_bind_to_adjacent_years(self):
+        quote = (
+            "One of our distributors accounted for 23 % of our revenue in 2025, "
+            "22 % in 2024 and 21 % in 2023."
+        )
+        model_row = {
+            "customer": "one of our distributors", "pct": 23,
+            "basis": "revenue", "period": "2025", "quote": quote,
+        }
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "NXPI", "20-F", [quote], report_date="2025-12-31"
+            )
+
+        self.assertEqual(
+            [(row["label"], row["pct"], row["period"]) for row in rows],
+            [("one of our distributors", 23, "2025")],
+        )
+        self.assertTrue(customer_exposure.concentration_windows(quote)[0])
+        self.assertEqual(
+            customer_exposure._allocation_percentage_values(quote),
+            [23, 22, 21],
+        )
+        self.assertEqual(
+            customer_exposure.statement_semantics(
+                "Two distributors accounted for 30% of revenue in aggregate."
+            ),
+            "aggregate",
+        )
+
+        mismatched = dict(model_row, period="2024")
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[mismatched]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "NXPI", "20-F", [quote], report_date="2025-12-31",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+        mixed_growth = (
+            "One distributor accounted for 23% of revenue in 2025, and revenue "
+            "increased 22% in 2024."
+        )
+        growth_row = dict(
+            model_row, customer="one distributor", pct=22, period="2024",
+            quote=mixed_growth,
+        )
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[growth_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [mixed_growth], report_date="2025-12-31",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+    def test_named_attribution_values_bind_to_named_entities(self):
+        quote = (
+            "Approximately 23 % and 22 % of accounts receivable at March 28, "
+            "2026 and March 29, 2025, respectively, were attributable to "
+            "Motion Industries and Boeing."
+        )
+        model_rows = [
+            {
+                "customer": "Motion Industries", "pct": 23,
+                "basis": "accounts_receivable", "period": "March 28, 2026",
+                "quote": quote,
+            },
+            {
+                "customer": "Boeing", "pct": 22,
+                "basis": "accounts_receivable", "period": "March 29, 2025",
+                "quote": quote,
+            },
+        ]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=model_rows
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "RBC", "10-K", [quote], report_date="2026-03-28"
+            )
+
+        self.assertEqual(
+            [(row["label"], row["pct"]) for row in rows],
+            [("Motion Industries", 23), ("Boeing", 22)],
+        )
+        self.assertTrue(customer_exposure.concentration_windows(quote)[0])
+
+        swapped_rows = [
+            dict(model_rows[0], customer="Motion Industries", pct=22,
+                 period="March 29, 2025"),
+            dict(model_rows[1], customer="Boeing", pct=23,
+                 period="March 28, 2026"),
+        ]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=swapped_rows
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "RBC", "10-K", [quote], report_date="2026-03-28",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 2)
+
+    def test_named_entity_revenue_source_survives_full_validation(self):
+        sentence_stem = (
+            "During our fiscal year ended April 30, 2026, we generated "
+            "approximately 25% of our revenue from the U.S. Army"
+        )
+        quote = (
+            f"{sentence_stem} pursuant to orders placed under contract by the "
+            "U.S. government."
+        )
+        model_row = {
+            "customer": "U.S. Army", "pct": 25, "basis": "revenue",
+            "period": "fiscal year ended April 30, 2026", "quote": quote,
+        }
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "AVAV", "10-K", [quote], report_date="2026-04-30"
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["label"], rows[0]["pct"]), ("U.S. Army", 25))
+        self.assertEqual(customer_exposure._allocation_clauses(quote), [quote])
+        self.assertTrue(customer_exposure.concentration_windows(quote)[0])
+        self.assertEqual(
+            customer_exposure.statement_semantics(sentence_stem),
+            "single_customer",
+        )
+        self.assertEqual(
+            customer_exposure.statement_semantics(quote), "single_customer"
+        )
+
+        geography = (
+            "During our fiscal year ended April 30, 2026, we generated "
+            "approximately 25% of our revenue from the United States."
+        )
+        geography_row = dict(
+            model_row, customer="United States", quote=geography
+        )
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[geography_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [geography], report_date="2026-04-30",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(customer_exposure.statement_semantics(geography), "unknown")
+        self.assertTrue(customer_exposure.concentration_windows(geography)[0])
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+        combined = (
+            "During our fiscal year ended April 30, 2026, we generated "
+            "approximately 25% of our revenue from Motion Industries and the "
+            "Boeing Company."
+        )
+        combined_row = dict(
+            model_row, customer="Motion Industries", quote=combined
+        )
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[combined_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [combined], report_date="2026-04-30",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(customer_exposure.statement_semantics(combined), "unknown")
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+    def test_spelled_percentage_negative_survives_full_validation(self):
+        quote = (
+            "For the three months ended June 30, 2025, no individual customer "
+            "accounted for greater than ten percent of total revenue."
+        )
+        model_row = {
+            "statement_type": "negative", "pct": 10, "basis": "revenue",
+            "period": "three months ended June 30, 2025", "quote": quote,
+        }
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "ACLS", "10-Q", [quote], report_date="2025-06-30"
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["statement_type"], "negative")
+        self.assertEqual(rows[0]["pct"], 10)
+        self.assertEqual(
+            customer_exposure._percentage_values("ten percent (10%)"), [10]
+        )
+        self.assertEqual(
+            customer_exposure._percentage_values("ten percent (11%)"), []
+        )
+        self.assertEqual(
+            customer_exposure._percentage_values(" ".join(
+                f"{word} percent"
+                for word in customer_exposure.PERCENT_WORD_VALUES
+            )),
+            list(range(1, 21)),
+        )
+        self.assertTrue(customer_exposure.concentration_windows(quote)[0])
+
+        conflicting_quote = quote.replace(
+            "ten percent", "ten percent (11%)"
+        )
+        conflicting_row = dict(model_row, quote=conflicting_quote)
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[conflicting_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "ACLS", "10-Q", [conflicting_quote],
+                report_date="2025-06-30", diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+    def test_allocation_fact_wins_over_floor_threshold_language(self):
+        quote = (
+            "During fiscal 2026, 2025 and 2024, one customer generated 10 % or "
+            "more of total net revenues."
+        )
+        model_row = {
+            "customer": "one customer", "pct": 10, "basis": "revenue",
+            "period": "fiscal 2026", "quote": quote,
+        }
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "VIAV", "10-K", [quote], report_date="2026-06-30"
+            )
+
+        self.assertEqual(customer_exposure.statement_semantics(quote), "single_customer")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["pct"], 10)
+
+        policy = (
+            "Customers are considered significant if they account for more "
+            "than 10% of revenues"
+        )
+        policy_row = dict(
+            model_row, quote=policy, period="fiscal 2026",
+            customer="unnamed customer",
+        )
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[policy_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [policy], report_date="2026-06-30",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(customer_exposure.statement_semantics(policy), "threshold")
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+        periodic_policy = (
+            "For fiscal 2025, a customer accounting for 10% or more of revenue "
+            "is required to be disclosed."
+        )
+        periodic_policy_row = dict(
+            model_row, customer="a customer", period="fiscal 2025",
+            quote=periodic_policy,
+        )
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[periodic_policy_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [periodic_policy], report_date="2025-12-31",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(
+            customer_exposure.statement_semantics(periodic_policy), "threshold"
+        )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+
+        considered_fact = (
+            "For fiscal 2025, Customer A was considered significant and "
+            "accounted for 15% of revenue."
+        )
+        considered_row = dict(
+            model_row, customer="Customer A", pct=15, period="fiscal 2025",
+            quote=considered_fact,
+        )
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[considered_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "TEST", "10-K", [considered_fact], report_date="2025-12-31"
+            )
+        self.assertEqual(
+            customer_exposure.statement_semantics(considered_fact),
+            "single_customer",
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["pct"], 15)
+
+        factual_variants = (
+            (
+                "For fiscal 2025, Customer A was considered significant and "
+                "individually accounted for 15% of revenue."
+            ),
+            (
+                "For fiscal 2025, Customer A was regarded as significant and "
+                "accounted for 15% of revenue."
+            ),
+            (
+                "For fiscal 2025, Customer A accounted for 15% of revenue, "
+                "which is disclosed in Note 3."
+            ),
+        )
+        for factual_quote in factual_variants:
+            factual_row = dict(considered_row, quote=factual_quote)
+            with (
+                self.subTest(quote=factual_quote),
+                mock.patch.object(
+                    customer_exposure, "call_gemini",
+                    return_value=[factual_row],
+                ),
+            ):
+                rows = customer_exposure.extract_disclosures(
+                    "TEST", "10-K", [factual_quote],
+                    report_date="2025-12-31",
+                )
+                self.assertEqual(
+                    customer_exposure.statement_semantics(factual_quote),
+                    "single_customer",
+                )
+                self.assertEqual(len(rows), 1)
+
+    def test_qualitative_negative_carries_a_null_percentage(self):
+        quote = (
+            "No customers individually accounted for a material concentration "
+            "of revenue for the years ended December 31, 2025 or 2024 nor "
+            "accounts receivable as of December..."
+        )
+        model_row = {
+            "statement_type": "negative", "pct": None, "basis": "revenue",
+            "period": "years ended December 31, 2025", "quote": quote,
+        }
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "ALNT", "10-K", [quote], report_date="2025-12-31"
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["statement_type"], "negative")
+        self.assertIsNone(rows[0]["pct"])
+        self.assertTrue(customer_exposure.concentration_windows(quote)[0])
+        self.assertEqual(
+            customer_exposure.explicit_negative_tickers({"ALNT": rows}),
+            {"ALNT"},
+        )
+        self.assertEqual(customer_exposure.scoring_rows(rows), [])
+        self.assertIn(
+            "ALTER COLUMN pct DROP NOT NULL", customer_exposure.BOOTSTRAP_SQL
+        )
+
+        persisted = dict(
+            rows[0], form="10-K", url="https://www.sec.gov/example",
+            filed="2026-02-20", accession="0000000000-26-000010",
+        )
+        conn = FakeConnection()
+        with mock.patch.object(
+            customer_exposure.psycopg2.extras, "execute_values"
+        ) as insert:
+            customer_exposure.load_ticker(conn, "ALNT", [persisted])
+        self.assertIsNone(insert.call_args.args[2][0][3])
+
+        invalid_null_rows = (
+            {
+                "customer": "Customer A", "pct": None, "basis": "revenue",
+                "period": "year ended December 31, 2025",
+                "quote": SINGLE_EXCERPT,
+            },
+            {
+                "statement_type": "negative", "pct": None,
+                "basis": "revenue", "period": "fiscal 2025",
+                "quote": (
+                    "For fiscal 2025, no customer accounted for more than "
+                    "10% of revenue."
+                ),
+            },
+        )
+        for invalid_row in invalid_null_rows:
+            with (
+                self.subTest(quote=invalid_row["quote"]),
+                mock.patch.object(
+                    customer_exposure, "call_gemini",
+                    return_value=[invalid_row],
+                ),
+            ):
+                diagnostics = {}
+                self.assertEqual(
+                    customer_exposure.extract_disclosures(
+                        "TEST", "10-K", [invalid_row["quote"]],
+                        report_date="2025-12-31", diagnostics=diagnostics,
+                    ),
+                    [],
+                )
+                self.assertEqual(diagnostics["dropped_rows"], 1)
+
+        invalid_qualitative_rows = (
+            {
+                "statement_type": "negative", "pct": None,
+                "basis": "revenue",
+                "period": "year ended December 31, 2025",
+                "quote": (
+                    "For the year ended December 31, 2025, no customers "
+                    "individually accounted for a material concentration of "
+                    "revenue, defined as 10%."
+                ),
+            },
+            {
+                "statement_type": "negative", "pct": None,
+                "basis": "accounts_receivable",
+                "period": "year ended December 31, 2025",
+                "quote": (
+                    "For the year ended December 31, 2025, no customers "
+                    "individually accounted for a material concentration of "
+                    "revenue, while accounts receivable increased."
+                ),
+            },
+            {
+                "statement_type": "negative", "pct": None,
+                "basis": "revenue",
+                "period": "year ended December 31, 2025",
+                "quote": (
+                    "For the year ended December 31, 2025, no customers "
+                    "individually accounted for a material concentration of "
+                    "revenue, defined as ten percent (11%)."
+                ),
+            },
+            {
+                "statement_type": "negative", "pct": None,
+                "basis": "accounts_receivable",
+                "period": "year ended December 31, 2025",
+                "quote": (
+                    "For the year ended December 31, 2025, no customers "
+                    "individually accounted for a material concentration of "
+                    "revenue, while we evaluate cash or accounts receivable."
+                ),
+            },
+        )
+        for invalid_row in invalid_qualitative_rows:
+            with (
+                self.subTest(quote=invalid_row["quote"]),
+                mock.patch.object(
+                    customer_exposure, "call_gemini",
+                    return_value=[invalid_row],
+                ),
+            ):
+                diagnostics = {}
+                self.assertEqual(
+                    customer_exposure.extract_disclosures(
+                        "TEST", "10-K", [invalid_row["quote"]],
+                        report_date="2025-12-31", diagnostics=diagnostics,
+                    ),
+                    [],
+                )
+                self.assertEqual(diagnostics["dropped_rows"], 1)
+
+        with self.assertRaisesRegex(
+            ValueError, "single_customer rows require a numeric pct"
+        ):
+            customer_exposure.load_ticker(
+                FakeConnection(), "TEST",
+                [disclosure(pct=None, statement_type="single_customer")],
+            )
+
     def test_whitespace_corrupted_excerpt_accepts_clean_quote(self):
         excerpt = (
             "No in dividual customer or groups of affiliated customers represented "
@@ -765,6 +1255,20 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
         self.assertEqual(gemini.call_args.kwargs, {"max_output_tokens": 8192})
 
     def test_table_prompt_requires_context_and_bare_cells_still_fail(self):
+        self.assertIn(
+            "copy the full sentence character-for-character from the excerpt, "
+            "with no words added, removed, or reordered",
+            customer_exposure.EXTRACT_PROMPT,
+        )
+        self.assertIn(
+            "repeat the SAME full-sentence quote",
+            customer_exposure.EXTRACT_PROMPT,
+        )
+        self.assertIn(
+            "Every quote must contain the basis and exact period words",
+            customer_exposure.EXTRACT_PROMPT,
+        )
+        self.assertNotIn("SHORT VERBATIM fragment", customer_exposure.EXTRACT_PROMPT)
         self.assertIn(
             "table's verbatim lead-in or column context naming the basis and "
             "exact period alongside the customer row values",
