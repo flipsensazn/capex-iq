@@ -216,12 +216,3 @@ test("prices rejects malformed tickers before upstream work", async () => {
   assert.equal((await response.json()).error, "Invalid ticker format");
 });
 
-test("premarket scanner targets the canonical production endpoint", async () => {
-  const workflow = await readFile(
-    new URL("../.github/workflows/premarket-scanner.yml", import.meta.url),
-    "utf8"
-  );
-
-  assert.match(workflow, /GAP_SCANNER_URL: https:\/\/capex-iq\.us\/gap-scanner/);
-  assert.doesNotMatch(workflow, /wizzles-watchlist\.pages\.dev/);
-});

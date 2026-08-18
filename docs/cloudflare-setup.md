@@ -12,8 +12,6 @@ This project is designed for Cloudflare Pages with Pages Functions.
   - `/quote`
   - `/news`
   - `/market-news`
-  - `/scanner`
-  - `/scanner-ranked`
   - `/shortlist`
   - `/capex`
   - `/capex-intel`
@@ -39,9 +37,9 @@ Configure these variables in Cloudflare Pages for the appropriate environments:
 - `ALLOWED_ORIGIN`
   - Set this to the deployed site origin, for example `https://your-site.pages.dev`
 - `ADMIN_PASSWORD`
-  - Used by admin-only update endpoints such as `/scanner`, `/shortlist`, `/capex`, and `/capex-intel`
+  - Used by admin-only update endpoints such as `/shortlist`, `/capex`, and `/capex-intel`
 - `DATABASE_URL`
-  - Neon/Postgres connection string used by `scanner-ranked`, `presence`, and the ETL loader
+  - Neon/Postgres connection string used by `presence`
 - `FINNHUB_KEY`
   - Used for crypto quotes and fallback pricing in `/prices`
 - `GEMINI_API_KEY`
@@ -57,18 +55,14 @@ The app uses this binding for:
 
 - cached Yahoo session crumbs
 - price cache
-- shared scanner list
 - shared shortlist
 - shared capex data
 - cached capex intel payloads
 
 ## Database Notes
 
-The ETL pipeline in [src/etl_pipeline.py](../src/etl_pipeline.py) now bootstraps the `ranked_candidates` table if it does not already exist.
-
 The following runtime functions expect `DATABASE_URL` to be present:
 
-- [functions/scanner-ranked.js](../functions/scanner-ranked.js)
 - [functions/presence.js](../functions/presence.js)
 
 ## Deployment Checklist
@@ -80,7 +74,6 @@ The following runtime functions expect `DATABASE_URL` to be present:
    - market strip / prices
    - Bloomberg news feed
    - Fear & Greed
-   - scanner-ranked panel
    - capex intel
 
 ## Operational Notes

@@ -208,7 +208,6 @@ function mergePriceEntries(prev, incoming) {
 
 export function useDashboardData({
   activeView = "ai",
-  defaultScannerPool,
   defaultCapexData,
   defaultMuskData,
   defaultRoboticsData,
@@ -219,7 +218,6 @@ export function useDashboardData({
   fetchAllPrices,
   getAllTickers,
 }) {
-  const [scannerPool, setScannerPool] = useState(defaultScannerPool);
   const [shortList, setShortList] = useState([]);
   const [capexData, setCapexData] = useState(defaultCapexData);
   const [capexIntel, setCapexIntel] = useState(null);
@@ -248,22 +246,12 @@ export function useDashboardData({
   // (fetching both doubled the per-cycle ticker count and broke the cache).
   const activeViewRef = useRef(activeView);
   const loadedIntelViewsRef = useRef(new Set());
-  const scannerPoolRef = useRef(defaultScannerPool);
   const shortListRef = useRef([]);
   const [marketData, setMarketData] = useState({});
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    fetch("/scanner")
-      .then(res => readJsonResponse(res, "/scanner"))
-      .then(data => {
-        if (data.tickers) {
-          setScannerPool(data.tickers);
-          scannerPoolRef.current = data.tickers;
-        }
-      })
-      .catch(() => {});
 
     fetch("/capex")
       .then(res => readJsonResponse(res, "/capex"))
@@ -467,9 +455,6 @@ export function useDashboardData({
     roboticsDataRef.current = roboticsCapexData;
   }, [roboticsCapexData]);
 
-  useEffect(() => {
-    scannerPoolRef.current = scannerPool;
-  }, [scannerPool]);
 
   useEffect(() => {
     shortListRef.current = shortList;
@@ -478,8 +463,8 @@ export function useDashboardData({
   const refresh = useCallback(async () => {
     setRefreshing(true);
     const marketTickers = [...indexTickers, ...cryptoTickers, ...hyperscalerTickers];
-    // Map views fetch only their active universe. Standalone research and
-    // scanner views keep a deliberately narrow price scope.
+    // Map views fetch only their active universe. Standalone research keeps a
+    // deliberately narrow price scope.
     const currentView = activeViewRef.current;
     const usesMapUniverse = ["ai", "musk", "robotics", "earnings"].includes(currentView);
     const activeMap =
@@ -489,13 +474,10 @@ export function useDashboardData({
     const scopedTickers = usesMapUniverse
       ? [
           ...getAllTickers(activeMap),
-          ...scannerPoolRef.current,
           ...shortListRef.current,
           ...pinnedTickers,
         ]
-      : currentView === "scanner"
-        ? [...scannerPoolRef.current, ...shortListRef.current]
-        : [];
+      : [];
     const allTickers = [...new Set([
       ...scopedTickers,
       ...marketTickers,
@@ -551,8 +533,6 @@ export function useDashboardData({
   }, [cryptoTickers, fetchAllPrices, indexTickers]);
 
   return {
-    scannerPool,
-    setScannerPool,
     shortList,
     setShortList,
     capexData,
@@ -587,7 +567,6 @@ export function useDashboardData({
     muskDataRef,
     roboticsDataRef,
     activeViewRef,
-    scannerPoolRef,
     shortListRef,
   };
 }

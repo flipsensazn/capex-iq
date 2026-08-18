@@ -18,7 +18,6 @@ import * as cnnFearGreed   from "../../functions/cnn-fear-greed.js";
 import * as composite      from "../../functions/composite.js";
 import * as exposure       from "../../functions/exposure.js";
 import * as fundamentals   from "../../functions/fundamentals.js";
-import * as gapScanner     from "../../functions/gap-scanner.js";
 import * as gauges         from "../../functions/gauges.js";
 import * as history        from "../../functions/history.js";
 import * as marketNews     from "../../functions/market-news.js";
@@ -33,8 +32,6 @@ import * as register       from "../../functions/register.js";
 import * as research       from "../../functions/research.js";
 import * as roboticsCapex  from "../../functions/robotics-capex.js";
 import * as roboticsIntel  from "../../functions/robotics-intel.js";
-import * as scannerRanked  from "../../functions/scanner-ranked.js";
-import * as scanner        from "../../functions/scanner.js";
 import * as scoreboard     from "../../functions/scoreboard.js";
 import * as shortlist      from "../../functions/shortlist.js";
 import * as stress         from "../../functions/stress.js";
@@ -50,7 +47,6 @@ const ROUTES = {
   "/composite":       composite,
   "/exposure":        exposure,
   "/fundamentals":    fundamentals,
-  "/gap-scanner":     gapScanner,
   "/gauges":          gauges,
   "/history":         history,
   "/market-news":     marketNews,
@@ -65,8 +61,6 @@ const ROUTES = {
   "/research":        research,
   "/robotics-capex":  roboticsCapex,
   "/robotics-intel":  roboticsIntel,
-  "/scanner-ranked":  scannerRanked,
-  "/scanner":         scanner,
   "/scoreboard":      scoreboard,
   "/shortlist":       shortlist,
   "/stress":          stress,
