@@ -55,6 +55,30 @@ class FakeConnection:
 
 
 class TranscriptStressNewestCoverageRegressionTests(unittest.TestCase):
+    def test_call_gemini_default_body_preserves_json_mode_and_budget(self):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {
+            "candidates": [{
+                "content": {"parts": [{"text": "{}"}]}
+            }]
+        }
+        with mock.patch.object(
+            stress.requests, "post", return_value=response, create=True
+        ) as post:
+            stress.call_gemini("default prompt", max_retries=1)
+            body = post.call_args.kwargs["json"]
+
+        self.assertEqual(body, {
+            "contents": [{"parts": [{"text": "default prompt"}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 2048,
+                "responseMimeType": "application/json",
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        })
+        self.assertEqual(post.call_args.kwargs["timeout"], 60)
+
     def test_workflow_serializes_scheduled_and_manual_transcript_runs(self):
         workflow = (
             Path(__file__).resolve().parents[1]

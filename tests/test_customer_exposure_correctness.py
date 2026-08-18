@@ -37,7 +37,7 @@ except ImportError:
 previous_transcript_stress = sys.modules.get("transcript_stress")
 transcript_stress_stub = types.ModuleType("transcript_stress")
 transcript_stress_stub.get_universe = lambda: []
-transcript_stress_stub.call_gemini = lambda prompt: []
+transcript_stress_stub.call_gemini = lambda prompt, **_kwargs: []
 transcript_stress_stub.connect_db = lambda database_url: None
 transcript_stress_stub.GEMINI_API_KEY = None
 sys.modules["transcript_stress"] = transcript_stress_stub
@@ -647,6 +647,122 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
         self.assertEqual(
             {row["period_end"] for row in rows}, {date(2025, 12, 31)}
         )
+
+    def test_superlative_customer_year_lists_bind_values_to_years(self):
+        largest_quote = (
+            "Our largest customer in 2023 , 2024 and 2025 accounted for 25% , "
+            "22% and 19% of our net revenue in the respective year."
+        )
+        second_quote = (
+            "Our second largest customer in 2023 , 2024 and 2025 accounted for "
+            "11% , 12% , and 17% of our net revenue in the respective year."
+        )
+        model_rows = [
+            {
+                "customer": "largest customer", "pct": 25,
+                "basis": "revenue", "period": "2023", "quote": largest_quote,
+            },
+            {
+                "customer": "largest customer", "pct": 19,
+                "basis": "revenue", "period": "2025", "quote": largest_quote,
+            },
+            {
+                "customer": "second largest customer", "pct": 11,
+                "basis": "revenue", "period": "2023", "quote": second_quote,
+            },
+            {
+                "customer": "second largest customer", "pct": 17,
+                "basis": "revenue", "period": "2025", "quote": second_quote,
+            },
+        ]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=model_rows
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "TSM", "20-F", [largest_quote, second_quote],
+                report_date="2025-12-31",
+            )
+
+        self.assertEqual(
+            [(row["label"], row["pct"], row["period"]) for row in rows],
+            [
+                ("largest customer", 25, "2023"),
+                ("largest customer", 19, "2025"),
+                ("second largest customer", 11, "2023"),
+                ("second largest customer", 17, "2025"),
+            ],
+        )
+        self.assertTrue(customer_exposure._label_in_clause(
+            largest_quote, "largest customer"
+        ))
+        self.assertTrue(customer_exposure._label_in_clause(
+            second_quote, "second largest customer"
+        ))
+
+        swapped_rows = [
+            dict(model_rows[0], period="2025"),
+            dict(model_rows[2], period="2025"),
+        ]
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=swapped_rows
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "TSM", "20-F", [largest_quote, second_quote],
+                report_date="2025-12-31", diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 2)
+
+    def test_whitespace_corrupted_excerpt_accepts_clean_quote(self):
+        excerpt = (
+            "No in dividual customer or groups of affiliated customers represented "
+            "more than 10% of our revenues in 2023, 2024, or 2025."
+        )
+        quote = excerpt.replace("in dividual", "individual")
+        model_row = {
+            "statement_type": "negative", "pct": 10, "basis": "revenue",
+            "period": "2025", "quote": quote,
+        }
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[model_row]
+        ):
+            rows = customer_exposure.extract_disclosures(
+                "GOOG", "10-K", [excerpt], report_date="2025-12-31"
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["statement_type"], "negative")
+        self.assertTrue(customer_exposure._quote_is_verbatim(quote, [excerpt]))
+        self.assertTrue(customer_exposure._period_is_anchored(
+            "year ended December 31, 2025",
+            "year end ed December 31, 2025",
+        ))
+
+        changed_quote = quote.replace("10%", "11%")
+        changed_row = dict(model_row, pct=11, quote=changed_quote)
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[changed_row]
+        ):
+            diagnostics = {}
+            rows = customer_exposure.extract_disclosures(
+                "GOOG", "10-K", [excerpt], report_date="2025-12-31",
+                diagnostics=diagnostics,
+            )
+        self.assertEqual(rows, [])
+        self.assertEqual(diagnostics["dropped_rows"], 1)
+        self.assertFalse(customer_exposure._quote_is_verbatim(
+            changed_quote, [excerpt]
+        ))
+
+    def test_customer_extraction_requests_larger_output_budget(self):
+        with mock.patch.object(
+            customer_exposure, "call_gemini", return_value=[]
+        ) as gemini:
+            customer_exposure.extract_disclosures("TEST", "10-K", ["excerpt"])
+
+        gemini.assert_called_once()
+        self.assertEqual(gemini.call_args.kwargs, {"max_output_tokens": 8192})
 
     def test_table_prompt_requires_context_and_bare_cells_still_fail(self):
         self.assertIn(
@@ -1586,6 +1702,92 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
                 customer_exposure.refresh_ticker(conn, "TEST", "0000000000")
         empty.assert_not_called()
         load.assert_not_called()
+
+    def test_inconclusive_filing_does_not_discard_other_filing_rows(self):
+        filings = [
+            ("10-Q", "0000000000-26-000020", "quarter.htm", "2026-05-01", "2026-03-31"),
+            ("10-K", "0000000000-26-000010", "annual.htm", "2026-02-20", "2025-12-31"),
+        ]
+        model_row = {
+            "customer": "Customer A", "pct": 23, "basis": "revenue",
+            "period": "year ended December 31, 2025", "quote": SINGLE_EXCERPT,
+        }
+        diagnostics = {}
+        with (
+            mock.patch.object(customer_exposure, "latest_filings", return_value=filings),
+            mock.patch.object(
+                customer_exposure, "fetch_filing_text",
+                side_effect=[
+                    ("truncated quarter", "https://sec/quarter"),
+                    (SINGLE_EXCERPT, "https://sec/annual"),
+                ],
+            ),
+            mock.patch.object(
+                customer_exposure, "concentration_windows",
+                side_effect=[([SINGLE_EXCERPT], True), ([SINGLE_EXCERPT], False)],
+            ),
+            mock.patch.object(
+                customer_exposure, "call_gemini", side_effect=[[], [model_row]]
+            ),
+            mock.patch.object(customer_exposure, "confirmed_empty_markers") as empty,
+            mock.patch.object(customer_exposure.time, "sleep"),
+            mock.patch("builtins.print") as output,
+        ):
+            rows = customer_exposure.scan_ticker(
+                "TEST", "0000000000", diagnostics=diagnostics
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["pct"], 23)
+        self.assertEqual(rows[0]["accession"], "0000000000-26-000010")
+        self.assertFalse(any(
+            row.get("statement_type") == "confirmed_empty" for row in rows
+        ))
+        self.assertTrue(diagnostics["degraded"])
+        self.assertIn("filing inconclusive", "\n".join(
+            call.args[0] for call in output.call_args_list
+        ))
+        empty.assert_not_called()
+
+    def test_all_inconclusive_filings_raise_after_every_filing_is_scanned(self):
+        filings = [
+            ("10-Q", "0000000000-26-000020", "quarter.htm", "2026-05-01", "2026-03-31"),
+            ("10-K", "0000000000-26-000010", "annual.htm", "2026-02-20", "2025-12-31"),
+        ]
+        invalid_row = {
+            "customer": "Customer A", "pct": 0, "basis": "revenue",
+            "period": "year ended December 31, 2025", "quote": SINGLE_EXCERPT,
+        }
+        diagnostics = {}
+        with (
+            mock.patch.object(customer_exposure, "latest_filings", return_value=filings),
+            mock.patch.object(
+                customer_exposure, "fetch_filing_text",
+                side_effect=[
+                    ("truncated quarter", "https://sec/quarter"),
+                    (SINGLE_EXCERPT, "https://sec/annual"),
+                ],
+            ),
+            mock.patch.object(
+                customer_exposure, "concentration_windows",
+                side_effect=[([SINGLE_EXCERPT], True), ([SINGLE_EXCERPT], False)],
+            ),
+            mock.patch.object(
+                customer_exposure, "call_gemini", side_effect=[[], [invalid_row]]
+            ) as gemini,
+            mock.patch.object(customer_exposure, "confirmed_empty_markers") as empty,
+            mock.patch.object(customer_exposure.time, "sleep"),
+        ):
+            with self.assertRaises(customer_exposure.IncompleteExposureScan) as raised:
+                customer_exposure.scan_ticker(
+                    "TEST", "0000000000", diagnostics=diagnostics
+                )
+
+        self.assertIn("truncated filing scan produced no valid rows", str(raised.exception))
+        self.assertIn("all model rows failed validation", str(raised.exception))
+        self.assertEqual(gemini.call_count, 2)
+        self.assertTrue(diagnostics["degraded"])
+        empty.assert_not_called()
 
     def test_mixed_model_scan_stages_valid_rows_and_marks_ticker_degraded(self):
         filings = [("10-K", "0000000000-26-000010", "annual.htm", "2026-02-20", "2025-12-31")]
