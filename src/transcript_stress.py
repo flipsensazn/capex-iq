@@ -405,7 +405,7 @@ EXCERPTS:
 {excerpts}"""
 
 
-def call_gemini(prompt, max_retries=3):
+def call_gemini(prompt, max_retries=3, *, max_output_tokens=2048):
     """Mirrors functions/capex-intel.js: REST call, fence-strip, JSON parse, backoff on 429/5xx."""
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}")
@@ -413,7 +413,7 @@ def call_gemini(prompt, max_retries=3):
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 2048,
+            "maxOutputTokens": max_output_tokens,
             # Force structured output — no markdown fences, no prose.
             "responseMimeType": "application/json",
             # gemini-2.5-flash "thinks" by default and thinking tokens count

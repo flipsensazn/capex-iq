@@ -290,6 +290,9 @@ COMPOUND_CUSTOMER_FACT_PATTERN = (
 SINGLE_CUSTOMER_REFERENCE_PATTERN = (
     r"\b(?:(?:one|a|single|individual)\s+customer|customer\s+[a-z])\b"
 )
+SUPERLATIVE_CUSTOMER_LABEL_PATTERN = (
+    r"(?:largest|(?:second|third)\s+largest)\s+customer"
+)
 PER_CUSTOMER_EACH_PATTERN = (
     rf"(?:\b{CUSTOMER_COUNT_PATTERN}\s+"
     r"(?:(?:largest|major|significant)\s+)?customers?\b"
@@ -378,6 +381,7 @@ def statement_semantics(text, label=None):
     if (
         _numbered_customer_percentage_values(normalized)
         or _compound_customer_percentage_pairs(normalized)
+        or _superlative_customer_year_percentage_pairs(normalized)
     ):
         return "single_customer"
 
@@ -544,6 +548,58 @@ def _percentage_values(text):
     return values
 
 
+def _character_content(value):
+    """Normalize existing verbatim tolerances, then remove all whitespace."""
+    return WS_RE.sub("", normalize_verbatim(value))
+
+
+def _character_content_contains(needle, haystack):
+    content = _character_content(needle)
+    return bool(content) and content in _character_content(haystack)
+
+
+def _superlative_customer_year_percentage_pairs(clause):
+    """Bind one ranked customer across parallel year and percentage lists."""
+    normalized = normalize_verbatim(clause)
+    subject = re.search(
+        rf"\b(?:(?:our|the)\s+)?(?P<label>{SUPERLATIVE_CUSTOMER_LABEL_PATTERN})\b",
+        normalized,
+        re.I,
+    )
+    if subject is None:
+        return []
+    verb = re.search(
+        rf"\b{ALLOCATION_VERB_PATTERN}\b", normalized[subject.end():], re.I
+    )
+    if verb is None or verb.start() > 120:
+        return []
+    verb_start = subject.end() + verb.start()
+    years = re.findall(
+        r"\b((?:19|20)\d{2})\b", normalized[subject.end():verb_start]
+    )
+    if len(years) < 2:
+        return []
+    allocation = re.match(
+        ALLOCATION_VERB_PERCENT_BASIS_PATTERN, normalized[verb_start:], re.I
+    )
+    if allocation is None:
+        return []
+    if not re.search(
+        r"\bin\s+(?:the\s+)?respective\s+years?\b",
+        normalized[verb_start + allocation.end():],
+        re.I,
+    ):
+        return []
+    percentages = _percentage_values(allocation.group(0))
+    if len(percentages) != len(years):
+        return []
+    label = normalize_verbatim(subject.group("label"))
+    return [
+        (label, int(year), pct)
+        for year, pct in zip(years, percentages)
+    ]
+
+
 def _numbered_customer_percentage_values(clause):
     """Return individually attributable values from a count-matched list."""
     normalized = normalize_verbatim(clause)
@@ -619,7 +675,8 @@ def _basis_from_customer_percentage_values(clause):
 def _quote_is_verbatim(quote, excerpts):
     normalized_quote = normalize_verbatim(quote).strip(" '\".,;:")
     return bool(normalized_quote) and any(
-        normalized_quote in normalize_verbatim(excerpt) for excerpt in excerpts
+        _character_content_contains(normalized_quote, excerpt)
+        for excerpt in excerpts
     )
 
 
@@ -809,7 +866,7 @@ def _period_is_anchored(period, text, report_date=None):
     """Require the printed period wording or its resolved date in one clause."""
     normalized_period = normalize_verbatim(period)
     normalized_text = normalize_verbatim(text)
-    if normalized_period and normalized_period in normalized_text:
+    if _character_content_contains(normalized_period, normalized_text):
         return True
     resolved = resolved_period_end(period, report_date)
     if resolved is None:
@@ -819,11 +876,16 @@ def _period_is_anchored(period, text, report_date=None):
             name for name, number in MONTH_NUMBERS.items()
             if number == resolved.month
         )
-        return bool(re.search(
-            rf"\b{month}\s+{resolved.day},?\s+{resolved.year}\b",
-            normalized_text,
-        ))
-    return bool(re.search(rf"\b{resolved.year}\b", normalized_text))
+        return any(
+            _character_content_contains(anchor, normalized_text)
+            for anchor in (
+                f"{month} {resolved.day}, {resolved.year}",
+                f"{month} {resolved.day} {resolved.year}",
+            )
+        )
+    return bool(re.search(
+        rf"(?<!\d){resolved.year}(?!\d)", _character_content(normalized_text)
+    ))
 
 
 def _matching_allocation_clause(
@@ -839,8 +901,33 @@ def _matching_allocation_clause(
             continue
         compound_pairs = _compound_customer_percentage_pairs(clause)
         numbered_values = _numbered_customer_percentage_values(clause)
+        superlative_pairs = _superlative_customer_year_percentage_pairs(clause)
+        superlative_series = bool(
+            re.search(SUPERLATIVE_CUSTOMER_LABEL_PATTERN, clause, re.I)
+            and re.search(
+                r"\bin\s+(?:the\s+)?respective\s+years?\b", clause, re.I
+            )
+        )
         respective_pairs = _respective_customer_pairs(clause)
-        if compound_pairs:
+        if superlative_series:
+            if not superlative_pairs:
+                continue
+            label_key = re.sub(
+                r"^(?:our|the)\s+", "", normalize_verbatim(label)
+            )
+            period_years = {
+                int(year) for year in re.findall(
+                    r"\b((?:19|20)\d{2})\b", normalize_verbatim(period)
+                )
+            }
+            if len(period_years) != 1 or not any(
+                subject == label_key
+                and year in period_years
+                and abs(value - pct) < 0.0001
+                for subject, year, value in superlative_pairs
+            ):
+                continue
+        elif compound_pairs:
             label_key = normalize_verbatim(label)
             if not any(
                 subject == label_key and abs(value - pct) < 0.0001
@@ -998,8 +1085,12 @@ def extract_disclosures(
     ticker, form, excerpts, report_date=None, diagnostics=None,
     _drop_log_state=None,
 ):
-    raw = call_gemini(EXTRACT_PROMPT.format(ticker=ticker, form=form,
-                                            excerpts="\n---\n".join(excerpts)))
+    raw = call_gemini(
+        EXTRACT_PROMPT.format(
+            ticker=ticker, form=form, excerpts="\n---\n".join(excerpts)
+        ),
+        max_output_tokens=8192,
+    )
     if not isinstance(raw, list):
         raise ValueError("model response must be a JSON array")
     if _drop_log_state is None:
@@ -1198,6 +1289,8 @@ def scan_ticker(ticker, cik, diagnostics=None):
     filings = latest_filings(cik)
     time.sleep(SEC_PAUSE)
     candidates = []
+    absence_inputs = []
+    inconclusive_reasons = []
     degraded = False
     drop_log_state = {"quoted_drops": 0}
     for form, accession, primary_doc, filed, report_date in filings:
@@ -1240,15 +1333,26 @@ def scan_ticker(ticker, cik, diagnostics=None):
         dropped_rows = extraction_diagnostics.get("dropped_rows", 0)
         if dropped_rows:
             degraded = True
+            if diagnostics is not None:
+                diagnostics["degraded"] = True
+        inconclusive_reason = None
         if truncated and not rows:
-            raise IncompleteExposureScan(
+            inconclusive_reason = (
                 f"truncated filing scan produced no valid rows for {ticker} "
                 f"accession {accession}"
             )
-        if dropped_rows and not rows:
-            raise IncompleteExposureScan(
-                f"all model rows failed validation for {ticker} accession {accession}"
+        elif dropped_rows and not rows:
+            inconclusive_reason = (
+                f"all model rows failed validation for {ticker} "
+                f"accession {accession}"
             )
+        if inconclusive_reason is not None:
+            degraded = True
+            if diagnostics is not None:
+                diagnostics["degraded"] = True
+            inconclusive_reasons.append(inconclusive_reason)
+            print(f"{ticker} {form}: filing inconclusive — {inconclusive_reason}")
+            continue
         for row in rows:
             row.update({
                 "form": form,
@@ -1264,11 +1368,17 @@ def scan_ticker(ticker, cik, diagnostics=None):
             and not truncated
             and not dropped_rows
         ):
-            rows.extend(confirmed_empty_markers(
-                [filing_provenance],
-                present_bases={row["basis"] for row in rows},
+            absence_inputs.append((
+                filing_provenance, {row["basis"] for row in rows}
             ))
         candidates.extend(rows)
+    if inconclusive_reasons and not candidates:
+        raise IncompleteExposureScan("; ".join(inconclusive_reasons))
+    if not inconclusive_reasons:
+        for filing_provenance, present_bases in absence_inputs:
+            candidates.extend(confirmed_empty_markers(
+                [filing_provenance], present_bases=present_bases
+            ))
     selected = best_rows(candidates)
     if not selected:
         raise IncompleteExposureScan(
