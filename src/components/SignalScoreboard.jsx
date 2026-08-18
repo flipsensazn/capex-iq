@@ -115,6 +115,28 @@ export default function SignalScoreboard({ data, onTickerClick }) {
   const prospectiveEvents = isVersioned ? data?.eventsByCohort?.prospective ?? [] : [];
   const retrospectiveEvents = isVersioned ? data?.eventsByCohort?.retrospective ?? [] : [];
   const prospectiveStart = data?.methodology?.prospectiveStart;
+  const health = data == null
+    ? null
+    : data.health ?? { state: "unknown", stale: true, limitedRun: false };
+  const healthAsOf = health?.asOf ? String(health.asOf).slice(0, 10) : null;
+  const limitedContext = health?.limitedRun
+    ? " The latest attempt covered only a limited smoke-test universe."
+    : "";
+  const healthMessage = data?.error
+    ? null
+    : health?.state === "failure"
+      ? `Latest scoreboard refresh failed${healthAsOf ? `; last good data is from ${healthAsOf}` : ""}.${limitedContext}`
+      : health?.state === "degraded"
+        ? `Latest scoreboard refresh completed with degraded coverage${healthAsOf ? ` (${healthAsOf})` : ""}.${limitedContext}`
+        : health?.state === "running"
+          ? `Scoreboard refresh is currently in progress; displayed results are the prior snapshot.${limitedContext}`
+          : health?.state === "unknown"
+            ? `Scoreboard freshness is not yet verified by the run manifest.${limitedContext}`
+            : health?.limitedRun
+              ? `Latest scoreboard refresh was a limited smoke run${healthAsOf ? `; last full data is from ${healthAsOf}` : ""}.`
+            : health?.stale
+              ? `Scoreboard snapshot is stale${healthAsOf ? ` (last refreshed ${healthAsOf})` : ""}.`
+              : null;
   const emptyMessage = data?.error
     ? "Scoreboard data is temporarily unavailable."
     : data == null
@@ -133,6 +155,12 @@ export default function SignalScoreboard({ data, onTickerClick }) {
           median excess return vs QQQ · pp = percentage points
         </div>
       </div>
+
+      {healthMessage && (
+        <div role="status" style={{ marginBottom: 10, padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(245,158,11,0.35)", background: "rgba(120,53,15,0.24)", color: "#fde68a", fontSize: 10.5, lineHeight: 1.45 }}>
+          {healthMessage} Stored results remain visible for context.
+        </div>
+      )}
 
       <div style={{ fontSize: 10, color: "var(--pos)", fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 7 }}>
         Prospective · forward observed

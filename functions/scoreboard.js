@@ -13,7 +13,19 @@
 // Excess = event return minus QQQ over the same window, percentage points.
 // Horizon stats only include events whose window has matured.
 
+import {
+  buildDataHealth,
+  fetchLatestManifest,
+  isExpectedBootstrap,
+  latestAsOf,
+} from "./data-health.js";
+
 const PROSPECTIVE_START = "2026-08-17";
+const PIPELINE = "signal_scoreboard";
+const STALE_AFTER_HOURS = 9 * 24;
+const DATA_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
+const BOOTSTRAP_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
+const NO_STORE = "no-store";
 
 const METHODOLOGY = Object.freeze({
   version: 2,
@@ -28,16 +40,18 @@ const METHODOLOGY = Object.freeze({
   refractoryScope: "ticker, event type, and cohort",
   prospectiveStart: PROSPECTIVE_START,
   initialObservationDisclosure: "A first stored value already above a threshold is labeled initial, not an observed crossing.",
+  migrationBaselineDisclosure: "Methodology-rollout baselines are retained for audit but excluded from events, returns, and performance statistics.",
   retrospectiveDisclosure: "Historically reconstructed after the scoring rubric was designed; exploratory, not an out-of-sample track record.",
 });
 
-const emptyPayload = () => ({
+const emptyPayload = health => ({
   success: true,
   stats: [],
   events: [],
   statsByCohort: { prospective: [], retrospective: [] },
   eventsByCohort: { prospective: [], retrospective: [] },
   methodology: METHODOLOGY,
+  health,
 });
 
 export async function onRequest(context) {
@@ -47,19 +61,18 @@ export async function onRequest(context) {
   const origin = request.headers.get("Origin") || "";
   const corsOrigin = origin === ALLOWED_ORIGIN ? ALLOWED_ORIGIN : "";
 
-  const headers = {
+  const headers = cacheControl => ({
     "Access-Control-Allow-Origin": corsOrigin,
     "Content-Type": "application/json",
     "Vary": "Origin",
-    // Weekly ETL — browser 30 min, edge 6 hours
-    "Cache-Control": "public, max-age=1800, s-maxage=21600",
-  };
+    "Cache-Control": cacheControl,
+  });
 
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
-        ...headers,
+        ...headers(NO_STORE),
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       },
@@ -67,19 +80,52 @@ export async function onRequest(context) {
   }
 
   if (request.method !== "GET") {
-    return new Response("Method Not Allowed", { status: 405, headers });
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: headers(NO_STORE),
+    });
   }
 
   const DATABASE_URL = env.DATABASE_URL;
   if (!DATABASE_URL) {
     return new Response(
-      JSON.stringify({ success: false, message: "DATABASE_URL not configured." }),
-      { status: 500, headers }
+      JSON.stringify({
+        success: false,
+        message: "DATABASE_URL not configured.",
+        health: buildDataHealth({
+          pipeline: PIPELINE,
+          manifest: null,
+          staleAfterHours: STALE_AFTER_HOURS,
+        }),
+      }),
+      { status: 500, headers: headers(NO_STORE) }
     );
   }
 
-  const url  = new URL(DATABASE_URL.replace("postgresql://", "https://").replace("postgres://", "https://"));
-  const host = url.hostname;
+  let host;
+  try {
+    const url = new URL(DATABASE_URL.replace("postgresql://", "https://").replace("postgres://", "https://"));
+    host = url.hostname;
+  } catch {
+    console.error("scoreboard database URL is invalid");
+    return new Response(
+      JSON.stringify({
+        success: false,
+        message: "Scoreboard data is temporarily unavailable.",
+        health: buildDataHealth({
+          pipeline: PIPELINE,
+          manifest: null,
+          staleAfterHours: STALE_AFTER_HOURS,
+        }),
+      }),
+      { status: 500, headers: headers(NO_STORE) }
+    );
+  }
+  const manifestPromise = fetchLatestManifest({
+    host,
+    databaseUrl: DATABASE_URL,
+    pipeline: PIPELINE,
+  });
 
   const runQuery = async (query) => {
     const res = await fetch(`https://${host}/sql`, {
@@ -96,7 +142,8 @@ export async function onRequest(context) {
       let dbError = null;
       try { dbError = JSON.parse(detail); } catch { /* Neon may return plain text. */ }
       const message = dbError?.message || dbError?.error || detail;
-      err.missingTable = /relation\s+"?(?:public\.)?signal_events"?\s+does not exist/i.test(message);
+      err.missingTable = dbError?.code === "42P01"
+        && /relation\s+"?(?:public\.)?signal_events"?\s+does not exist/i.test(message);
       throw err;
     }
     return (await res.json()).rows ?? [];
@@ -114,6 +161,7 @@ export async function onRequest(context) {
     WITH classified AS (
       SELECT *, ${COHORT_SQL} AS cohort
       FROM signal_events
+      WHERE COALESCE(details->>'eventClassification', '') <> 'migration_baseline'
     )
     SELECT cohort, COALESCE(event_type, 'all') AS type,
            MIN(NULLIF(details->>'cohortBoundary', '')) AS cohort_boundary_min,
@@ -148,6 +196,7 @@ export async function onRequest(context) {
                event_date::timestamptz
              ) AS observed_at
       FROM signal_events
+      WHERE COALESCE(details->>'eventClassification', '') <> 'migration_baseline'
     ), ranked AS (
       SELECT ticker, event_type, event_date, score, cohort, observed_at,
              entry_date, details->>'signalAvailableAt' AS signal_available_at,
@@ -166,11 +215,14 @@ export async function onRequest(context) {
     ORDER BY observed_at DESC, event_date DESC, ticker
   `;
 
+  let manifest = null;
   try {
-    const [statRows, eventRows] = await Promise.all([
+    const [statRows, eventRows, resolvedManifest] = await Promise.all([
       runQuery(STATS_SQL),
       runQuery(EVENTS_SQL),
+      manifestPromise,
     ]);
+    manifest = resolvedManifest;
 
     const num = v => (v != null ? Number(v) : null);
     const round1 = v => (v != null ? Math.round(v * 10) / 10 : null);
@@ -235,22 +287,48 @@ export async function onRequest(context) {
         statsByCohort,
         eventsByCohort,
         methodology,
+        health: buildDataHealth({
+          pipeline: PIPELINE,
+          manifest,
+          fallbackAsOf: latestAsOf(eventRows, "observed_at", "event_date"),
+          staleAfterHours: STALE_AFTER_HOURS,
+        }),
       }),
-      { status: 200, headers }
+      { status: 200, headers: headers(DATA_CACHE_CONTROL) }
     );
 
   } catch (err) {
-    // Table won't exist until the first ETL run — serve an empty scoreboard.
-    if (err.missingTable) {
+    manifest ??= await manifestPromise;
+    // Before the first manifest-backed run, an absent table is an expected
+    // bootstrap state. After initialization, the same error is data loss.
+    if (err.missingTable && isExpectedBootstrap(manifest)) {
       return new Response(
-        JSON.stringify(emptyPayload()),
-        { status: 200, headers }
+        JSON.stringify(emptyPayload(buildDataHealth({
+          pipeline: PIPELINE,
+          manifest,
+          staleAfterHours: STALE_AFTER_HOURS,
+        }))),
+        { status: 200, headers: headers(BOOTSTRAP_CACHE_CONTROL) }
       );
     }
     console.error("scoreboard query failed", err.message);
+    const health = buildDataHealth({
+      pipeline: PIPELINE,
+      manifest,
+      staleAfterHours: STALE_AFTER_HOURS,
+    });
     return new Response(
-      JSON.stringify({ success: false, message: "Scoreboard data is temporarily unavailable." }),
-      { status: 500, headers }
+      JSON.stringify({
+        success: false,
+        message: "Scoreboard data is temporarily unavailable.",
+        health: err.missingTable ? {
+          ...health,
+          state: "failure",
+          stale: true,
+          error: "Scoreboard storage is missing after pipeline initialization.",
+        } : health,
+      }),
+      { status: 500, headers: headers(NO_STORE) }
     );
   }
 }

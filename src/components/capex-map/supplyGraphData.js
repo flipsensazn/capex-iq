@@ -255,7 +255,11 @@ export function enrichEdges(edges, exposureData = {}) {
   if (!exposureData || !Object.keys(exposureData).length) return edges;
   return edges.map(e => {
     const match = exposureData[e.from]?.customers?.find(
-      c => c.ticker === e.to && c.basis === "revenue" && c.pct != null
+      c => c.scorePeriodEligible === true
+        && c.ticker === e.to
+        && c.basis === "revenue"
+        && c.pct != null
+        && Number.isFinite(Number(c.pct))
     );
     return match
       ? { ...e, exposurePct: match.pct, exposurePeriod: match.period, exposureForm: match.form, exposureQuote: match.quote }
@@ -285,7 +289,11 @@ export function computeStrength(nodes, stressData = {}, gaugesData = {}) {
   for (const node of nodes) {
     let s = node.baseStress ?? 0;
     const t = stressData[node.id]?.latest;
-    if (t?.stressScore != null && (t.direction === "constrained_supplier" || t.direction === "both")) {
+    if (
+      t?.scorePeriodEligible === true
+      && t.stressScore != null
+      && (t.direction === "constrained_supplier" || t.direction === "both")
+    ) {
       s = Math.max(s, t.stressScore);
     }
     const g = gaugesData[node.id];
@@ -295,6 +303,12 @@ export function computeStrength(nodes, stressData = {}, gaugesData = {}) {
     strength[node.id] = s;
   }
   return strength;
+}
+
+// The API owns period/methodology comparability. Consumers must never rebuild
+// a quarter-over-quarter delta from the two raw observations.
+export function comparableStressTrendDelta(snapshot) {
+  return Number.isFinite(snapshot?.trendDelta) ? snapshot.trendDelta : null;
 }
 
 // BFS downstream from every node radiating ≥ PROPAGATE_THRESHOLD.

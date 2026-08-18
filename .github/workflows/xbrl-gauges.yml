@@ -13,6 +13,10 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: xbrl-gauges-etl
+  cancel-in-progress: false
+
 jobs:
   run-xbrl-gauges:
     runs-on: ubuntu-latest
@@ -31,6 +35,15 @@ jobs:
       - name: Install Dependencies
         run: pip install requests psycopg2-binary yfinance tzdata pandas_market_calendars==5.4.0
 
+      - name: Validate Ticker Limit
+        env:
+          TICKER_LIMIT: ${{ github.event.inputs.ticker_limit }}
+        run: |
+          if [[ -n "$TICKER_LIMIT" && ! "$TICKER_LIMIT" =~ ^(0|[1-9][0-9]*)$ ]]; then
+            echo "ticker_limit must be empty, 0, or a canonical positive integer"
+            exit 1
+          fi
+
       - name: Run XBRL Gauges ETL
         env:
           DATABASE_URL:       ${{ secrets.DATABASE_URL }}
@@ -42,6 +55,7 @@ jobs:
       # filed concentration into the Composite Bottleneck Score snapshot, and
       # send the weekly CBS movers digest to Telegram.
       - name: Compute Composite Bottleneck Scores
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.ticker_limit == '' || github.event.inputs.ticker_limit == '0' }}
         env:
           DATABASE_URL:       ${{ secrets.DATABASE_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -52,6 +66,7 @@ jobs:
       # order-gap breaches, scout approvals) and fill matured 1w/1m/3m
       # forward returns vs QQQ — the "does the edge exist" feedback loop.
       - name: Update Signal Scoreboard
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.ticker_limit == '' || github.event.inputs.ticker_limit == '0' }}
         env:
           DATABASE_URL:                ${{ secrets.DATABASE_URL }}
           SCOREBOARD_PROSPECTIVE_START: ${{ vars.SCOREBOARD_PROSPECTIVE_START }}

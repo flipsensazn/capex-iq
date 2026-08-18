@@ -14,6 +14,10 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: customer-exposure-etl
+  cancel-in-progress: false
+
 jobs:
   run-customer-exposure:
     runs-on: ubuntu-latest

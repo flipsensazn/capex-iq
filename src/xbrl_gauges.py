@@ -25,6 +25,8 @@
 #   DATABASE_URL        required  Neon Postgres connection string
 #   WATCHLIST_BASE_URL  optional  deployed site root (live capex-map tickers)
 #   TICKER_LIMIT        optional  cap tickers per run (testing)
+#   XBRL_MIN_PROVIDER_COVERAGE / _MIN_USABLE_COVERAGE /
+#   _MIN_BASELINE_RETENTION optional health gates (0..1)
 
 import os
 import time
@@ -36,8 +38,18 @@ import requests
 
 # Universe + DB helpers are shared with the transcript ETL (same directory).
 from transcript_stress import get_universe, connect_db
+from etl_health import (
+    CoverageError,
+    RunStats,
+    begin_run,
+    finish_run,
+    record_failure_safely,
+    ticker_limit_from_env,
+    threshold_from_env,
+)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+TICKER_LIMIT = ticker_limit_from_env(os.environ)
 SEC_HEADERS  = {"User-Agent": "WizzlesWatchlist flipsensazn@gmail.com"}
 SEC_PAUSE    = 0.15  # seconds between companyfacts calls (SEC asks for <10 req/s)
 
@@ -66,6 +78,8 @@ RPO_TAGS = [
 
 QUARTER_DAYS = (70, 100)    # accept durations in this range as "a quarter"
 ANNUAL_DAYS  = (330, 380)   # accept durations in this range as "a year"
+MAX_SCORE_PERIOD_MISALIGNMENT_DAYS = 45
+PERIOD_PROVENANCE_METHODOLOGY = "xbrl-gauge-score-period-v1"
 
 
 def parse_d(s):
@@ -199,8 +213,27 @@ def compute_gauges(facts):
     if len(rev) >= 4 and (rev_end - rev[-4][0]).days <= 300:
         ttm_revenue = sum(v for _, v in rev[-4:])
 
+    period_exclusions = []
+
+    def score_period_aligned(component, period_end):
+        difference_days = (period_end - rev_end).days
+        if abs(difference_days) <= MAX_SCORE_PERIOD_MISALIGNMENT_DAYS:
+            return True
+        period_exclusions.append({
+            "component": component,
+            "code": "metric_period_misaligned",
+            "periodEnd": period_end.isoformat(),
+            "revenuePeriodEnd": rev_end.isoformat(),
+            "differenceDays": difference_days,
+            "maxAbsoluteDifferenceDays": MAX_SCORE_PERIOD_MISALIGNMENT_DAYS,
+        })
+        return False
+
+    inventory_period_end = inv[-1][0] if inv else None
+    rpo_period_end = rpo[-1][0] if rpo else None
+
     inventory = inventory_yoy = inventory_days = inventory_days_yoy = None
-    if inv:
+    if inv and score_period_aligned("inventory", inventory_period_end):
         inv_end, inventory = inv[-1]
         inventory_yoy = yoy_pct(inv, inv_end, inventory)
         cogs_q = at_or_before(cogs, inv_end, 10) if cogs else None
@@ -212,7 +245,7 @@ def compute_gauges(facts):
                 inventory_days_yoy = inventory_days - (prior_inv / prior_cogs * 91.25)
 
     rpo_val = rpo_yoy = rpo_to_ttm = order_gap = None
-    if rpo:
+    if rpo and score_period_aligned("rpo", rpo_period_end):
         rpo_end, rpo_val = rpo[-1]
         rpo_yoy = yoy_pct(rpo, rpo_end, rpo_val)
         if ttm_revenue:
@@ -224,6 +257,7 @@ def compute_gauges(facts):
     # dominates; absolute backlog growth contributes. Inputs are visible in
     # the same row, so the score is always auditable.
     backlog_score = None
+    backlog_period_end = None
     if order_gap is not None or rpo_yoy is not None:
         s = 0.0
         if order_gap is not None and order_gap > 0:
@@ -231,9 +265,42 @@ def compute_gauges(facts):
         if rpo_yoy is not None and rpo_yoy > 0:
             s += clamp(rpo_yoy * 0.4, 0, 40)
         backlog_score = round(clamp(s, 0, 100), 1)
+        backlog_period_end = (
+            min(rev_end, rpo_period_end)
+            if order_gap is not None else rpo_period_end
+        )
+
+    score_driver = None
+    score_period_end = rev_end
+    if backlog_score is not None:
+        score_driver = "backlog"
+        score_period_end = backlog_period_end
+    elif inventory_days_yoy is not None and inventory_days_yoy > 0:
+        score_driver = "inventory"
+        score_period_end = inventory_period_end
+
+    period_provenance = {
+        "methodology": PERIOD_PROVENANCE_METHODOLOGY,
+        "revenuePeriodEnd": rev_end.isoformat(),
+        "inventoryPeriodEnd": (
+            inventory_period_end.isoformat() if inventory_period_end else None
+        ),
+        "rpoPeriodEnd": rpo_period_end.isoformat() if rpo_period_end else None,
+        "backlogPeriodEnd": (
+            backlog_period_end.isoformat() if backlog_period_end else None
+        ),
+        "scorePeriodEnd": score_period_end.isoformat(),
+        "scoreDriver": score_driver,
+        "maxPeriodMisalignmentDays": MAX_SCORE_PERIOD_MISALIGNMENT_DAYS,
+        "exclusions": period_exclusions,
+    }
 
     return {
-        "latest_quarter_end":  rev_end,
+        "latest_quarter_end":  score_period_end,
+        "revenue_period_end":  rev_end,
+        "inventory_period_end": inventory_period_end,
+        "rpo_period_end":      rpo_period_end,
+        "backlog_period_end":  backlog_period_end,
         "revenue_q":           rev_q,
         "revenue_yoy":         revenue_yoy,
         "inventory":           inventory,
@@ -245,6 +312,7 @@ def compute_gauges(facts):
         "rpo_to_ttm_revenue":  rpo_to_ttm,
         "order_gap":           order_gap,
         "backlog_score":       backlog_score,
+        "period_provenance":   period_provenance,
         "tags_used": {"revenue": rev_tag, "cogs": cogs_tag,
                       "inventory": inv_tag, "rpo": rpo_tag},
     }
@@ -262,8 +330,9 @@ def get_cik_map():
 def fetch_companyfacts(cik):
     res = requests.get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
                        headers=SEC_HEADERS, timeout=60)
-    if res.status_code != 200:
+    if res.status_code == 404:
         return None
+    res.raise_for_status()
     return res.json()
 
 
@@ -274,6 +343,10 @@ BOOTSTRAP_SQL = """
         ticker              TEXT NOT NULL,
         as_of_date          DATE NOT NULL,
         latest_quarter_end  DATE,
+        revenue_period_end  DATE,
+        inventory_period_end DATE,
+        rpo_period_end      DATE,
+        backlog_period_end  DATE,
         revenue_q           DOUBLE PRECISION,
         revenue_yoy         DOUBLE PRECISION,
         inventory           DOUBLE PRECISION,
@@ -286,19 +359,37 @@ BOOTSTRAP_SQL = """
         order_gap           DOUBLE PRECISION,
         backlog_score       DOUBLE PRECISION,
         tags_used           JSONB,
+        period_provenance   JSONB,
         fetched_at          TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (ticker, as_of_date)
     );
 """
 
+MIGRATION_SQL = """
+    ALTER TABLE xbrl_gauges
+        ADD COLUMN IF NOT EXISTS revenue_period_end DATE,
+        ADD COLUMN IF NOT EXISTS inventory_period_end DATE,
+        ADD COLUMN IF NOT EXISTS rpo_period_end DATE,
+        ADD COLUMN IF NOT EXISTS backlog_period_end DATE,
+        ADD COLUMN IF NOT EXISTS period_provenance JSONB;
+"""
+
 UPSERT_SQL = """
     INSERT INTO xbrl_gauges
-        (ticker, as_of_date, latest_quarter_end, revenue_q, revenue_yoy,
+        (ticker, as_of_date, latest_quarter_end, revenue_period_end,
+         inventory_period_end, rpo_period_end, backlog_period_end,
+         revenue_q, revenue_yoy,
          inventory, inventory_yoy, inventory_days, inventory_days_yoy,
-         rpo, rpo_yoy, rpo_to_ttm_revenue, order_gap, backlog_score, tags_used)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         rpo, rpo_yoy, rpo_to_ttm_revenue, order_gap, backlog_score, tags_used,
+         period_provenance)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (ticker, as_of_date) DO UPDATE SET
         latest_quarter_end = EXCLUDED.latest_quarter_end,
+        revenue_period_end = EXCLUDED.revenue_period_end,
+        inventory_period_end = EXCLUDED.inventory_period_end,
+        rpo_period_end      = EXCLUDED.rpo_period_end,
+        backlog_period_end  = EXCLUDED.backlog_period_end,
         revenue_q          = EXCLUDED.revenue_q,
         revenue_yoy        = EXCLUDED.revenue_yoy,
         inventory          = EXCLUDED.inventory,
@@ -311,8 +402,29 @@ UPSERT_SQL = """
         order_gap          = EXCLUDED.order_gap,
         backlog_score      = EXCLUDED.backlog_score,
         tags_used          = EXCLUDED.tags_used,
-        fetched_at         = now();
+        period_provenance  = EXCLUDED.period_provenance,
+        fetched_at         = now()
+    WHERE xbrl_gauges.latest_quarter_end IS NULL
+       OR (
+            EXCLUDED.latest_quarter_end IS NOT NULL
+        AND EXCLUDED.latest_quarter_end >= xbrl_gauges.latest_quarter_end
+       );
 """
+
+
+def load_latest_periods(conn):
+    """Newest durable source period per ticker, used as a monotonic write guard."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT ticker, MAX(latest_quarter_end)
+            FROM xbrl_gauges
+            GROUP BY ticker
+        """)
+        return {
+            ticker: period
+            for ticker, period in cur.fetchall()
+            if ticker and period is not None
+        }
 
 
 # ── MAIN ─────────────────────────────────────────────────
@@ -321,20 +433,35 @@ def fmt(x):
     return "—" if x is None else f"{x:.1f}"
 
 
-if __name__ == "__main__":
+def main():
     print("=== XBRL Gauges ETL ===")
     if not DATABASE_URL:
         raise SystemExit("DATABASE_URL not set.")
 
     universe = get_universe()
-    cik_map = get_cik_map()
     today = date.today()
+    stats = RunStats(expected=len(universe))
+    context = None
 
     conn = connect_db(DATABASE_URL)
     try:
         with conn.cursor() as cur:
             cur.execute(BOOTSTRAP_SQL)
+            cur.execute(MIGRATION_SQL)
         conn.commit()
+        context = begin_run(conn, "xbrl_gauges", expected=len(universe), details={
+            "limitedRun": TICKER_LIMIT > 0,
+        })
+        latest_periods = load_latest_periods(conn)
+
+        try:
+            cik_map = get_cik_map()
+        except Exception:
+            # The ticker-to-CIK index is a required SEC provider request.  If
+            # it is down, classify the whole universe as transiently failed.
+            stats.attempted = len(universe)
+            stats.transient_failures = len(universe)
+            raise
 
         done = skipped = 0
         for n, ticker in enumerate(universe, 1):
@@ -342,26 +469,74 @@ if __name__ == "__main__":
             if not cik:
                 print(f"[{n}/{len(universe)}] {ticker}: no CIK (foreign listing?) — skipped")
                 skipped += 1
+                stats.known_no_data += 1
                 continue
+            stats.attempted += 1
             try:
                 facts = fetch_companyfacts(cik)
                 gauges = compute_gauges(facts) if facts else None
                 if not gauges:
                     print(f"[{n}/{len(universe)}] {ticker}: no usable US-GAAP quarterly data — skipped")
                     skipped += 1
+                    stats.known_no_data += 1
+                    continue
+                period_exclusions = (
+                    (gauges.get("period_provenance") or {}).get("exclusions") or []
+                )
+                if period_exclusions:
+                    stats.degraded += len(period_exclusions)
+                    stats.details["periodExclusions"] = (
+                        stats.details.get("periodExclusions", 0)
+                        + len(period_exclusions)
+                    )
+                incoming_period = gauges.get("latest_quarter_end")
+                stored_period = latest_periods.get(ticker)
+                if (
+                    stored_period is not None
+                    and (incoming_period is None or incoming_period < stored_period)
+                ):
+                    print(
+                        f"[{n}/{len(universe)}] {ticker}: source period regressed "
+                        f"from {stored_period} to {incoming_period} — prior row retained"
+                    )
+                    skipped += 1
+                    stats.degraded += 1
+                    stats.details["regressedPeriods"] = (
+                        stats.details.get("regressedPeriods", 0) + 1
+                    )
                     continue
                 with conn.cursor() as cur:
                     cur.execute(UPSERT_SQL, (
                         ticker, today,
-                        gauges["latest_quarter_end"], gauges["revenue_q"], gauges["revenue_yoy"],
+                        gauges["latest_quarter_end"],
+                        gauges.get("revenue_period_end"),
+                        gauges.get("inventory_period_end"),
+                        gauges.get("rpo_period_end"),
+                        gauges.get("backlog_period_end"),
+                        gauges["revenue_q"], gauges["revenue_yoy"],
                         gauges["inventory"], gauges["inventory_yoy"],
                         gauges["inventory_days"], gauges["inventory_days_yoy"],
                         gauges["rpo"], gauges["rpo_yoy"], gauges["rpo_to_ttm_revenue"],
                         gauges["order_gap"], gauges["backlog_score"],
                         psycopg2.extras.Json(gauges["tags_used"]),
+                        psycopg2.extras.Json(gauges.get("period_provenance") or {}),
                     ))
+                    published = getattr(cur, "rowcount", 1) != 0
                 conn.commit()
+                if not published:
+                    print(
+                        f"[{n}/{len(universe)}] {ticker}: a concurrent run "
+                        "published a newer source period — prior row retained"
+                    )
+                    skipped += 1
+                    stats.degraded += 1
+                    stats.details["concurrentPeriodGuards"] = (
+                        stats.details.get("concurrentPeriodGuards", 0) + 1
+                    )
+                    continue
                 done += 1
+                stats.usable += 1
+                latest_periods[ticker] = incoming_period
                 og = gauges["order_gap"]
                 print(f"[{n}/{len(universe)}] {ticker}: q={gauges['latest_quarter_end']} "
                       f"rev_yoy={fmt(gauges['revenue_yoy'])} rpo_yoy={fmt(gauges['rpo_yoy'])} "
@@ -372,8 +547,34 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"[{n}/{len(universe)}] {ticker}: error — {e}")
                 skipped += 1
+                stats.transient_failures += 1
             time.sleep(SEC_PAUSE)
+        stats.details.update({"loaded": done, "skipped": skipped})
+        finish_run(
+            conn,
+            context,
+            stats,
+            minimum_provider_coverage=threshold_from_env(
+                os.environ, "XBRL_MIN_PROVIDER_COVERAGE", 0.90
+            ),
+            minimum_usable_coverage=threshold_from_env(
+                os.environ, "XBRL_MIN_USABLE_COVERAGE", 0.50
+            ),
+            minimum_baseline_retention=threshold_from_env(
+                os.environ, "XBRL_MIN_BASELINE_RETENTION", 0.75
+            ),
+            limited_run=TICKER_LIMIT > 0,
+        )
+    except CoverageError:
+        raise
+    except Exception as error:
+        record_failure_safely(conn, context, stats, error)
+        raise
     finally:
         conn.close()
 
     print(f"=== XBRL Gauges ETL complete: {done} loaded, {skipped} skipped ===")
+
+
+if __name__ == "__main__":
+    main()

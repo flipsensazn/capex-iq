@@ -22,6 +22,28 @@ const context = () => ({
   },
 });
 
+const manifestRow = {
+  pipeline: "signal_scoreboard",
+  run_id: "scoreboard-run",
+  run_date: "2026-08-18",
+  state: "success",
+  started_at: "2026-08-18T16:00:00Z",
+  finished_at: "2026-08-18T16:05:00Z",
+  run_data_fresh_at: "2026-08-18T16:05:00Z",
+  last_data_fresh_at: "2026-08-18T16:05:00Z",
+  expected: "1",
+  attempted: "1",
+  usable: "1",
+  known_no_data: "0",
+  transient_failures: "0",
+  degraded: "0",
+  provider_coverage: "1",
+  usable_coverage: "1",
+  baseline_usable: "1",
+  error_message: null,
+  details: {},
+};
+
 test("scoreboard keeps prospective and reconstructed results separate", { concurrency: false }, async () => {
   const statRows = [
     { cohort: "prospective", type: "all", cohort_boundary_min: "2026-08-18", cohort_boundary_max: "2026-08-18", n: "2", n_1w: "1", med_1w: "1.25", hit_1w: "1", n_1m: "0", med_1m: null, hit_1m: null, n_3m: "0", med_3m: null, hit_3m: null },
@@ -38,7 +60,9 @@ test("scoreboard keeps prospective and reconstructed results separate", { concur
   await withFetch(async (_url, options) => {
     const query = JSON.parse(options.body).query;
     queries.push(query);
-    const rows = query.includes("GROUP BY cohort") ? statRows : eventRows;
+    const rows = query.includes("etl_run_manifest")
+      ? [manifestRow]
+      : query.includes("GROUP BY cohort") ? statRows : eventRows;
     return new Response(JSON.stringify({ rows }), { status: 200 });
   }, async () => {
     const response = await scoreboard(context());
@@ -57,20 +81,30 @@ test("scoreboard keeps prospective and reconstructed results separate", { concur
     assert.deepEqual(body.eventsByCohort.retrospective[0].exitDates, { "1w": "2025-05-09" });
     assert.equal(body.methodology.prospectiveStart, "2026-08-18");
     assert.equal(body.methodology.horizonAnchor, "Actual entry date");
+    assert.equal(body.health.pipeline, "signal_scoreboard");
+    assert.equal(body.health.state, "success");
   });
 
-  assert.equal(queries.length, 2);
-  for (const query of queries) {
+  assert.equal(queries.length, 3);
+  for (const query of queries.filter(query => !query.includes("etl_run_manifest"))) {
     assert.match(query, /details->>'cohort'/);
+    assert.match(query, /eventClassification/);
+    assert.match(query, /migration_baseline/);
     assert.doesNotMatch(query, /event_date >= DATE/);
   }
 });
 
 test("missing scoreboard table returns the complete empty cohort contract", { concurrency: false }, async () => {
-  await withFetch(async () => new Response(
-    'relation "signal_events" does not exist',
-    { status: 400 }
-  ), async () => {
+  await withFetch(async (_url, options) => {
+    const query = JSON.parse(options.body).query;
+    if (query.includes("etl_run_manifest")) {
+      return new Response(JSON.stringify({ rows: [] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      code: "42P01",
+      message: 'relation "signal_events" does not exist',
+    }), { status: 400 });
+  }, async () => {
     const response = await scoreboard(context());
     assert.equal(response.status, 200);
     const body = await response.json();
@@ -79,6 +113,8 @@ test("missing scoreboard table returns the complete empty cohort contract", { co
     assert.deepEqual(body.statsByCohort, { prospective: [], retrospective: [] });
     assert.deepEqual(body.eventsByCohort, { prospective: [], retrospective: [] });
     assert.equal(body.methodology.version, 2);
+    assert.equal(body.health.pipeline, "signal_scoreboard");
+    assert.equal(body.health.state, "unknown");
   });
 });
 
