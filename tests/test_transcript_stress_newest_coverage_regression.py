@@ -6,6 +6,11 @@ from unittest import mock
 
 
 try:
+    import requests  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["requests"] = types.ModuleType("requests")
+
+try:
     import psycopg2  # noqa: F401
 except ModuleNotFoundError:
     psycopg2 = types.ModuleType("psycopg2")
@@ -17,6 +22,7 @@ except ModuleNotFoundError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import transcript_stress as stress
+from etl_health import RunStats, evaluate_health
 
 
 LONG_TRANSCRIPT = "Routine earnings-call commentary. " * (stress.MIN_TRANSCRIPT_WORDS + 1)
@@ -49,6 +55,16 @@ class FakeConnection:
 
 
 class TranscriptStressNewestCoverageRegressionTests(unittest.TestCase):
+    def test_workflow_serializes_scheduled_and_manual_transcript_runs(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github" / "workflows" / "transcript-stress.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("group: transcript-stress-etl", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("name: Validate Ticker Limit", workflow)
+        self.assertIn("^(0|[1-9][0-9]*)$", workflow)
+
     def analyze(self, quarters, existing, transcript_for):
         connection = FakeConnection()
         attempts = []
@@ -103,6 +119,60 @@ class TranscriptStressNewestCoverageRegressionTests(unittest.TestCase):
         self.assertIn(("TEST", 2025, 2), existing)
         self.assertEqual(connection.commits, 1)
         self.assertEqual((connection.executed[0][1], connection.executed[0][2]), (2025, 2))
+
+    def test_provider_exceptions_are_not_reclassified_as_no_data(self):
+        with (
+            mock.patch.object(stress, "API_NINJAS_KEY", "configured"),
+            mock.patch.object(stress, "EARNINGSCALL_API_KEY", None),
+            mock.patch.object(
+                stress, "fetch_api_ninjas", side_effect=RuntimeError("provider down")
+            ),
+            mock.patch.object(stress.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "provider down"):
+                stress.fetch_transcript("TEST", 2026, 2)
+
+    def test_persisted_latest_degraded_score_keeps_second_run_degraded(self):
+        class LatestCursor:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query):
+                self.connection.queries.append(query)
+
+            def fetchone(self):
+                return (self.connection.latest_degraded,)
+
+        class LatestConnection:
+            def __init__(self):
+                self.latest_degraded = 1
+                self.queries = []
+
+            def cursor(self):
+                return LatestCursor(self)
+
+        connection = LatestConnection()
+        first_run = RunStats(expected=1, attempted=1, usable=1)
+        second_run = RunStats(expected=1, attempted=1, usable=1)
+
+        # Run one writes the fallback. Run two writes nothing, but /stress
+        # still serves that same latest lexicon-only row.
+        stress.apply_persisted_degraded_health(connection, first_run, 1)
+        stress.apply_persisted_degraded_health(connection, second_run, 0)
+
+        self.assertEqual(evaluate_health(first_run).state, "degraded")
+        self.assertEqual(evaluate_health(second_run).state, "degraded")
+        self.assertEqual(second_run.degraded, 1)
+        self.assertEqual(second_run.details["newDegradedRows"], 0)
+        self.assertEqual(second_run.details["latestDegradedScores"], 1)
+        self.assertIn("SELECT DISTINCT ON (ticker)", connection.queries[-1])
+        self.assertIn("model IS NULL", connection.queries[-1])
 
 
 if __name__ == "__main__":

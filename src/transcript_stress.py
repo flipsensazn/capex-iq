@@ -39,6 +39,8 @@
 #                                   https://wizzles-watchlist.pages.dev —
 #                                   used to pull the LIVE capex-map tickers
 #   TICKER_LIMIT          optional  cap tickers per run (testing)
+#   TRANSCRIPT_MIN_PROVIDER_COVERAGE / _MIN_USABLE_COVERAGE /
+#   _MIN_BASELINE_RETENTION          optional health gates (0..1)
 #
 # Local Windows note: run with PYTHONIOENCODING=utf-8 (defeatbeta prints a
 # unicode banner on import that trips cp1252 consoles).
@@ -53,6 +55,16 @@ import psycopg2
 import psycopg2.extras
 import requests
 
+from etl_health import (
+    CoverageError,
+    RunStats,
+    begin_run,
+    finish_run,
+    record_failure_safely,
+    ticker_limit_from_env,
+    threshold_from_env,
+)
+
 try:
     from defeatbeta_api.data.ticker import Ticker as DefeatBetaTicker
     DEFEATBETA_OK = True
@@ -64,7 +76,7 @@ GEMINI_API_KEY       = os.environ.get("GEMINI_API_KEY")
 API_NINJAS_KEY       = os.environ.get("API_NINJAS_KEY")
 EARNINGSCALL_API_KEY = os.environ.get("EARNINGSCALL_API_KEY")
 WATCHLIST_BASE_URL   = (os.environ.get("WATCHLIST_BASE_URL") or "").rstrip("/")
-TICKER_LIMIT         = int(os.environ.get("TICKER_LIMIT") or 0)
+TICKER_LIMIT         = ticker_limit_from_env(os.environ)
 
 GEMINI_MODEL = "gemini-2.5-flash"
 
@@ -265,8 +277,7 @@ def defeatbeta_transcripts(ticker):
                     for r in lst.itertuples()]
         return {"obj": handle, "quarters": quarters}
     except Exception as e:
-        print(f"    {ticker}: defeatbeta list error — {e}")
-        return None
+        raise RuntimeError(f"{ticker}: defeatbeta list request failed: {e}") from e
 
 
 def defeatbeta_text(handle, fiscal_year, fiscal_quarter):
@@ -276,8 +287,11 @@ def defeatbeta_text(handle, fiscal_year, fiscal_quarter):
         if df is None or len(df) == 0:
             return None
         return "\n".join(f"{r.speaker}: {r.content}" for r in df.itertuples())
-    except Exception:
-        return None
+    except Exception as e:
+        raise RuntimeError(
+            f"defeatbeta transcript request failed for "
+            f"{fiscal_year}Q{fiscal_quarter}: {e}"
+        ) from e
 
 
 def fetch_api_ninjas(ticker, year, quarter):
@@ -288,8 +302,9 @@ def fetch_api_ninjas(ticker, year, quarter):
         headers={"X-Api-Key": API_NINJAS_KEY},
         timeout=30,
     )
-    if res.status_code != 200:
+    if res.status_code in (400, 404):
         return None
+    res.raise_for_status()
     data = res.json()
     if isinstance(data, list):
         data = data[0] if data else None
@@ -311,6 +326,8 @@ def fetch_earningscall(ticker, year, quarter):
             text = res.json().get("text")
             if text:
                 return text, None
+        elif res.status_code not in (400, 404):
+            res.raise_for_status()
         time.sleep(0.5)
     return None
 
@@ -324,6 +341,7 @@ def fetch_transcript(ticker, year, quarter):
     if EARNINGSCALL_API_KEY:
         providers.append(("earningscall", fetch_earningscall))
 
+    errors = []
     for name, fn in providers:
         try:
             result = fn(symbol, year, quarter)
@@ -331,7 +349,10 @@ def fetch_transcript(ticker, year, quarter):
                 return result[0], result[1], name
         except Exception as e:
             print(f"    {ticker} {year}Q{quarter}: {name} error — {e}")
+            errors.append(f"{name}: {e}")
         time.sleep(PROVIDER_PAUSE)
+    if errors:
+        raise RuntimeError("; ".join(errors))
     return None
 
 
@@ -543,6 +564,31 @@ def get_existing_keys(conn):
         return {(t, y, q) for t, y, q in cur.fetchall()}
 
 
+def count_latest_degraded_scores(conn):
+    """Degraded scores in the same latest-per-ticker view served by /stress."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            WITH latest AS (
+                SELECT DISTINCT ON (ticker) ticker, model, lexicon_hits
+                FROM transcript_stress
+                ORDER BY ticker, fiscal_year DESC, fiscal_quarter DESC
+            )
+            SELECT COUNT(*)
+            FROM latest
+            WHERE model IS NULL AND COALESCE(lexicon_hits, 0) > 0
+        """)
+        row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def apply_persisted_degraded_health(conn, stats, new_degraded_rows):
+    """Keep health degraded while the latest served snapshot is degraded."""
+    latest_degraded = count_latest_degraded_scores(conn)
+    stats.degraded = latest_degraded
+    stats.details["newDegradedRows"] = new_degraded_rows
+    stats.details["latestDegradedScores"] = latest_degraded
+
+
 # ── SUPPLY-CHAIN GRAPH CHANGE ALERTS ──────────────────────
 # Telegram digest of weekly stress changes for tickers that are NODES on the
 # dependency graphs. Keep these sets in sync with the graph data files
@@ -680,9 +726,12 @@ def analyze_ticker(conn, ticker, calendar_quarters, existing):
         candidates = [(y, q, None, "paid") for y, q in calendar_quarters]
     else:
         print(f"  {ticker}: not covered by defeatbeta and no paid provider key — skipped")
-        return
+        return {"usable": False, "known_no_data": True,
+                "degraded": 0, "new_rows": 0}
 
     covered = 0
+    degraded = 0
+    new_rows = 0
 
     for year, quarter, call_date, source in candidates:
         if covered >= QUARTERS_WANTED:
@@ -722,6 +771,8 @@ def analyze_ticker(conn, ticker, calendar_quarters, existing):
             # should never claim "severe", that judgment needs the LLM pass.
             stress, direction = min(lex, 40.0), None
             summary, quotes = None, []
+            if raw > 0:
+                degraded += 1
 
         with conn.cursor() as cur:
             cur.execute(UPSERT_SQL, (
@@ -732,11 +783,19 @@ def analyze_ticker(conn, ticker, calendar_quarters, existing):
         conn.commit()
         existing.add((ticker, year, quarter))
         covered += 1
+        new_rows += 1
         print(f"  {ticker} {year}Q{quarter}: stress={stress} "
               f"({'gemini' if ai else 'lexicon-only'}, hits={raw}, {word_count}w, {provider})")
 
+    return {
+        "usable": covered > 0,
+        "known_no_data": covered == 0,
+        "degraded": degraded,
+        "new_rows": new_rows,
+    }
 
-if __name__ == "__main__":
+
+def main():
     print("=== Transcript Stress ETL ===")
     if not DATABASE_URL:
         raise SystemExit("DATABASE_URL not set.")
@@ -753,11 +812,18 @@ if __name__ == "__main__":
     print(f"Universe: {len(universe)} tickers · quarters: "
           + ", ".join(f"{y}Q{q}" for y, q in quarters))
 
+    stats = RunStats(expected=len(universe))
+    new_degraded_rows = 0
+    context = None
     conn = connect_db(DATABASE_URL)
     try:
         with conn.cursor() as cur:
             cur.execute(BOOTSTRAP_SQL)
         conn.commit()
+        context = begin_run(conn, "transcript_stress", expected=len(universe), details={
+            "geminiEnabled": bool(GEMINI_API_KEY),
+            "limitedRun": TICKER_LIMIT > 0,
+        })
 
         existing = get_existing_keys(conn)
         print(f"{len(existing)} transcript analyses already on file.")
@@ -767,8 +833,9 @@ if __name__ == "__main__":
 
         for n, ticker in enumerate(universe, 1):
             print(f"[{n}/{len(universe)}] {ticker}")
+            stats.attempted += 1
             try:
-                analyze_ticker(conn, ticker, quarters, existing)
+                outcome = analyze_ticker(conn, ticker, quarters, existing)
             except psycopg2.OperationalError as e:
                 # A dropped connection (idle timeout / network blip) is
                 # recoverable: everything before it is already committed, and
@@ -781,15 +848,44 @@ if __name__ == "__main__":
                     pass
                 conn = connect_db(DATABASE_URL)
                 try:
-                    analyze_ticker(conn, ticker, quarters, existing)
+                    outcome = analyze_ticker(conn, ticker, quarters, existing)
                 except psycopg2.Error:
                     raise  # still failing after a fresh connection — fatal
                 except Exception as e:
                     print(f"  {ticker}: skipped — {e}")
+                    stats.transient_failures += 1
+                    continue
             except psycopg2.Error:
                 raise  # other DB problems are fatal — don't grind through the list
             except Exception as e:
                 print(f"  {ticker}: skipped — {e}")
+                stats.transient_failures += 1
+                continue
+
+            if outcome["usable"]:
+                stats.usable += 1
+            if outcome["known_no_data"]:
+                stats.known_no_data += 1
+            new_degraded_rows += outcome["degraded"]
+            stats.details["newRows"] = stats.details.get("newRows", 0) + outcome["new_rows"]
+
+        apply_persisted_degraded_health(conn, stats, new_degraded_rows)
+
+        finish_run(
+            conn,
+            context,
+            stats,
+            minimum_provider_coverage=threshold_from_env(
+                os.environ, "TRANSCRIPT_MIN_PROVIDER_COVERAGE", 0.90
+            ),
+            minimum_usable_coverage=threshold_from_env(
+                os.environ, "TRANSCRIPT_MIN_USABLE_COVERAGE", 0.50
+            ),
+            minimum_baseline_retention=threshold_from_env(
+                os.environ, "TRANSCRIPT_MIN_BASELINE_RETENTION", 0.75
+            ),
+            limited_run=TICKER_LIMIT > 0,
+        )
 
         # Diff and alert on supply-chain graph stress changes.
         after = snapshot_graph_stress(conn)
@@ -802,7 +898,16 @@ if __name__ == "__main__":
             send_telegram(header + "\n\n" + "\n\n".join(changes))
         else:
             print("\nNo meaningful graph stress changes this run — no alert sent.")
+    except CoverageError:
+        raise
+    except Exception as error:
+        record_failure_safely(conn, context, stats, error)
+        raise
     finally:
         conn.close()
 
     print("=== Transcript Stress ETL complete ===")
+
+
+if __name__ == "__main__":
+    main()

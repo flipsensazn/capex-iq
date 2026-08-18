@@ -21,6 +21,9 @@
 # Design rules:
 #   - one event per (ticker, event_type, event_date); a 90-day refractory per
 #     (ticker, type, cohort) stops threshold oscillation from spamming events
+#   - CBS crossings/jumps require two snapshots under the same CBS methodology
+#     and a genuinely newer component vintage; rollout/method changes establish
+#     a baseline rather than manufacturing a forward-observed signal
 #   - entry = first regular-session close strictly after signal availability
 #     (or the first close after event_date for historical reconstructions).
 #   - 1w / 1m / 3m targets anchor to actual entry_date, not event_date.
@@ -38,6 +41,13 @@ from zoneinfo import ZoneInfo
 import psycopg2
 import psycopg2.extras
 
+from etl_health import (
+    CoverageError,
+    RunStats,
+    begin_run,
+    finish_run,
+    record_failure_safely,
+)
 from transcript_stress import connect_db
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -53,6 +63,13 @@ YF_PAUSE        = 0.5   # seconds between Yahoo fetches
 METHODOLOGY_VERSION = 2
 DEFAULT_PROSPECTIVE_START = date(2026, 8, 17)
 MARKET_TIMEZONE = ZoneInfo("America/New_York")
+GAUGE_SOURCE_METHODOLOGY = "xbrl-gauges-v2-score-period"
+GAUGE_PERIOD_PROVENANCE_METHODOLOGY = "xbrl-gauge-score-period-v1"
+GAUGE_MAX_AGE_DAYS = 365
+GAUGE_FUTURE_TOLERANCE_DAYS = 7
+TRANSCRIPT_SOURCE_METHODOLOGY = "transcript-stress-v1"
+TRANSCRIPT_MAX_AGE_DAYS = 365
+TRANSCRIPT_FUTURE_TOLERANCE_DAYS = 7
 
 
 def prospective_start_date():
@@ -152,6 +169,11 @@ def entry_target_date(event_date, details=None):
         return event_date + timedelta(days=1)
     if available.tzinfo is None:
         available = available.replace(tzinfo=timezone.utc)
+    if available.astimezone(MARKET_TIMEZONE).date() < event_date:
+        # Some providers tolerate a call/report date a few days after the
+        # analysis timestamp. Preserve that metadata tolerance, but never
+        # price a signal before the event it claims to observe.
+        return event_date + timedelta(days=1)
     try:
         return first_market_close_after(available)
     except Exception as exc:
@@ -216,6 +238,322 @@ def _group(rows):
     return grouped
 
 
+CBS_COMPONENTS = ("transcript", "gauge", "concentration")
+
+
+def _component_parts(components):
+    components = components if isinstance(components, dict) else {}
+    return {
+        name: components[name]
+        for name in CBS_COMPONENTS
+        if isinstance(components.get(name), dict)
+    }
+
+
+def _cbs_methodologies_match(previous, current):
+    previous_method = previous.get("methodology_signature")
+    current_method = current.get("methodology_signature")
+    if not previous_method or previous_method != current_method:
+        return False
+
+    previous_parts = _component_parts(previous.get("components"))
+    current_parts = _component_parts(current.get("components"))
+    for name in previous_parts.keys() & current_parts.keys():
+        previous_source = previous_parts[name].get("sourceMethodology")
+        current_source = current_parts[name].get("sourceMethodology")
+        if not previous_source or previous_source != current_source:
+            return False
+    return True
+
+
+def advanced_component_vintages(previous, current):
+    """Comparable components changed at a strictly newer source timestamp."""
+    previous_parts = _component_parts(previous.get("components"))
+    current_parts = _component_parts(current.get("components"))
+    if previous_parts.keys() != current_parts.keys():
+        return []
+    previous_computed = _parsed_timestamp(previous.get("computed_at"))
+    advanced = []
+
+    # A later fetch of an older reporting period is a backfill, not a forward
+    # vintage. Baseline the whole CBS comparison because its score may have
+    # moved due to that regressed input; equal-period restatements remain valid.
+    for name in previous_parts.keys() & current_parts.keys():
+        previous_part = previous_parts[name]
+        current_part = current_parts[name]
+        previous_eligible = previous_part.get("eligible", True)
+        current_eligible = current_part.get("eligible", True)
+        if previous_eligible != current_eligible:
+            return []
+        if not previous_eligible:
+            continue
+        previous_period_end = _parsed_timestamp(previous_part.get("sourcePeriodEnd"))
+        current_period_end = _parsed_timestamp(current_part.get("sourcePeriodEnd"))
+        if (
+            previous_period_end is None
+            or current_period_end is None
+            or current_period_end < previous_period_end
+        ):
+            return []
+
+    for name, current_part in current_parts.items():
+        if not current_part.get("eligible", True):
+            continue
+        current_signature = current_part.get("sourceSignature")
+        current_available = _parsed_timestamp(current_part.get("sourceAvailableAt"))
+        if not current_signature or current_available is None:
+            continue
+
+        previous_part = previous_parts.get(name)
+        if previous_part is None:
+            if previous_computed is not None and current_available > previous_computed:
+                advanced.append(name)
+            continue
+
+        previous_period_end = _parsed_timestamp(previous_part.get("sourcePeriodEnd"))
+        current_period_end = _parsed_timestamp(current_part.get("sourcePeriodEnd"))
+        if (
+            not previous_part.get("eligible", True)
+            or previous_period_end is None
+            or current_period_end is None
+            or current_period_end < previous_period_end
+        ):
+            continue
+
+        previous_signature = previous_part.get("sourceSignature")
+        previous_available = _parsed_timestamp(previous_part.get("sourceAvailableAt"))
+        if (
+            previous_signature
+            and current_signature != previous_signature
+            and previous_available is not None
+            and current_available > previous_available
+        ):
+            advanced.append(name)
+
+    return advanced
+
+
+def find_cbs_events(series):
+    """Eligible CBS crossings/jumps from provenance-aware chronological rows.
+
+    A first snapshot, a methodology transition, or a recomputation over the
+    same source vintages is a baseline. It cannot enter the prospective record.
+    """
+    events = []
+    previous = None
+    for current in series:
+        if current.get("score") is None:
+            # An explicit unavailable-data snapshot breaks continuity. The
+            # next usable CBS establishes a new baseline rather than comparing
+            # across a stale-data gap.
+            previous = None
+            continue
+        if previous is None:
+            previous = current
+            continue
+
+        same_methodology = _cbs_methodologies_match(previous, current)
+        input_changed = (
+            previous.get("input_signature")
+            and current.get("input_signature")
+            and previous["input_signature"] != current["input_signature"]
+        )
+        advanced = (
+            advanced_component_vintages(previous, current)
+            if same_methodology and input_changed else []
+        )
+        if advanced:
+            common = {
+                "date": current["date"],
+                "score": float(current["score"]),
+                "available_at": current.get("computed_at"),
+                "sourceAvailableAt": _iso_timestamp(current.get("source_available_at")),
+                "cbsMethodologySignature": current["methodology_signature"],
+                "cbsInputSignature": current["input_signature"],
+                "advancedComponents": advanced,
+            }
+            previous_score = float(previous["score"])
+            current_score = float(current["score"])
+            if previous_score < CROSS_LINE <= current_score:
+                events.append({**common, "event_type": "cbs_cross_70", "kind": "cross"})
+            delta = current_score - previous_score
+            if delta >= JUMP_DELTA:
+                events.append({
+                    **common,
+                    "event_type": "cbs_jump_15",
+                    "kind": "jump",
+                    "jump": round(delta, 1),
+                })
+        previous = current
+    return events
+
+
+def _period_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def verified_order_gap_provenance(
+    latest_quarter_end, period_provenance, as_of_date,
+):
+    """Validate the versioned score-period contract for a raw XBRL signal."""
+    provenance = period_provenance if isinstance(period_provenance, dict) else {}
+    observed_on = _period_date(as_of_date)
+    latest_period = _period_date(latest_quarter_end)
+    score_period = _period_date(provenance.get("scorePeriodEnd"))
+    if (
+        provenance.get("methodology") != GAUGE_PERIOD_PROVENANCE_METHODOLOGY
+        or provenance.get("scoreDriver") != "backlog"
+        or observed_on is None
+        or latest_period is None
+        or score_period is None
+        or score_period != latest_period
+    ):
+        return None
+    age_days = (observed_on - score_period).days
+    if age_days < -GAUGE_FUTURE_TOLERANCE_DAYS or age_days > GAUGE_MAX_AGE_DAYS:
+        return None
+    return {
+        "gaugeSourceMethodology": GAUGE_SOURCE_METHODOLOGY,
+        "gaugeSourcePeriodEnd": score_period.isoformat(),
+        "gaugeLatestQuarterEnd": latest_period.isoformat(),
+        "gaugePeriodProvenance": dict(provenance),
+    }
+
+
+def find_order_gap_events(series):
+    """Find eligible order-gap breaches while resetting across invalid rows.
+
+    Rows are ``(as_of_date, order_gap, fetched_at, latest_quarter_end,
+    period_provenance)``. A legacy, stale, future, or mismatched row breaks
+    continuity, so it can neither become an event nor provide the prior side
+    of a later crossing.
+    """
+    events = []
+    previous = None
+    for as_of_date, order_gap, fetched_at, latest_quarter_end, provenance in series:
+        verified = verified_order_gap_provenance(
+            latest_quarter_end, provenance, as_of_date,
+        )
+        if order_gap is None or verified is None:
+            previous = None
+            continue
+        value = float(order_gap)
+        kind = None
+        if previous is None and value >= GAP_LINE:
+            kind = "initial"
+        elif previous is not None and previous < GAP_LINE <= value:
+            kind = "cross"
+        if kind is not None and as_of_date is not None:
+            events.append({
+                "date": as_of_date,
+                "score": value,
+                "kind": kind,
+                "available_at": fetched_at,
+                **verified,
+            })
+        previous = value
+    return events
+
+
+def _observation_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def transcript_source_methodology(model, provider):
+    """Stable analysis/source method; observation timestamps are not identity."""
+    provider = str(provider).strip() if provider is not None else ""
+    if not provider:
+        return None
+    analysis = f"model:{model}" if model else "lexicon-only"
+    return f"{TRANSCRIPT_SOURCE_METHODOLOGY}:{analysis}:provider:{provider}"
+
+
+def verified_transcript_provenance(call_date, analyzed_at, model, provider):
+    """Validate transcript source date against its own analysis observation."""
+    source_period = _period_date(call_date)
+    observed_on = _observation_date(analyzed_at)
+    methodology = transcript_source_methodology(model, provider)
+    if source_period is None or observed_on is None or methodology is None:
+        return None
+    age_days = (observed_on - source_period).days
+    if (
+        age_days < -TRANSCRIPT_FUTURE_TOLERANCE_DAYS
+        or age_days > TRANSCRIPT_MAX_AGE_DAYS
+    ):
+        return None
+    analyzed = _iso_timestamp(analyzed_at)
+    return {
+        "transcriptSourceMethodology": methodology,
+        "transcriptSourcePeriodEnd": source_period.isoformat(),
+        "transcriptAnalyzedAt": analyzed,
+        "transcriptSourceAgeDays": age_days,
+        "transcriptSourceProvenance": {
+            "methodology": methodology,
+            "sourcePeriodEnd": source_period.isoformat(),
+            "analyzedAt": analyzed,
+            "ageDaysAtAnalysis": age_days,
+            "provider": provider,
+            "model": model,
+        },
+    }
+
+
+def find_transcript_stress_events(series):
+    """Find stress breaches with source-method baselines and invalid gaps.
+
+    Rows are ``(call_date, stress_score, analyzed_at, model, provider)``.
+    Missing/stale/future rows break continuity. A model/provider transition is
+    a new baseline and cannot itself emit a crossing.
+    """
+    events = []
+    previous = None
+    for call_date, stress_score, analyzed_at, model, provider in series:
+        provenance = verified_transcript_provenance(
+            call_date, analyzed_at, model, provider,
+        )
+        if stress_score is None or provenance is None:
+            previous = None
+            continue
+        value = float(stress_score)
+        methodology = provenance["transcriptSourceMethodology"]
+        kind = None
+        if previous is None:
+            if value >= CROSS_LINE:
+                kind = "initial"
+        elif previous["methodology"] == methodology:
+            if previous["score"] < CROSS_LINE <= value:
+                kind = "cross"
+        # A method transition is intentionally only a baseline.
+        if kind is not None:
+            events.append({
+                "date": _period_date(call_date),
+                "score": value,
+                "kind": kind,
+                "available_at": analyzed_at,
+                **provenance,
+            })
+        previous = {"score": value, "methodology": methodology}
+    return events
+
+
 def detect_events(conn):
     """Scan the four signal tables → [{ticker, event_type, event_date, score, details}]."""
     found = []
@@ -228,47 +566,106 @@ def detect_events(conn):
         })
 
     with conn.cursor() as cur:
-        # Composite score: crossings + jumps over weekly snapshots
+        # Composite score: provenance-eligible crossings + jumps over snapshots.
+        # A recompute over the same inputs, or a methodology rollout, is a
+        # baseline rather than a forward-observed event.
         cur.execute("""
-            SELECT ticker, as_of_date, composite, computed_at
+            SELECT ticker, as_of_date, composite, components,
+                   NULLIF(
+                       to_jsonb(composite_scores)->>'methodology_signature', ''
+                   ) AS methodology_signature,
+                   NULLIF(
+                       to_jsonb(composite_scores)->>'input_signature', ''
+                   ) AS input_signature,
+                   NULLIF(
+                       to_jsonb(composite_scores)->>'source_available_at', ''
+                   )::timestamptz AS source_available_at,
+                   computed_at
             FROM composite_scores ORDER BY ticker, as_of_date
         """)
         for ticker, series in _group(cur.fetchall()).items():
-            vals = [(d, float(c) if c is not None else None)
-                    for d, c, _ in series]
-            availability = {d: ts for d, _, ts in series}
-            for d, v, kind in find_crossings(vals, CROSS_LINE):
-                emit(ticker, "cbs_cross_70", d, v, {"kind": kind},
-                     availability.get(d))
-            for d, v, delta in find_jumps(vals, JUMP_DELTA):
-                emit(ticker, "cbs_jump_15", d, v, {"jump": delta},
-                     availability.get(d))
+            records = [{
+                "date": d,
+                "score": float(c) if c is not None else None,
+                "components": components or {},
+                "methodology_signature": methodology_signature,
+                "input_signature": input_signature,
+                "source_available_at": source_available_at,
+                "computed_at": computed_at,
+            } for (d, c, components, methodology_signature, input_signature,
+                   source_available_at, computed_at) in series]
+            for event in find_cbs_events(records):
+                details = {
+                    "kind": event["kind"],
+                    "advancedComponents": event["advancedComponents"],
+                    "sourceAvailableAt": event["sourceAvailableAt"],
+                    "cbsMethodologySignature": event["cbsMethodologySignature"],
+                    "cbsInputSignature": event["cbsInputSignature"],
+                }
+                if "jump" in event:
+                    details["jump"] = event["jump"]
+                emit(
+                    ticker, event["event_type"], event["date"], event["score"],
+                    details, event["available_at"],
+                )
 
-        # Transcript stress: crossings over fiscal quarters, dated to the call
+        # Transcript stress: only observation-valid rows under a stable source
+        # method may cross. Missing/stale/future rows break continuity.
         cur.execute("""
-            SELECT ticker, call_date, stress_score, analyzed_at
+            SELECT ticker, call_date, stress_score, analyzed_at, model, provider
             FROM transcript_stress ORDER BY ticker, fiscal_year, fiscal_quarter
         """)
         for ticker, series in _group(cur.fetchall()).items():
-            vals = [(d, float(s) if s is not None else None)
-                    for d, s, _ in series]
-            availability = {d: ts for d, _, ts in series}
-            for d, v, kind in find_crossings(vals, CROSS_LINE):
-                emit(ticker, "stress_cross_70", d, v, {"kind": kind},
-                     availability.get(d))
+            for event in find_transcript_stress_events(series):
+                emit(
+                    ticker,
+                    "stress_cross_70",
+                    event["date"],
+                    event["score"],
+                    {
+                        "kind": event["kind"],
+                        "transcriptSourceMethodology": (
+                            event["transcriptSourceMethodology"]
+                        ),
+                        "transcriptSourcePeriodEnd": (
+                            event["transcriptSourcePeriodEnd"]
+                        ),
+                        "transcriptAnalyzedAt": event["transcriptAnalyzedAt"],
+                        "transcriptSourceAgeDays": (
+                            event["transcriptSourceAgeDays"]
+                        ),
+                        "transcriptSourceProvenance": (
+                            event["transcriptSourceProvenance"]
+                        ),
+                    },
+                    event["available_at"],
+                )
 
-        # XBRL order gap: breaches over weekly snapshots
+        # XBRL order gap: only versioned, fresh score-driving periods may
+        # participate. Legacy/ineligible rows explicitly break continuity.
         cur.execute("""
-            SELECT ticker, as_of_date, order_gap, fetched_at
+            SELECT ticker, as_of_date, order_gap, fetched_at,
+                   latest_quarter_end,
+                   to_jsonb(xbrl_gauges)->'period_provenance'
+                       AS period_provenance
             FROM xbrl_gauges ORDER BY ticker, as_of_date
         """)
         for ticker, series in _group(cur.fetchall()).items():
-            vals = [(d, float(g) if g is not None else None)
-                    for d, g, _ in series]
-            availability = {d: ts for d, _, ts in series}
-            for d, v, kind in find_crossings(vals, GAP_LINE):
-                emit(ticker, "order_gap_50", d, v, {"kind": kind},
-                     availability.get(d))
+            for event in find_order_gap_events(series):
+                emit(
+                    ticker,
+                    "order_gap_50",
+                    event["date"],
+                    event["score"],
+                    {
+                        "kind": event["kind"],
+                        "gaugeSourceMethodology": event["gaugeSourceMethodology"],
+                        "gaugeSourcePeriodEnd": event["gaugeSourcePeriodEnd"],
+                        "gaugeLatestQuarterEnd": event["gaugeLatestQuarterEnd"],
+                        "gaugePeriodProvenance": event["gaugePeriodProvenance"],
+                    },
+                    event["available_at"],
+                )
 
         # Scout approvals: dated to the review action
         cur.execute("""
@@ -429,6 +826,122 @@ METHODOLOGY_MIGRATION_SQL = """
        OR COALESCE(details->>'cohortBoundary', '') <> %s;
 """
 
+CBS_ROLLOUT_BASELINE_MIGRATION_SQL = """
+    UPDATE signal_events
+    SET details = (COALESCE(details, '{}'::jsonb) - 'exitDates') || jsonb_build_object(
+            'cohort', 'retrospective',
+            'kind', 'migration_baseline',
+            'eventClassification', 'migration_baseline',
+            'baselineReason', 'missing_cbs_source_provenance',
+            'baselineOriginalKind', COALESCE(details->>'kind', event_type),
+            'timingBasis', 'date_only_conservative'
+        ),
+        entry_date = NULL,
+        entry_price = NULL,
+        bench_entry = NULL,
+        ret_1w = NULL,
+        bench_1w = NULL,
+        ret_1m = NULL,
+        bench_1m = NULL,
+        ret_3m = NULL,
+        bench_3m = NULL,
+        updated_at = now()
+    WHERE event_type IN ('cbs_cross_70', 'cbs_jump_15')
+      AND COALESCE(details->>'cohort', '') = 'prospective'
+      AND COALESCE(details->>'cbsMethodologySignature', '') = ''
+      AND COALESCE(details->>'eventClassification', '') <> 'migration_baseline'
+      AND ret_1w IS NULL AND bench_1w IS NULL
+      AND ret_1m IS NULL AND bench_1m IS NULL
+      AND ret_3m IS NULL AND bench_3m IS NULL
+      AND CURRENT_DATE < COALESCE(entry_date, event_date) + 7;
+"""
+
+ORDER_GAP_ROLLOUT_BASELINE_MIGRATION_SQL = """
+    UPDATE signal_events
+    SET details = (COALESCE(details, '{}'::jsonb) - 'exitDates') || jsonb_build_object(
+            'cohort', 'retrospective',
+            'kind', 'migration_baseline',
+            'eventClassification', 'migration_baseline',
+            'baselineReason', 'missing_verified_gauge_period_provenance',
+            'baselineOriginalKind', COALESCE(details->>'kind', event_type),
+            'timingBasis', 'date_only_conservative'
+        ),
+        entry_date = NULL,
+        entry_price = NULL,
+        bench_entry = NULL,
+        ret_1w = NULL,
+        bench_1w = NULL,
+        ret_1m = NULL,
+        bench_1m = NULL,
+        ret_3m = NULL,
+        bench_3m = NULL,
+        updated_at = now()
+    WHERE event_type = 'order_gap_50'
+      AND COALESCE(details->>'cohort', '') = 'prospective'
+      AND (
+           COALESCE(details->>'gaugeSourceMethodology', '')
+               <> 'xbrl-gauges-v2-score-period'
+        OR COALESCE(details->>'gaugeSourcePeriodEnd', '') = ''
+        OR COALESCE(details->>'gaugeLatestQuarterEnd', '') = ''
+        OR COALESCE(details#>>'{gaugePeriodProvenance,methodology}', '')
+               <> 'xbrl-gauge-score-period-v1'
+        OR COALESCE(details#>>'{gaugePeriodProvenance,scoreDriver}', '')
+               <> 'backlog'
+        OR COALESCE(details#>>'{gaugePeriodProvenance,scorePeriodEnd}', '')
+               <> COALESCE(details->>'gaugeSourcePeriodEnd', '')
+        OR COALESCE(details->>'gaugeLatestQuarterEnd', '')
+               <> COALESCE(details->>'gaugeSourcePeriodEnd', '')
+      )
+      AND COALESCE(details->>'eventClassification', '') <> 'migration_baseline'
+      AND ret_1w IS NULL AND bench_1w IS NULL
+      AND ret_1m IS NULL AND bench_1m IS NULL
+      AND ret_3m IS NULL AND bench_3m IS NULL
+      AND CURRENT_DATE < COALESCE(entry_date, event_date) + 7;
+"""
+
+STRESS_ROLLOUT_BASELINE_MIGRATION_SQL = """
+    UPDATE signal_events
+    SET details = (COALESCE(details, '{}'::jsonb) - 'exitDates') || jsonb_build_object(
+            'cohort', 'retrospective',
+            'kind', 'migration_baseline',
+            'eventClassification', 'migration_baseline',
+            'baselineReason', 'missing_verified_transcript_source_provenance',
+            'baselineOriginalKind', COALESCE(details->>'kind', event_type),
+            'timingBasis', 'date_only_conservative'
+        ),
+        entry_date = NULL,
+        entry_price = NULL,
+        bench_entry = NULL,
+        ret_1w = NULL,
+        bench_1w = NULL,
+        ret_1m = NULL,
+        bench_1m = NULL,
+        ret_3m = NULL,
+        bench_3m = NULL,
+        updated_at = now()
+    WHERE event_type = 'stress_cross_70'
+      AND COALESCE(details->>'cohort', '') = 'prospective'
+      AND (
+           COALESCE(details->>'transcriptSourceMethodology', '')
+               NOT LIKE 'transcript-stress-v1:%:provider:%'
+        OR COALESCE(details->>'transcriptSourcePeriodEnd', '') = ''
+        OR COALESCE(details->>'transcriptAnalyzedAt', '') = ''
+        OR COALESCE(details->>'transcriptSourceAgeDays', '') = ''
+        OR COALESCE(details#>>'{transcriptSourceProvenance,methodology}', '')
+               <> COALESCE(details->>'transcriptSourceMethodology', '')
+        OR COALESCE(details#>>'{transcriptSourceProvenance,sourcePeriodEnd}', '')
+               <> COALESCE(details->>'transcriptSourcePeriodEnd', '')
+        OR COALESCE(details#>>'{transcriptSourceProvenance,analyzedAt}', '')
+               <> COALESCE(details->>'transcriptAnalyzedAt', '')
+        OR COALESCE(details#>>'{transcriptSourceProvenance,provider}', '') = ''
+      )
+      AND COALESCE(details->>'eventClassification', '') <> 'migration_baseline'
+      AND ret_1w IS NULL AND bench_1w IS NULL
+      AND ret_1m IS NULL AND bench_1m IS NULL
+      AND ret_3m IS NULL AND bench_3m IS NULL
+      AND CURRENT_DATE < COALESCE(entry_date, event_date) + 7;
+"""
+
 INSERT_SQL = """
     INSERT INTO signal_events (ticker, event_type, event_date, score, details)
     VALUES %s
@@ -499,6 +1012,48 @@ def migrate_methodology(conn):
     return reset
 
 
+def migrate_cbs_rollout_baselines(conn):
+    """Quarantine provenance-blind rollout events before any return matures."""
+    with conn.cursor() as cur:
+        cur.execute(CBS_ROLLOUT_BASELINE_MIGRATION_SQL)
+        reset = cur.rowcount
+    conn.commit()
+    if reset:
+        print(
+            f"Reclassified {reset} provenance-blind CBS rollout event(s) "
+            "as retrospective migration baselines."
+        )
+    return reset
+
+
+def migrate_order_gap_rollout_baselines(conn):
+    """Quarantine provenance-blind order-gap events before returns mature."""
+    with conn.cursor() as cur:
+        cur.execute(ORDER_GAP_ROLLOUT_BASELINE_MIGRATION_SQL)
+        reset = cur.rowcount
+    conn.commit()
+    if reset:
+        print(
+            f"Reclassified {reset} provenance-blind order-gap event(s) "
+            "as retrospective migration baselines."
+        )
+    return reset
+
+
+def migrate_stress_rollout_baselines(conn):
+    """Quarantine provenance-blind transcript events before returns mature."""
+    with conn.cursor() as cur:
+        cur.execute(STRESS_ROLLOUT_BASELINE_MIGRATION_SQL)
+        reset = cur.rowcount
+    conn.commit()
+    if reset:
+        print(
+            f"Reclassified {reset} provenance-blind transcript event(s) "
+            "as retrospective migration baselines."
+        )
+    return reset
+
+
 def _parsed_timestamp(value):
     if not value:
         return None
@@ -526,6 +1081,15 @@ def merge_event_details(existing, detected):
     elif new_ts is not None:
         merged["signalAvailableAt"] = new_raw
     merged["observedUnderV2"] = True
+    if (existing or {}).get("eventClassification") == "migration_baseline":
+        # Exact-key rediscovery must never promote a quarantined rollout row
+        # back into the prospective record.
+        merged.update({
+            "cohort": "retrospective",
+            "kind": "migration_baseline",
+            "eventClassification": "migration_baseline",
+            "timingBasis": "date_only_conservative",
+        })
     return merged
 
 
@@ -610,7 +1174,7 @@ def record_new_events(conn):
 
 
 def fill_returns(conn):
-    """Price every event still missing entry or a matured horizon."""
+    """Price pending events and report enough coverage to audit the run."""
     today = date.today()
     with conn.cursor() as cur:
         cur.execute("""
@@ -618,16 +1182,21 @@ def fill_returns(conn):
                    entry_price, bench_entry,
                    ret_1w, bench_1w, ret_1m, bench_1m, ret_3m, bench_3m
             FROM signal_events
-            WHERE entry_date IS NULL OR entry_price IS NULL OR bench_entry IS NULL
-               OR ret_1w IS NULL OR bench_1w IS NULL
-               OR ret_1m IS NULL OR bench_1m IS NULL
-               OR ret_3m IS NULL OR bench_3m IS NULL
+            WHERE COALESCE(details->>'eventClassification', '')
+                      <> 'migration_baseline'
+              AND (
+                   entry_date IS NULL OR entry_price IS NULL OR bench_entry IS NULL
+                OR ret_1w IS NULL OR bench_1w IS NULL
+                OR ret_1m IS NULL OR bench_1m IS NULL
+                OR ret_3m IS NULL OR bench_3m IS NULL
+              )
             ORDER BY ticker, event_date
         """)
         pending = cur.fetchall()
 
     # Only rows where something new is actually computable this run
     todo = []
+    mature_return_pending = False
     for row in pending:
         (ticker, etype, ev_date, details, entry_date, entry, bench_entry,
          r1w, b1w, r1m, b1m, r3m, b3m) = row
@@ -636,10 +1205,13 @@ def fill_returns(conn):
         matured = [(name, days) for name, days in HORIZONS
                    if horizon_anchor + timedelta(days=days) <= today]
         pairs = {"1w": (r1w, b1w), "1m": (r1m, b1m), "3m": (r3m, b3m)}
-        needs = any(v is None for v in (entry_date, entry, bench_entry)) or any(
-            ret is None or bench_ret is None
-            for name, _ in matured for ret, bench_ret in [pairs[name]]
+        missing_mature_names = tuple(
+            name for name, _ in matured
+            if pairs[name][0] is None or pairs[name][1] is None
         )
+        missing_mature = bool(missing_mature_names)
+        mature_return_pending = mature_return_pending or missing_mature
+        needs = any(v is None for v in (entry_date, entry, bench_entry)) or missing_mature
         if needs:
             existing = {
                 "entry_date": entry_date,
@@ -647,40 +1219,106 @@ def fill_returns(conn):
                 "bench_entry": bench_entry,
             }
             todo.append((ticker, etype, ev_date, target,
-                         entry_date or target, existing))
+                         entry_date or target, existing, missing_mature_names))
     if not todo:
         print("No returns to fill.")
-        return 0
+        return {
+            "pendingRows": 0,
+            "maturePendingRows": 0,
+            "tickerAttempts": 0,
+            "tickerFailures": 0,
+            "updatedRows": 0,
+            "matureFilledRows": 0,
+            "unresolvedMatureRows": 0,
+            "benchmarkUnavailable": False,
+        }
 
-    tickers = sorted({t for t, _, _, _, _, _ in todo})
-    min_date = min(anchor for _, _, _, _, anchor, _ in todo) - timedelta(days=5)
+    tickers = sorted({t for t, _, _, _, _, _, _ in todo})
+    min_date = min(anchor for _, _, _, _, anchor, _, _ in todo) - timedelta(days=5)
     end = today + timedelta(days=1)
     print(f"Filling returns for {len(todo)} event(s) across {len(tickers)} ticker(s)...")
 
     bench = load_price_series(BENCHMARK, min_date, end)
     if not bench:
+        if mature_return_pending:
+            raise RuntimeError(
+                f"Benchmark {BENCHMARK} unavailable with matured returns pending"
+            )
         print(f"Benchmark {BENCHMARK} unavailable — skipping fills this run.")
-        return 0
+        return {
+            "pendingRows": len(todo),
+            "maturePendingRows": 0,
+            "tickerAttempts": 0,
+            "tickerFailures": 0,
+            "updatedRows": 0,
+            "matureFilledRows": 0,
+            "unresolvedMatureRows": 0,
+            "benchmarkUnavailable": True,
+        }
 
     filled = 0
+    ticker_failures = 0
+    mature_pending_rows = sum(bool(item[6]) for item in todo)
+    mature_filled_rows = 0
     with conn.cursor() as cur:
         for ticker in tickers:
             series = load_price_series(ticker, min_date, end)
             time.sleep(YF_PAUSE)
             if not series:
+                ticker_failures += 1
                 continue
-            for t, etype, ev_date, target, _, existing in todo:
+            for t, etype, ev_date, target, _, existing, missing_mature_names in todo:
                 if t != ticker:
                     continue
                 fill = compute_row_fill(target, series, bench, today, existing)
                 if fill is None:
                     continue
+                if missing_mature_names and all(
+                    fill.get(f"ret_{name}") is not None
+                    and fill.get(f"bench_{name}") is not None
+                    for name in missing_mature_names
+                ):
+                    mature_filled_rows += 1
                 fill.update({"ticker": t, "event_type": etype, "event_date": ev_date})
                 cur.execute(FILL_SQL, fill)
                 filled += 1
+    unresolved_mature_rows = mature_pending_rows - mature_filled_rows
+    if mature_pending_rows and mature_filled_rows == 0:
+        raise RuntimeError(
+            "Event price series unavailable or incomplete for every row "
+            f"with matured returns pending ({mature_pending_rows} row(s), "
+            f"{ticker_failures}/{len(tickers)} ticker fetches failed)"
+        )
     conn.commit()
     print(f"{filled} event row(s) updated with prices/returns.")
-    return filled
+    return {
+        "pendingRows": len(todo),
+        "maturePendingRows": mature_pending_rows,
+        "tickerAttempts": len(tickers),
+        "tickerFailures": ticker_failures,
+        "updatedRows": filled,
+        "matureFilledRows": mature_filled_rows,
+        "unresolvedMatureRows": unresolved_mature_rows,
+        "benchmarkUnavailable": False,
+    }
+
+
+def refresh_event_pipeline(conn):
+    """Enrich exact events before quarantining unverifiable raw rows."""
+    repriced = migrate_methodology(conn)
+    cbs_baselines = migrate_cbs_rollout_baselines(conn)
+    new_events = record_new_events(conn)
+    stress_baselines = migrate_stress_rollout_baselines(conn)
+    order_gap_baselines = migrate_order_gap_rollout_baselines(conn)
+    return_fill = fill_returns(conn)
+    return {
+        "repriced": repriced,
+        "cbsBaselines": cbs_baselines,
+        "stressBaselines": stress_baselines,
+        "orderGapBaselines": order_gap_baselines,
+        "newEvents": new_events,
+        "returnFill": return_fill,
+    }
 
 
 # ── MAIN ─────────────────────────────────────────────────
@@ -691,14 +1329,24 @@ if __name__ == "__main__":
         raise SystemExit("DATABASE_URL not set.")
 
     conn = connect_db(DATABASE_URL)
+    run_context = None
+    run_stats = RunStats(expected=1, details={"benchmark": BENCHMARK})
     try:
+        run_context = begin_run(
+            conn, "signal_scoreboard", expected=1,
+            details={"benchmark": BENCHMARK, "methodologyVersion": METHODOLOGY_VERSION},
+        )
         with conn.cursor() as cur:
             cur.execute(BOOTSTRAP_SQL)
         conn.commit()
 
-        migrate_methodology(conn)
-        record_new_events(conn)
-        fill_returns(conn)
+        refresh = refresh_event_pipeline(conn)
+        repriced = refresh["repriced"]
+        cbs_baselines = refresh["cbsBaselines"]
+        stress_baselines = refresh["stressBaselines"]
+        order_gap_baselines = refresh["orderGapBaselines"]
+        new_events = refresh["newEvents"]
+        return_fill = refresh["returnFill"]
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -707,6 +1355,37 @@ if __name__ == "__main__":
             """)
             for etype, n, matured in cur.fetchall():
                 print(f"  {etype:<18} {n:>4} events · {matured} with 1m returns")
+        run_stats.attempted = 1
+        run_stats.usable = 1
+        run_stats.degraded = (
+            return_fill["tickerFailures"]
+            + return_fill["unresolvedMatureRows"]
+            + int(return_fill["benchmarkUnavailable"])
+        )
+        run_stats.details.update({
+            "methodologyRowsRepriced": repriced,
+            "migrationBaselines": (
+                cbs_baselines + stress_baselines + order_gap_baselines
+            ),
+            "cbsMigrationBaselines": cbs_baselines,
+            "stressMigrationBaselines": stress_baselines,
+            "orderGapMigrationBaselines": order_gap_baselines,
+            "newEvents": new_events,
+            "returnRowsFilled": return_fill["updatedRows"],
+            "returnFill": return_fill,
+        })
+        finish_run(conn, run_context, run_stats)
+    except CoverageError:
+        raise
+    except Exception as error:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        run_stats.attempted = 1
+        run_stats.transient_failures = 1
+        record_failure_safely(conn, run_context, run_stats, error)
+        raise
     finally:
         conn.close()
 

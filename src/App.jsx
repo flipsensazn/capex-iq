@@ -10,10 +10,11 @@ import TopBar from "./components/TopBar";
 import EarningsCalendar from "./components/EarningsCalendar";
 import SupplyGraph from "./components/capex-map/SupplyGraph";
 import TrackPane from "./components/capex-map/TrackPane";
+import { comparableStressTrendDelta } from "./components/capex-map/supplyGraphData";
 import { MUSK_CAPEX_DATA, MUSK_COMPANIES, MUSK_GRAPH_NODES, MUSK_GRAPH_EDGES, MUSK_LAYERS } from "./components/capex-map/muskData";
 import { ROBOTICS_CAPEX_DATA, ROBOTICS_COMPANIES, ROBOTICS_GRAPH_NODES, ROBOTICS_GRAPH_EDGES, ROBOTICS_LAYERS } from "./components/capex-map/roboticsData";
 import { useAdminActions } from "./hooks/useAdminActions";
-import { useDashboardData } from "./hooks/useDashboardData";
+import { buildDashboardDataNotice, useDashboardData } from "./hooks/useDashboardData";
 import { usePresence } from "./hooks/usePresence";
 import { changeOf } from "./lib/priceChange";
 
@@ -1471,6 +1472,7 @@ export default function App() {
     gaugesData,
     exposureData,
     compositeData,
+    datasetHealth,
     scoreboardData,
     candidates,
     setCandidates,
@@ -1724,6 +1726,10 @@ export default function App() {
   const isResearch = view === "research";
   // Standalone views skip the capex-map panels below.
   const isMapView = !isEarnings && !isScanner && !isResearch;
+  const dashboardDataNotice = useMemo(
+    () => isMapView ? buildDashboardDataNotice(datasetHealth) : null,
+    [datasetHealth, isMapView]
+  );
   const activeLiveData = isRobotics ? liveRoboticsData : isMusk ? liveMuskData : liveCapexData;
   const activeIntelStatus = isRobotics ? roboticsIntelStatus : isMusk ? muskIntelStatus : capexIntelStatus;
   const activeIntel = isRobotics ? roboticsIntel : isMusk ? muskIntel : capexIntel;
@@ -1738,13 +1744,16 @@ export default function App() {
       for (const sub of track.subsectors) {
         const companies = [];
         for (const ticker of sub.tickers) {
-          const latest = stressData[ticker]?.latest;
+          const tickerStress = stressData[ticker];
+          const latest = tickerStress?.latest;
           if (!latest || latest.stressScore == null) continue;
-          const prevScore = stressData[ticker]?.prev?.stressScore;
           companies.push({
             ticker,
             score:     latest.stressScore,
-            delta:     prevScore != null ? latest.stressScore - prevScore : null,
+            // The API computes this only across eligible rows produced by the
+            // same model/provider methodology. Never reconstruct a delta from
+            // legacy payloads that lack that comparability boundary.
+            delta:     comparableStressTrendDelta(tickerStress),
             direction: latest.direction,
             summary:   latest.summary,
             quotes:    latest.quotes ?? [],
@@ -1831,6 +1840,7 @@ export default function App() {
         </nav>
 
         <StatusBanner notice={appNotice} onDismiss={() => setAppNotice(null)} />
+        <StatusBanner notice={dashboardDataNotice} />
 
         <div className="main-content" style={{ maxWidth: 1480, margin: "0 auto", padding: "32px 20px 64px", display: "flex", flexDirection: "column", gap: 28, overflowX: "hidden", boxSizing: "border-box", width: "100%" }}>
 

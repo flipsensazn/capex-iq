@@ -1,8 +1,9 @@
+import inspect
 import os
 import sys
 import types
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +31,384 @@ import signal_scoreboard as scoreboard
 
 
 class SignalScoreboardTimingRegressionTests(unittest.TestCase):
+    def test_null_date_breaks_stress_continuity_before_valid_high(self):
+        analyzed_at = datetime(2026, 8, 17, 12, tzinfo=timezone.utc)
+        events = scoreboard.find_transcript_stress_events([
+            (None, 40.0, analyzed_at, "model-a", "provider-a"),
+            (date(2026, 8, 17), 75.0, analyzed_at, "model-a", "provider-a"),
+        ])
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["kind"], "initial")
+        self.assertEqual(events[0]["date"], date(2026, 8, 17))
+
+    def test_stress_model_or_provider_transition_establishes_baseline(self):
+        prior_date = date(2026, 8, 10)
+        current_date = date(2026, 8, 17)
+        prior_analysis = datetime(2026, 8, 10, 12, tzinfo=timezone.utc)
+        current_analysis = datetime(2026, 8, 17, 12, tzinfo=timezone.utc)
+        for current_model, current_provider in (
+            ("model-b", "provider-a"),
+            ("model-a", "provider-b"),
+        ):
+            with self.subTest(
+                current_model=current_model,
+                current_provider=current_provider,
+            ):
+                events = scoreboard.find_transcript_stress_events([
+                    (prior_date, 40.0, prior_analysis, "model-a", "provider-a"),
+                    (
+                        current_date, 75.0, current_analysis,
+                        current_model, current_provider,
+                    ),
+                ])
+                self.assertEqual(events, [])
+
+        stable = scoreboard.find_transcript_stress_events([
+            (prior_date, 40.0, prior_analysis, "model-a", "provider-a"),
+            (current_date, 75.0, current_analysis, "model-a", "provider-a"),
+        ])
+        self.assertEqual(len(stable), 1)
+        self.assertEqual(stable[0]["kind"], "cross")
+
+    def test_stress_freshness_is_stable_at_analysis_observation(self):
+        call_date = date(2020, 1, 1)
+        old_but_fresh = (
+            call_date,
+            75.0,
+            datetime(2020, 1, 31, 12, tzinfo=timezone.utc),
+            "model-a",
+            "provider-a",
+        )
+        stale = (
+            call_date,
+            75.0,
+            datetime(2021, 1, 1, 12, tzinfo=timezone.utc),
+            "model-a",
+            "provider-a",
+        )
+        future = (
+            date(2020, 2, 8),
+            75.0,
+            datetime(2020, 1, 31, 12, tzinfo=timezone.utc),
+            "model-a",
+            "provider-a",
+        )
+
+        self.assertEqual(
+            len(scoreboard.find_transcript_stress_events([old_but_fresh])),
+            1,
+        )
+        self.assertEqual(scoreboard.find_transcript_stress_events([stale]), [])
+        self.assertEqual(scoreboard.find_transcript_stress_events([future]), [])
+
+    def test_detected_stress_persists_source_method_and_period_provenance(self):
+        today = date.today()
+        analyzed_at = datetime.now(timezone.utc)
+        result_sets = [
+            [],
+            [("TEST", today, 75.0, analyzed_at, "model-a", "provider-a")],
+            [],
+            [],
+        ]
+        queries = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, *_args):
+                queries.append(sql)
+
+            def fetchall(self):
+                return result_sets.pop(0)
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        events = scoreboard.detect_events(Connection())
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        details = event["details"]
+        self.assertEqual(event["event_type"], "stress_cross_70")
+        self.assertEqual(
+            details["transcriptSourceMethodology"],
+            "transcript-stress-v1:model:model-a:provider:provider-a",
+        )
+        self.assertEqual(details["transcriptSourcePeriodEnd"], today.isoformat())
+        self.assertEqual(
+            details["transcriptSourceProvenance"]["provider"],
+            "provider-a",
+        )
+        transcript_query = next(
+            sql for sql in queries if "FROM transcript_stress" in sql
+        )
+        self.assertIn("analyzed_at, model, provider", transcript_query)
+
+    def test_order_gap_requires_verified_fresh_score_period(self):
+        today = date(2026, 8, 17)
+
+        def row(period, provenance, gap=60.0):
+            return (
+                today, gap, datetime(2026, 8, 17, 12, tzinfo=timezone.utc),
+                period, provenance,
+            )
+
+        def provenance(period, methodology="xbrl-gauge-score-period-v1"):
+            return {
+                "methodology": methodology,
+                "scoreDriver": "backlog",
+                "scorePeriodEnd": period.isoformat(),
+            }
+
+        valid_period = today - timedelta(days=30)
+        valid = scoreboard.find_order_gap_events(
+            [row(valid_period, provenance(valid_period))],
+        )
+        self.assertEqual(len(valid), 1)
+        self.assertEqual(valid[0]["kind"], "initial")
+
+        invalid_rows = [
+            row(valid_period, None),
+            row(
+                valid_period,
+                provenance(valid_period, methodology="xbrl-gauge-score-period-v0"),
+            ),
+            row(
+                valid_period,
+                {
+                    **provenance(valid_period),
+                    "scoreDriver": "inventory",
+                },
+            ),
+            row(
+                valid_period,
+                provenance(valid_period - timedelta(days=90)),
+            ),
+            row(
+                today - timedelta(days=366),
+                provenance(today - timedelta(days=366)),
+            ),
+            row(
+                today + timedelta(days=8),
+                provenance(today + timedelta(days=8)),
+            ),
+        ]
+        for invalid in invalid_rows:
+            with self.subTest(invalid=invalid[3:]):
+                self.assertEqual(
+                    scoreboard.find_order_gap_events([invalid]),
+                    [],
+                )
+
+        tolerated_future = today + timedelta(days=7)
+        self.assertEqual(
+            len(scoreboard.find_order_gap_events(
+                [row(tolerated_future, provenance(tolerated_future))],
+            )),
+            1,
+        )
+
+    def test_ineligible_order_gap_row_breaks_crossing_continuity(self):
+        today = date(2026, 8, 17)
+        period = today - timedelta(days=30)
+        verified = {
+            "methodology": "xbrl-gauge-score-period-v1",
+            "scoreDriver": "backlog",
+            "scorePeriodEnd": period.isoformat(),
+        }
+        series = [
+            (date(2026, 8, 3), 40.0, None, period, verified),
+            (date(2026, 8, 10), 60.0, None, period, None),
+            (date(2026, 8, 17), 60.0, None, period, verified),
+        ]
+
+        events = scoreboard.find_order_gap_events(series)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["date"], date(2026, 8, 17))
+        self.assertEqual(events[0]["kind"], "initial")
+
+    def test_order_gap_freshness_is_stable_at_each_observation_date(self):
+        source_period = date(2023, 12, 31)
+        provenance = {
+            "methodology": "xbrl-gauge-score-period-v1",
+            "scoreDriver": "backlog",
+            "scorePeriodEnd": source_period.isoformat(),
+        }
+        old_but_fresh_when_observed = (
+            date(2024, 1, 31), 60.0, None, source_period, provenance,
+        )
+        stale_when_observed = (
+            source_period + timedelta(days=366),
+            60.0, None, source_period, provenance,
+        )
+
+        self.assertEqual(
+            len(scoreboard.find_order_gap_events([old_but_fresh_when_observed])),
+            1,
+        )
+        self.assertEqual(
+            scoreboard.find_order_gap_events([stale_when_observed]),
+            [],
+        )
+
+    def test_detected_order_gap_persists_exact_period_provenance(self):
+        today = date.today()
+        period = today - timedelta(days=30)
+        fetched_at = datetime.now(timezone.utc)
+        period_provenance = {
+            "methodology": "xbrl-gauge-score-period-v1",
+            "scoreDriver": "backlog",
+            "scorePeriodEnd": period.isoformat(),
+        }
+        result_sets = [
+            [],
+            [],
+            [("TEST", today, 60.0, fetched_at, period, period_provenance)],
+            [],
+        ]
+        queries = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, *_args):
+                queries.append(sql)
+
+            def fetchall(self):
+                return result_sets.pop(0)
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        events = scoreboard.detect_events(Connection())
+
+        self.assertEqual(len(events), 1)
+        details = events[0]["details"]
+        self.assertEqual(events[0]["event_type"], "order_gap_50")
+        self.assertEqual(
+            details["gaugeSourceMethodology"],
+            "xbrl-gauges-v2-score-period",
+        )
+        self.assertEqual(details["gaugeSourcePeriodEnd"], period.isoformat())
+        self.assertEqual(details["gaugeLatestQuarterEnd"], period.isoformat())
+        self.assertEqual(details["gaugePeriodProvenance"], period_provenance)
+        gauge_query = next(sql for sql in queries if "FROM xbrl_gauges" in sql)
+        self.assertIn("to_jsonb(xbrl_gauges)->'period_provenance'", gauge_query)
+        self.assertIn("latest_quarter_end", gauge_query)
+
+    def test_order_gap_rollout_migration_is_idempotent_and_pre_maturity(self):
+        sql = scoreboard.ORDER_GAP_ROLLOUT_BASELINE_MIGRATION_SQL
+        self.assertIn("event_type = 'order_gap_50'", sql)
+        self.assertIn("gaugePeriodProvenance,methodology", sql)
+        self.assertIn("gaugePeriodProvenance,scoreDriver", sql)
+        self.assertIn("gaugePeriodProvenance,scorePeriodEnd", sql)
+        self.assertIn("'migration_baseline'", sql)
+        self.assertIn("ret_1w IS NULL", sql)
+        self.assertIn("ret_3m IS NULL", sql)
+        self.assertIn(
+            "CURRENT_DATE < COALESCE(entry_date, event_date) + 7", sql,
+        )
+        self.assertIn(
+            "<> 'migration_baseline'",
+            sql,
+        )
+        self.assertIn(
+            "<> 'migration_baseline'",
+            inspect.getsource(scoreboard.fill_returns),
+        )
+        merged = scoreboard.merge_event_details(
+            {
+                "cohort": "retrospective",
+                "kind": "migration_baseline",
+                "eventClassification": "migration_baseline",
+                "baselineReason": "missing_verified_gauge_period_provenance",
+            },
+            {
+                "cohort": "prospective",
+                "kind": "cross",
+                "timingBasis": "source_timestamp",
+            },
+        )
+        self.assertEqual(merged["cohort"], "retrospective")
+        self.assertEqual(merged["kind"], "migration_baseline")
+        self.assertEqual(merged["eventClassification"], "migration_baseline")
+
+    def test_stress_rollout_migration_is_idempotent_and_pre_maturity(self):
+        sql = scoreboard.STRESS_ROLLOUT_BASELINE_MIGRATION_SQL
+        self.assertIn("event_type = 'stress_cross_70'", sql)
+        self.assertIn("transcriptSourceMethodology", sql)
+        self.assertIn("transcriptSourcePeriodEnd", sql)
+        self.assertIn("transcriptSourceProvenance,provider", sql)
+        self.assertIn("'migration_baseline'", sql)
+        self.assertIn("ret_1w IS NULL", sql)
+        self.assertIn("ret_3m IS NULL", sql)
+        self.assertIn("<> 'migration_baseline'", sql)
+        self.assertIn(
+            "CURRENT_DATE < COALESCE(entry_date, event_date) + 7", sql,
+        )
+
+    def test_valid_exact_events_are_enriched_before_order_gap_quarantine(self):
+        calls = []
+        empty_fill = {
+            "pendingRows": 0,
+            "maturePendingRows": 0,
+            "tickerAttempts": 0,
+            "tickerFailures": 0,
+            "updatedRows": 0,
+            "matureFilledRows": 0,
+            "unresolvedMatureRows": 0,
+            "benchmarkUnavailable": False,
+        }
+        with (
+            mock.patch.object(
+                scoreboard, "migrate_methodology",
+                side_effect=lambda _conn: calls.append("methodology") or 0,
+            ),
+            mock.patch.object(
+                scoreboard, "migrate_cbs_rollout_baselines",
+                side_effect=lambda _conn: calls.append("cbs-migration") or 0,
+            ),
+            mock.patch.object(
+                scoreboard, "record_new_events",
+                side_effect=lambda _conn: calls.append("event-enrichment") or 1,
+            ),
+            mock.patch.object(
+                scoreboard, "migrate_stress_rollout_baselines",
+                side_effect=lambda _conn: calls.append("stress-migration") or 0,
+            ),
+            mock.patch.object(
+                scoreboard, "migrate_order_gap_rollout_baselines",
+                side_effect=lambda _conn: calls.append("order-gap-migration") or 0,
+            ),
+            mock.patch.object(
+                scoreboard, "fill_returns",
+                side_effect=lambda _conn: calls.append("return-fill") or empty_fill,
+            ),
+        ):
+            result = scoreboard.refresh_event_pipeline(object())
+
+        self.assertEqual(calls, [
+            "methodology",
+            "cbs-migration",
+            "event-enrichment",
+            "stress-migration",
+            "order-gap-migration",
+            "return-fill",
+        ])
+        self.assertEqual(result["newEvents"], 1)
+
     def test_cohort_boundary_keeps_later_discovered_backfills_retrospective(self):
         boundary = date(2026, 8, 17)
         self.assertEqual(
@@ -86,6 +465,24 @@ class SignalScoreboardTimingRegressionTests(unittest.TestCase):
         self.assertEqual(
             scoreboard.entry_target_date(event_date, {"cohort": "prospective"}),
             date(2026, 8, 18),
+        )
+
+    def test_future_dated_transcript_cannot_price_before_call_date(self):
+        analyzed_at = datetime(2026, 8, 17, 15, tzinfo=timezone.utc)
+        call_date = date(2026, 8, 18)
+        events = scoreboard.find_transcript_stress_events([(
+            call_date, 75.0, analyzed_at, "model-a", "provider-a",
+        )])
+
+        self.assertEqual(len(events), 1)  # one-day metadata tolerance remains
+        details = scoreboard.event_details(
+            call_date,
+            {"kind": events[0]["kind"]},
+            events[0]["available_at"],
+        )
+        self.assertEqual(
+            scoreboard.entry_target_date(call_date, details),
+            date(2026, 8, 19),
         )
 
     def test_exchange_calendar_handles_early_close_and_holiday(self):

@@ -132,17 +132,43 @@ export const CompositeChip = memo(function CompositeChip({ tickers, composite, o
 // Tiny inline history sparkline for the drilldown rows.
 export function CbsSparkline({ history, color = "var(--ink-300)" }) {
   if (!history || history.length < 2) return null;
-  const scores = history.map(h => h.score).filter(s => s != null);
+  const scores = history.map(point => point.score).filter(score => score != null);
   if (scores.length < 2) return null;
   const w = 64, h = 16;
   const min = Math.min(...scores), max = Math.max(...scores);
   const range = max - min || 1;
-  const pts = scores.map((s, i) =>
-    `${(i / (scores.length - 1)) * w},${h - 2 - ((s - min) / range) * (h - 4)}`).join(" ");
+  const segments = [];
+  let segment = [];
+  const flush = () => {
+    if (segment.length) segments.push(segment);
+    segment = [];
+  };
+  history.forEach((point, index) => {
+    if (point.score == null) {
+      flush();
+      return;
+    }
+    if (point.breakBefore) flush();
+    segment.push({
+      x: (index / (history.length - 1)) * w,
+      y: h - 2 - ((point.score - min) / range) * (h - 4),
+    });
+  });
+  flush();
   return (
     <svg width={w} height={h} style={{ display: "inline-block", verticalAlign: "middle" }}
       title={`${scores.length} weekly snapshots`}>
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.2" />
+      {segments.map((points, index) => points.length > 1 ? (
+        <polyline
+          key={index}
+          points={points.map(point => `${point.x},${point.y}`).join(" ")}
+          fill="none"
+          stroke={color}
+          strokeWidth="1.2"
+        />
+      ) : (
+        <circle key={index} cx={points[0].x} cy={points[0].y} r="1" fill={color} />
+      ))}
     </svg>
   );
 }
