@@ -1,6 +1,7 @@
 // functions/history.js
 
-import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./access-lib.js";
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
+import { hasFeature } from "./entitlements.js";
 
 const CACHE_TTL_SECONDS = 60 * 60;
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
@@ -96,7 +97,7 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Forbidden" }, 403, headers);
   }
   const email = accessPayload?.email?.toLowerCase();
-  if (!isAnalyzeAllowedEmail(email, env)) {
+  if (!(await hasFeature(email, env, "research"))) {
     return jsonResponse({
       error: "Analysis access is not enabled for this account",
       code: "members_only",

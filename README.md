@@ -62,6 +62,19 @@ either value. Set `ACCESS_MEMBERS_LIST_ID` (preferred) or
 intended roster; exact-name discovery is only a fail-closed fallback. Use
 Cloudflare's published test keys for local development.
 
+### Member entitlements
+
+Per-member feature grants live in `SHARED_DATA` KV under a lowercased
+`member:<email>` key. Each record contains a `features` object with boolean
+grants, for example:
+
+```sh
+npx wrangler kv key put --namespace-id 1dadc46e52b146bea2fbc4b8511c7d90 "member:someone@example.com" '{"features":{"research":true,"radar":true}}'
+```
+
+Admins listed in `ADMIN_EMAILS` implicitly hold every feature.
+`ANALYZE_ALLOWED_EMAILS` remains a research-only bootstrap fallback.
+
 ### /prices caching model
 
 Two KV layers: a 60s quote cache (hit check is subset-based against the

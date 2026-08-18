@@ -1,6 +1,7 @@
 // functions/research.js
 
-import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./access-lib.js";
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
+import { hasFeature } from "./entitlements.js";
 import { onRequest as fundamentalsHandler } from "./fundamentals.js";
 import { onRequest as historyHandler } from "./history.js";
 import { findNotablePoints } from "./notable-points.js";
@@ -468,7 +469,7 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Forbidden" }, 403, headers);
   }
   const email = accessPayload?.email?.toLowerCase();
-  if (!isAnalyzeAllowedEmail(email, env)) {
+  if (!(await hasFeature(email, env, "research"))) {
     return jsonResponse({
       error: "Analysis access is not enabled for this account",
       code: "members_only",

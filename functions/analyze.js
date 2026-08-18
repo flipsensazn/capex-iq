@@ -7,7 +7,8 @@
 // then synthesizes into a markdown report with a BUY/HOLD/SELL score and
 // 3-year price projection.  Results cached in KV for 24 hours.
 
-import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./access-lib.js";
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
+import { hasFeature } from "./entitlements.js";
 
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
@@ -381,7 +382,7 @@ export async function onRequest(context) {
     return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers });
   }
   const email = accessPayload?.email?.toLowerCase();
-  if (!isAnalyzeAllowedEmail(email, env)) {
+  if (!(await hasFeature(email, env, "research"))) {
     return new Response(
       JSON.stringify({
         error: "Analysis access is not enabled for this account",

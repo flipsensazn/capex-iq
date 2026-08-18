@@ -1,6 +1,7 @@
 // functions/fundamentals.js
 
-import { getAccessPayload, isAnalyzeAllowedEmail, isTrustedOrigin } from "./access-lib.js";
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
+import { hasFeature } from "./entitlements.js";
 
 const SEC_USER_AGENT = "CapexIQ Research flipsensazn@gmail.com";
 const CIK_MAP_CACHE_KEY = "secCikMap_v1";
@@ -322,7 +323,7 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Forbidden" }, 403, headers);
   }
   const email = accessPayload?.email?.toLowerCase();
-  if (!isAnalyzeAllowedEmail(email, env)) {
+  if (!(await hasFeature(email, env, "research"))) {
     return jsonResponse({
       error: "Analysis access is not enabled for this account",
       code: "members_only",
