@@ -203,7 +203,7 @@ function cagr(series, fiscalYears) {
   return Number.isFinite(value) ? value : null;
 }
 
-function buildResult(ticker, cik, companyFacts) {
+function buildResult(companyFacts) {
   const extracted = extractConcepts(companyFacts?.facts?.["us-gaap"] || {});
   const sharesOutstanding = extractSharesOutstanding(companyFacts?.facts?.dei || {});
   const fiscalYears = [...new Set(
@@ -243,12 +243,7 @@ function buildResult(ticker, cik, companyFacts) {
   });
 
   return {
-    ticker,
-    cik,
-    entityName: companyFacts?.entityName || null,
     fiscalYears,
-    currency: "USD",
-    sharesOutstanding,
     statements: {
       income: {
         revenue: values.revenue,
@@ -282,9 +277,12 @@ function buildResult(ticker, cik, companyFacts) {
       netIncomeCagr: cagr(values.netIncome, fiscalYears),
       revenueYoy,
     },
-    source: "SEC XBRL companyfacts",
-    retrievedAt: new Date().toISOString(),
+    sharesOutstanding,
   };
+}
+
+export function buildFundamentalsFromCompanyFacts(companyFacts) {
+  return buildResult(companyFacts);
 }
 
 export async function onRequest(context) {
@@ -354,7 +352,20 @@ export async function onRequest(context) {
       `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
       request.signal
     );
-    const result = buildResult(ticker, cik, companyFacts);
+    const fundamentals = buildFundamentalsFromCompanyFacts(companyFacts);
+    const result = {
+      ticker,
+      cik,
+      entityName: companyFacts?.entityName || null,
+      fiscalYears: fundamentals.fiscalYears,
+      currency: "USD",
+      sharesOutstanding: fundamentals.sharesOutstanding,
+      statements: fundamentals.statements,
+      metrics: fundamentals.metrics,
+      growth: fundamentals.growth,
+      source: "SEC XBRL companyfacts",
+      retrievedAt: new Date().toISOString(),
+    };
     companyFacts = null;
     await writeKvJson(env.SHARED_DATA, cacheKey, result, FUNDAMENTALS_TTL_SECONDS);
     return jsonResponse(result, 200, headers);

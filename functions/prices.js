@@ -125,7 +125,7 @@ function quoteIsStale(q, cd) {
 // instead resolve each period to its reference CLOSE once, cache the refs in
 // KV for REFS_TTL_MS, and recompute the percentage against the live price on
 // every request (so cached refs never serve a stale current-day number).
-function findRefPrices(timestamps, closes) {
+export function findRefPrices(timestamps, closes) {
   if (!timestamps || !closes || timestamps.length === 0) return {};
 
   const now = Date.now() / 1000;
@@ -156,7 +156,7 @@ function findRefPrices(timestamps, closes) {
   return refs;
 }
 
-function pctFrom(ref, price) {
+export function pctFrom(ref, price) {
   return (ref > 0 && price > 0)
     ? parseFloat((((price - ref) / ref) * 100).toFixed(2))
     : null;

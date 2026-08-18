@@ -2,6 +2,7 @@ const MANIFEST_STATES = new Set(["running", "success", "degraded", "failure"]);
 const RUNNING_LEASE_HOURS = {
   transcript_stress: 3,
   xbrl_gauges: 2,
+  radar_scores: 2,
   customer_exposure: 4,
   composite_score: 1,
   signal_scoreboard: 2,
