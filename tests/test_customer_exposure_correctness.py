@@ -288,6 +288,58 @@ class CustomerExposureCorrectnessTests(unittest.TestCase):
             )
         self.assertEqual(rows[0]["pct"], 12)
 
+    def test_allocation_grammar_accepts_real_disclosure_shapes(self):
+        nvda_participle = (
+            "we generate a significant amount of our revenue from a limited "
+            "number of indirect customers, some individually representing 10% "
+            "or more of our revenue."
+        )
+        intc_table = (
+            "our three largest customers accounted for the following percentages "
+            "of our net revenue: years ended dec 27, 2025 ... customer a 19 % 19 % "
+            "19 % customer b 12 % 14 % 11 % ..."
+        )
+        intc_receivables = (
+            "we believe the net accounts receivable balances from our three "
+            "largest customers ( 47 % as of december 27, 2025 and december 28, "
+            "2024) do not represent a significant credit risk..."
+        )
+        cases = (
+            ("participle", nvda_participle, [10.0]),
+            ("table", intc_table, [19.0, 19.0, 19.0, 12.0, 14.0, 11.0]),
+            ("receivables", intc_receivables, [47.0]),
+        )
+
+        for shape, quote, expected in cases:
+            with self.subTest(shape=shape):
+                self.assertEqual(
+                    customer_exposure._allocation_percentage_values(quote),
+                    expected,
+                )
+        self.assertTrue(
+            customer_exposure._basis_in_clause(
+                intc_receivables, "accounts_receivable"
+            )
+        )
+        self.assertFalse(
+            customer_exposure._basis_in_clause(intc_receivables, "revenue")
+        )
+
+    def test_allocation_grammar_rejects_growth_and_geographic_percentages(self):
+        non_allocations = (
+            "dcai revenue increased 5% from 2024 driven by higher server revenue "
+            "due to higher hyperscale customer-related demand",
+            "our revenue from sales of products and provision of services to "
+            "customers in china was 30%, 33% and 43% for fiscal years 2026, 2025 "
+            "and 12 table of contents 2024, respectively",
+        )
+
+        for quote in non_allocations:
+            with self.subTest(quote=quote):
+                self.assertEqual(
+                    customer_exposure._allocation_percentage_values(quote), []
+                )
+
     def test_plural_revenues_is_valid_basis_language(self):
         quote = "Customer A accounted for 23% of revenues in fiscal 2025."
         model_row = {

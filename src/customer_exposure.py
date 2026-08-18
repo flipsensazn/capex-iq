@@ -459,9 +459,10 @@ def _basis_in_clause(clause, basis):
 
 
 ALLOCATION_VERB_PATTERN = (
-    r"(?:account(?:ed)?\s+for|represent(?:ed)?|compris(?:ed|e)|"
-    r"constitut(?:ed|e)|generat(?:ed|e)|contribut(?:ed|e)|"
-    r"made\s+up|make\s+up)"
+    r"(?:account(?:ed|ing)?\s+for|represent(?:ed|ing)?|"
+    r"compris(?:e|ed|es|ing)|constitut(?:e|ed|es|ing)|"
+    r"generat(?:e|ed|es|ing)|contribut(?:e|ed|es|ing)|"
+    r"(?:made|make|making)\s+up)"
 )
 ALLOCATION_BASIS_PATTERN = (
     r"(?:revenues?|sales|accounts?\s+receivable|receivables)"
@@ -530,6 +531,21 @@ def _allocation_percentage_values(clause):
     for pattern in patterns:
         for match in re.finditer(pattern, clause, re.I):
             values.extend(_percentage_values(match.group(0)))
+
+    table_pattern = (
+        rf"\bcustomers?\b[^.!?;]*?\b{ALLOCATION_VERB_PATTERN}\b"
+        rf"[^.!?;]{{0,120}}?\b{ALLOCATION_BASIS_PATTERN}\b"
+    )
+    for match in re.finditer(table_pattern, clause, re.I):
+        values.extend(_percentage_values(clause[match.end():]))
+
+    receivables_pattern = (
+        r"\b(?:accounts?\s+receivable|receivables)\b"
+        r"[^.!?;]*?\bfrom\b[^.!?;]*?\bcustomers?\b"
+        r"[^.!?;()]{0,160}?\((?P<values>[^.!?;)]{0,160})\)"
+    )
+    for match in re.finditer(receivables_pattern, clause, re.I):
+        values.extend(_percentage_values(match.group("values")))
     return values
 
 
