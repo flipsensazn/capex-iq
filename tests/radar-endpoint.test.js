@@ -295,10 +295,24 @@ test("radar assembles the latest snapshot and previous scores from the two newes
     },
     {
       ticker: "FUND",
+      as_of_date: "2099-01-08",
+      coverage: "fund",
+      quality_score: null,
+      technical_score: "61.5",
+      chain_count: "1",
+      chains: ["ai"],
+      memberships: { ai: ["Funds"] },
+      fund_profile: JSON.stringify(fundProfile),
+      price: "49.75",
+      market_cap: null,
+      computed_at: "2099-01-08T08:00:00Z",
+    },
+    {
+      ticker: "FUND",
       as_of_date: "2099-01-15",
       coverage: "fund",
       quality_score: null,
-      technical_score: null,
+      technical_score: "66",
       chain_count: "1",
       chains: ["ai"],
       memberships: { ai: ["Funds"] },
@@ -336,9 +350,9 @@ test("radar assembles the latest snapshot and previous scores from the two newes
         ticker: "FUND",
         coverage: "fund",
         quality: null,
-        technical: null,
+        technical: 66,
         prevQuality: null,
-        prevTechnical: null,
+        prevTechnical: 61.5,
         chainCount: 1,
         chains: ["ai"],
         memberships: { ai: ["Funds"] },
@@ -346,6 +360,10 @@ test("radar assembles the latest snapshot and previous scores from the two newes
         price: 51.25,
         marketCap: null,
         asOf: "2099-01-15",
+        trend: [
+          { asOf: "2099-01-08", quality: null, technical: 61.5 },
+          { asOf: "2099-01-15", quality: null, technical: 66 },
+        ],
       },
       {
         ticker: "NVDA",
@@ -361,6 +379,10 @@ test("radar assembles the latest snapshot and previous scores from the two newes
         price: 950.5,
         marketCap: 2300000000000,
         asOf: "2099-01-15",
+        trend: [
+          { asOf: "2099-01-08", quality: 79.5, technical: 68 },
+          { asOf: "2099-01-15", quality: 84.5, technical: 74 },
+        ],
       },
     ]);
     assert.equal(body.health.pipeline, "radar_scores");
@@ -370,12 +392,45 @@ test("radar assembles the latest snapshot and previous scores from the two newes
     const dataQuery = harness.queries.find(({ query }) => !query.includes("etl_run_manifest"));
     assert.match(dataQuery.query, /SELECT DISTINCT as_of_date/);
     assert.match(dataQuery.query, /fund_profile/);
-    assert.match(dataQuery.query, /LIMIT 2/);
+    assert.match(dataQuery.query, /LIMIT 12/);
     assert.equal(dataQuery.params, undefined);
     assert.equal(harness.kv.puts.length, 1);
-    assert.equal(harness.kv.puts[0].key, "radarView_v2");
+    assert.equal(harness.kv.puts[0].key, "radarView_v3");
     assert.deepEqual(harness.kv.puts[0].options, { expirationTtl: 3600 });
     assert.deepEqual(JSON.parse(harness.kv.puts[0].value), body);
+  });
+});
+
+test("radar caps list trends at twelve ascending points and preserves previous scores", { concurrency: false }, async () => {
+  const radarRows = Array.from({ length: 13 }, (_, index) => ({
+    ticker: "NVDA",
+    as_of_date: new Date(Date.UTC(2099, 0, 15 - index)).toISOString().slice(0, 10),
+    coverage: "scored",
+    quality_score: String(90 - index),
+    technical_score: String(80 - index),
+    chain_count: "1",
+    chains: ["ai"],
+    memberships: { ai: ["Semiconductors"] },
+    price: "950",
+    market_cap: "2300000000000",
+    computed_at: new Date(Date.UTC(2099, 0, 15 - index, 8)).toISOString(),
+  }));
+  const harness = await createHarness({ radarRows });
+
+  await withFetch(harness.fetchStub, async () => {
+    const response = await radar({ request: radarRequest(harness.access.jwt), env: harness.env });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.rows.length, 1);
+    assert.equal(body.rows[0].prevQuality, 89);
+    assert.equal(body.rows[0].prevTechnical, 79);
+    assert.equal(body.rows[0].trend.length, 12);
+    assert.deepEqual(body.rows[0].trend, radarRows.slice(0, 12).reverse().map(row => ({
+      asOf: row.as_of_date,
+      quality: Number(row.quality_score),
+      technical: Number(row.technical_score),
+    })));
   });
 });
 
@@ -407,6 +462,9 @@ test("radar leaves previous scores null when only one snapshot date exists", { c
     assert.equal(body.rows[0].technical, 63.5);
     assert.equal(body.rows[0].prevQuality, null);
     assert.equal(body.rows[0].prevTechnical, null);
+    assert.deepEqual(body.rows[0].trend, [
+      { asOf: "2099-01-15", quality: 58, technical: 63.5 },
+    ]);
   });
 });
 
@@ -496,7 +554,7 @@ test("radar detail returns full component JSON and a newest-first twelve-point t
     assert.match(harness.queries[0].query, /fund_profile/);
     assert.match(harness.queries[0].query, /LIMIT 12/);
     assert.equal(harness.kv.puts.length, 0);
-    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v2"), false);
+    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v3"), false);
   });
 });
 
@@ -528,7 +586,7 @@ test("radar rejects an invalid detail ticker before querying Neon", { concurrenc
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { error: "Invalid ticker format" });
     assert.equal(harness.queries.length, 0);
-    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v2"), false);
+    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v3"), false);
   });
 });
 
@@ -550,10 +608,14 @@ test("radar serves the screener KV cache without querying Neon", { concurrency: 
       price: 950,
       marketCap: 2300000000000,
       asOf: "2099-01-15",
+      trend: [
+        { asOf: "2099-01-08", quality: 80, technical: 70 },
+        { asOf: "2099-01-15", quality: 84, technical: 74 },
+      ],
     }],
     health: { pipeline: "radar_scores", state: "success", stale: false },
   };
-  const harness = await createHarness({ initialKv: { radarView_v2: cached } });
+  const harness = await createHarness({ initialKv: { radarView_v3: cached } });
 
   await withFetch(harness.fetchStub, async () => {
     const response = await radar({ request: radarRequest(harness.access.jwt), env: harness.env });
@@ -564,6 +626,6 @@ test("radar serves the screener KV cache without querying Neon", { concurrency: 
     assert.equal(harness.queries.length, 0);
     assert.equal(harness.jwksFetches, 1);
     assert.equal(harness.kv.puts.length, 0);
-    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v2"), true);
+    assert.equal(harness.kv.gets.some(({ key }) => key === "radarView_v3"), true);
   });
 });
