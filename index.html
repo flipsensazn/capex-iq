@@ -263,7 +263,7 @@ footer{border-top:1px solid var(--border-hairline)}
   <div class="chrome-inner">
     <div class="wordmark" style="font-size:19px">CAPEX<span class="iq">-IQ</span></div>
     <div style="display:flex;gap:10px;align-items:center">
-      <a class="btn btn-ghost btn-sm" href="/app">Sign In</a>
+      <a class="btn btn-ghost btn-sm" href="/auth">Sign In</a>
       <a class="btn btn-primary btn-sm glow" href="#register">Register Free</a>
     </div>
   </div>
@@ -279,7 +279,7 @@ footer{border-top:1px solid var(--border-hairline)}
     <p class="hero-sub">CAPEX-IQ reads earnings-call language, filed backlogs, and customer concentration to find the narrowest link in the AI supply chain — then grades its own signals against the market.</p>
     <div class="hero-cta">
       <a class="btn btn-primary btn-lg glow" href="#register">Register Free</a>
-      <a class="btn btn-ghost btn-lg" href="/app">See the terminal →</a>
+      <a class="btn btn-ghost btn-lg" href="/app">Explore the live dashboard →</a>
     </div>
   </div>
   <div class="hero-foot left">2026 // CAPEX-IQ PLATFORM V2.0</div>
@@ -834,7 +834,7 @@ footer{border-top:1px solid var(--border-hairline)}
   });
 
   signInBtn.addEventListener("click", function(){
-    if (!signInBtn.disabled) window.location.href = "/app";
+    if (!signInBtn.disabled) window.location.href = "/auth";
   });
 
   function armSignIn(){

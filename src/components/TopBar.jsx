@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Wordmark } from "./ds";
+import { Button, Wordmark } from "./ds";
 
 const TOP_BAR_TICKERS = [
   { ticker: "^GSPC", label: "S&P 500", color: "var(--info-400)" },
@@ -220,7 +220,7 @@ function MarketClock() {
   );
 }
 
-function MarketClockCompact() {
+function MarketClockCompact({ minimal = false }) {
   const [tick, setTick] = useState(() => Date.now());
 
   useEffect(() => {
@@ -250,9 +250,9 @@ function MarketClockCompact() {
         <span style={{ width: 5, height: 5, borderRadius: "50%", background: dotColor, display: "inline-block", boxShadow: isOpen ? `0 0 5px ${dotColor}` : "none", animation: isOpen ? "pulseDot 2s infinite" : "none" }} />
         <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.15em", color: labelColor }}>{label}</span>
       </div>
-      <span style={{ fontSize: 9, color: "var(--ink-600)" }}>{subLabel} in</span>
+      {!minimal && <span style={{ fontSize: 9, color: "var(--ink-600)" }}>{subLabel} in</span>}
       <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", color: isOpen ? "var(--pos)" : isExt ? "var(--warn)" : "var(--ink-500)" }}>{countdown}</span>
-      <span style={{ fontSize: 9, color: "var(--ink-700)", letterSpacing: "0.04em" }}>{etTime}</span>
+      {!minimal && <span style={{ fontSize: 9, color: "var(--ink-700)", letterSpacing: "0.04em" }}>{etTime}</span>}
     </div>
   );
 }
@@ -275,7 +275,20 @@ function OnlineDot({ count, compact = false }) {
   );
 }
 
-export default function TopBar({ marketData, onlineCount }) {
+function AnonymousActions({ compact = false }) {
+  const buttonStyle = compact
+    ? { fontSize: 9, padding: "1px 7px" }
+    : { fontSize: 10, padding: "5px 10px" };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: compact ? 4 : 6, flexShrink: 0 }}>
+      <Button as="a" href="/auth" variant="ghost" size="sm" style={buttonStyle}>Sign in</Button>
+      <Button as="a" href="/#register" variant="primary" size="sm" style={buttonStyle}>Join free</Button>
+    </div>
+  );
+}
+
+export default function TopBar({ marketData, onlineCount, isAnonymous = false }) {
   const barRef = useRef(null);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
@@ -353,8 +366,9 @@ export default function TopBar({ marketData, onlineCount }) {
         {/* No wordmark on the mobile bar, so the viewer count rides alongside
             the clock rather than being dropped entirely. */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "3px 8px 4px", gap: 10, borderTop: "1px solid var(--border-hairline)" }}>
-          <MarketClockCompact />
+          <MarketClockCompact minimal={isAnonymous} />
           <OnlineDot count={onlineCount} compact />
+          {isAnonymous && <AnonymousActions compact />}
         </div>
       </div>
     );
@@ -448,6 +462,7 @@ export default function TopBar({ marketData, onlineCount }) {
       </div>
       <div style={{ flexShrink: 0, marginLeft: 14, display: "flex", alignItems: "center", gap: 16 }}>
         <MarketClock />
+        {isAnonymous && <AnonymousActions />}
       </div>
     </div>
   );

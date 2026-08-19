@@ -159,7 +159,7 @@ export default function CapexSankey({
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ fontSize: 9.5, color: "var(--ink-500)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Guidance trend</div>
           {historyLocked
-            ? <span style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</span>
+            ? <a href="/#register" style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)", textDecoration: "none" }}>🔒 Members — join free</a>
             : history?.length >= 2
               ? <Sparkline history={history} />
               : <span style={{ fontSize: 10, color: "var(--ink-500)" }}>building history…</span>}
