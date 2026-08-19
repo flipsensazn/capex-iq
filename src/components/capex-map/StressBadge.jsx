@@ -26,7 +26,8 @@ function TrendArrow({ trend }) {
 
 // Compact chip shown in the SubsectorCard header. Live counterpart to the
 // hand-curated badge — derived from earnings-call language, not opinion.
-const StressBadge = memo(function StressBadge({ stress, onClick, open }) {
+const StressBadge = memo(function StressBadge({ stress, locked = false, onClick, open }) {
+  if (locked) return null;
   if (!stress || stress.count === 0) return null;
   const color = stressColor(stress.score);
   return (

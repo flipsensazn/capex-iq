@@ -15,16 +15,32 @@ import {
   computeStrength,
   enrichEdges,
 } from "../src/components/capex-map/supplyGraphData.js";
+import {
+  createAccessFixture,
+  memberKv,
+  warmAccessFixture,
+} from "./access-fixture.js";
 
 const NOW = Date.parse("2026-08-17T23:59:59Z");
+const MEMBER_EMAIL = "member@example.com";
+const access = await createAccessFixture("raw-api-boundaries");
+const memberJwt = await access.createJwt({ email: MEMBER_EMAIL });
+await warmAccessFixture(access, memberJwt);
 const ENV = {
+  ACCESS_TEAM_DOMAIN: access.teamDomain,
+  ACCESS_AUD: access.accessAud,
+  ADMIN_EMAILS: "admin@example.com",
   DATABASE_URL: "postgresql://example.neon.tech/watchlist",
   ALLOWED_ORIGIN: "https://capex.example",
+  SHARED_DATA: memberKv(MEMBER_EMAIL),
 };
 
 function request(path) {
   return new Request(`https://capex.example${path}`, {
-    headers: { Origin: ENV.ALLOWED_ORIGIN },
+    headers: {
+      Origin: ENV.ALLOWED_ORIGIN,
+      Cookie: `CF_Authorization=${memberJwt}`,
+    },
   });
 }
 

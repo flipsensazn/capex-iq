@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { onRequest as scoreboard } from "../functions/scoreboard.js";
+import {
+  createAccessFixture,
+  memberKv,
+  warmAccessFixture,
+} from "./access-fixture.js";
 
+const ORIGIN = "https://capex-iq.us";
+const MEMBER_EMAIL = "member@example.com";
+const access = await createAccessFixture("scoreboard");
+const memberJwt = await access.createJwt({ email: MEMBER_EMAIL });
+await warmAccessFixture(access, memberJwt);
 
 async function withFetch(stub, action) {
   const originalFetch = globalThis.fetch;
@@ -15,10 +25,20 @@ async function withFetch(stub, action) {
 }
 
 const context = () => ({
-  request: new Request("https://capex-iq.us/scoreboard", { method: "GET" }),
+  request: new Request(`${ORIGIN}/scoreboard`, {
+    method: "GET",
+    headers: {
+      Origin: ORIGIN,
+      Cookie: `CF_Authorization=${memberJwt}`,
+    },
+  }),
   env: {
+    ACCESS_TEAM_DOMAIN: access.teamDomain,
+    ACCESS_AUD: access.accessAud,
+    ADMIN_EMAILS: "admin@example.com",
     DATABASE_URL: "postgresql://user:pass@example.neon.tech/db",
-    ALLOWED_ORIGIN: "https://capex-iq.us",
+    ALLOWED_ORIGIN: ORIGIN,
+    SHARED_DATA: memberKv(MEMBER_EMAIL),
   },
 });
 

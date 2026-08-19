@@ -69,10 +69,11 @@ Per-member feature grants live in `SHARED_DATA` KV under a lowercased
 grants, for example:
 
 ```sh
-npx wrangler kv key put --namespace-id 1dadc46e52b146bea2fbc4b8511c7d90 "member:someone@example.com" '{"features":{"research":true,"radar":true}}'
+npx wrangler kv key put --namespace-id 1dadc46e52b146bea2fbc4b8511c7d90 "member:someone@example.com" '{"features":{"research":true,"radar":true,"funds":true,"signals":true}}'
 ```
 
-Admins listed in `ADMIN_EMAILS` implicitly hold every feature.
+The default member grant is all four features: `research`, `radar`, `funds`,
+and `signals`. Admins listed in `ADMIN_EMAILS` implicitly hold every feature.
 `ANALYZE_ALLOWED_EMAILS` remains a research-only bootstrap fallback.
 
 ### /prices caching model

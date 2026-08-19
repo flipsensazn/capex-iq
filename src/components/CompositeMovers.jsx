@@ -13,7 +13,7 @@ import { stressColor, CbsSparkline } from "./capex-map/StressBadge";
 
 const MAX_EACH = 5;
 
-export default function CompositeMovers({ tickers = [], composite = {}, onTickerClick }) {
+export default function CompositeMovers({ tickers = [], composite = {}, locked = false, onTickerClick }) {
   const { heating, cooling, scoredCount, awaitingHistory } = useMemo(() => {
     const mine = [...new Set(tickers)].map(t => ({ ticker: t, ...composite[t] }));
     const withScore = mine.filter(c => c.score != null);
@@ -26,6 +26,10 @@ export default function CompositeMovers({ tickers = [], composite = {}, onTicker
       awaitingHistory: withScore.length > 0 && withScore.every(c => c.delta == null),
     };
   }, [tickers, composite]);
+
+  if (locked) {
+    return <div style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</div>;
+  }
 
   // Nothing scored on this map at all — the ETL hasn't reached these tickers.
   if (!scoredCount) return null;

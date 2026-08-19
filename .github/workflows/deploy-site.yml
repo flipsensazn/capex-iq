@@ -72,6 +72,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FINNHUB_KEY: ${{ secrets.FINNHUB_API_KEY }}
           CF_ACCESS_API_TOKEN: ${{ secrets.CF_ACCESS_API_TOKEN }}
+          SIGNALS_SERVICE_TOKEN: ${{ secrets.SIGNALS_SERVICE_TOKEN }}
           # These four accept either a repo variable or a repo secret. The list
           # ID and site key are not sensitive, so a variable is the natural home
           # — but an empty value here makes the jq below emit null, which DELETES
@@ -90,6 +91,7 @@ jobs:
             --arg g "$GEMINI_API_KEY" \
             --arg f "$FINNHUB_KEY" \
             --arg t "$CF_ACCESS_API_TOKEN" \
+            --arg st "$SIGNALS_SERVICE_TOKEN" \
             --arg ml "$ACCESS_MEMBERS_LIST_ID" \
             --arg mg "$ACCESS_MEMBERS_GROUP_ID" \
             --arg ts "$TURNSTILE_SITE_KEY" \
@@ -100,6 +102,7 @@ jobs:
               GEMINI_API_KEY: (if $g != "" then $g else null end),
               FINNHUB_KEY: (if $f != "" then $f else null end),
               CF_ACCESS_API_TOKEN: (if $t != "" then $t else null end),
+              SIGNALS_SERVICE_TOKEN: (if $st != "" then $st else null end),
               ACCESS_MEMBERS_LIST_ID: (if $ml != "" then $ml else null end),
               ACCESS_MEMBERS_GROUP_ID: (if $mg != "" then $mg else null end),
               TURNSTILE_SITE_KEY: (if $ts != "" then $ts else null end),

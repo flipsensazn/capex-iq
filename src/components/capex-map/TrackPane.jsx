@@ -6,6 +6,7 @@ export default function TrackPane({
   stressBySub = {},
   gauges = {},
   composite = {},
+  signalsLocked = false,
   isAdmin,
   onAddTicker,
   onRemoveTicker,
@@ -50,6 +51,7 @@ export default function TrackPane({
             stress={stressBySub[`${track.id}:${sub.id}`]}
             gauges={gauges}
             composite={composite}
+            signalsLocked={signalsLocked}
             isAdmin={isAdmin}
             onAddTicker={ticker => onAddTicker(track.id, sub.id, ticker)}
             onRemoveTicker={ticker => onRemoveTicker(track.id, sub.id, ticker)}

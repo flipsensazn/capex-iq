@@ -36,7 +36,9 @@ export async function readJsonResponse(response, label = "Request") {
   try {
     payload = await response.json();
   } catch {
-    throw new Error(`${label} returned an invalid response`);
+    const error = new Error(`${label} returned an invalid response`);
+    error.status = response.status;
+    throw error;
   }
   if (!response.ok) {
     const error = new Error(
@@ -45,10 +47,16 @@ export async function readJsonResponse(response, label = "Request") {
       || payload?.error
       || `${label} failed (${response.status})`
     );
+    error.status = response.status;
     error.payload = payload;
     throw error;
   }
   return payload;
+}
+
+function isLockedAccessError(error, codes = ["members_only"]) {
+  return error?.status === 401
+    || (error?.status === 403 && codes.includes(error?.payload?.code));
 }
 
 export function normalizeDatasetHealth(health) {
@@ -73,6 +81,7 @@ export async function fetchDashboardDataset(endpoint, fetchImpl = fetch, init = 
   try {
     json = await readJsonResponse(response, endpoint);
   } catch (error) {
+    if (isLockedAccessError(error)) return { locked: true };
     error.datasetHealth = normalizeDatasetHealth(error?.payload?.health);
     throw error;
   }
@@ -125,6 +134,7 @@ export function startDashboardRefreshLoop({
 }
 
 function issueDescription(label, health) {
+  if (health.locked) return null;
   const asOfDate = health.asOf ? String(health.asOf).slice(0, 10) : null;
   const asOf = asOfDate ? `, as of ${asOfDate}` : "";
   const limitedAttempt = health.limitedRun
@@ -230,7 +240,9 @@ export function useDashboardData({
   const [compositeData, setCompositeData] = useState({});
   const [datasetHealth, setDatasetHealth] = useState(initialDatasetHealth);
   const [scoreboardData, setScoreboardData] = useState(null);
+  const [lockedSignals, setLockedSignals] = useState({});
   const [candidates, setCandidates] = useState([]);
+  const [candidatesLocked, setCandidatesLocked] = useState(false);
   const [muskCapexData, setMuskCapexData] = useState(defaultMuskData);
   const [muskIntel, setMuskIntel] = useState(null);
   const [muskIntelStatus, setMuskIntelStatus] = useState("idle");
@@ -286,15 +298,27 @@ export function useDashboardData({
     fetch("/candidates")
       .then(res => readJsonResponse(res, "/candidates"))
       .then(json => {
+        setCandidatesLocked(false);
         if (json.success && Array.isArray(json.candidates)) setCandidates(json.candidates);
       })
-      .catch(() => {});
+      .catch(error => {
+        if (isLockedAccessError(error, ["admin_only"])) {
+          setCandidates([]);
+          setCandidatesLocked(true);
+        }
+      });
     fetch("/capex-history")
       .then(res => readJsonResponse(res, "/capex-history"))
       .then(json => {
+        setLockedSignals(previous => ({ ...previous, capexHistory: false }));
         if (json.success && Array.isArray(json.history)) setCapexHistory(json.history);
       })
-      .catch(() => {});
+      .catch(error => {
+        if (isLockedAccessError(error)) {
+          setCapexHistory([]);
+          setLockedSignals(previous => ({ ...previous, capexHistory: true }));
+        }
+      });
 
     fetch("/shortlist")
       .then(res => readJsonResponse(res, "/shortlist"))
@@ -318,11 +342,27 @@ export function useDashboardData({
       const datasetTasks = Object.entries(DASHBOARD_DATASETS).map(
         async ([key, config]) => {
           try {
-            const { data, health } = await fetchDashboardDataset(
+            const result = await fetchDashboardDataset(
               config.endpoint, fetch, { signal },
             );
             if (signal.aborted) return;
+            if (result.locked) {
+              datasetSetters[key]({});
+              setLockedSignals(previous => ({ ...previous, [key]: true }));
+              setDatasetHealth(previous => ({
+                ...previous,
+                [key]: {
+                  ...previous[key],
+                  loading: false,
+                  error: null,
+                  locked: true,
+                },
+              }));
+              return;
+            }
+            const { data, health } = result;
             datasetSetters[key](data);
+            setLockedSignals(previous => ({ ...previous, [key]: false }));
             setDatasetHealth(previous => ({ ...previous, [key]: health }));
           } catch (error) {
             if (signal.aborted) return;
@@ -349,6 +389,7 @@ export function useDashboardData({
             throw error;
           }
           if (signal.aborted) return;
+          setLockedSignals(previous => ({ ...previous, scoreboard: false }));
           setScoreboardData({
             stats: json.stats ?? [],
             events: json.events ?? [],
@@ -359,6 +400,11 @@ export function useDashboardData({
           });
         } catch (error) {
           if (signal.aborted) return;
+          if (isLockedAccessError(error)) {
+            setLockedSignals(previous => ({ ...previous, scoreboard: true }));
+            setScoreboardData({ locked: true });
+            return;
+          }
           setScoreboardData({
             error: true,
             health: normalizeDatasetHealth(error?.payload?.health),
@@ -547,7 +593,9 @@ export function useDashboardData({
     compositeData,
     datasetHealth,
     scoreboardData,
+    lockedSignals,
     candidates,
+    candidatesLocked,
     setCandidates,
     muskCapexData,
     setMuskCapexData,

@@ -7,6 +7,35 @@
 //
 //   { success: true, history: [{ fetchedAt, total, byCompany }] }   (oldest → newest)
 
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
+import { hasFeature, isServiceRequest } from "./entitlements.js";
+
+const CACHE_KEY = "capexHistoryView_v1";
+const CACHE_TTL_SECONDS = 600;
+const DATA_CACHE_CONTROL = "private, max-age=300";
+const NO_STORE = "no-store";
+
+async function readKvJson(kv) {
+  if (!kv) return null;
+  try {
+    return await kv.get(CACHE_KEY, "json");
+  } catch (error) {
+    console.error(`[capex-history] KV read failed for ${CACHE_KEY}:`, error);
+    return null;
+  }
+}
+
+async function writeKvJson(kv, value) {
+  if (!kv) return;
+  try {
+    await kv.put(CACHE_KEY, JSON.stringify(value), {
+      expirationTtl: CACHE_TTL_SECONDS,
+    });
+  } catch (error) {
+    console.error(`[capex-history] KV write failed for ${CACHE_KEY}:`, error);
+  }
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
 
@@ -14,19 +43,18 @@ export async function onRequest(context) {
   const origin = request.headers.get("Origin") || "";
   const corsOrigin = origin === ALLOWED_ORIGIN ? ALLOWED_ORIGIN : "";
 
-  const headers = {
+  const headers = cacheControl => ({
     "Access-Control-Allow-Origin": corsOrigin,
     "Content-Type": "application/json",
     "Vary": "Origin",
-    // New readings land at most every 6h — cache browser 30 min, edge 3h
-    "Cache-Control": "public, max-age=1800, s-maxage=10800",
-  };
+    "Cache-Control": cacheControl,
+  });
 
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
-        ...headers,
+        ...headers(NO_STORE),
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       },
@@ -34,14 +62,51 @@ export async function onRequest(context) {
   }
 
   if (request.method !== "GET") {
-    return new Response("Method Not Allowed", { status: 405, headers });
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: headers(NO_STORE),
+    });
+  }
+
+  if (!(await isServiceRequest(request, env))) {
+    const accessPayload = await getAccessPayload(request, env);
+    const email = accessPayload?.email?.toLowerCase();
+    if (!email) {
+      return new Response(
+        JSON.stringify({ error: "Authentication required" }),
+        { status: 401, headers: headers(NO_STORE) }
+      );
+    }
+    if (!isTrustedOrigin(request, env)) {
+      return new Response(
+        JSON.stringify({ error: "Forbidden" }),
+        { status: 403, headers: headers(NO_STORE) }
+      );
+    }
+    if (!(await hasFeature(email, env, "signals"))) {
+      return new Response(
+        JSON.stringify({
+          error: "Signals access is not enabled for this account",
+          code: "members_only",
+        }),
+        { status: 403, headers: headers(NO_STORE) }
+      );
+    }
+  }
+
+  const cached = await readKvJson(env.SHARED_DATA);
+  if (cached) {
+    return new Response(JSON.stringify(cached), {
+      status: 200,
+      headers: headers(DATA_CACHE_CONTROL),
+    });
   }
 
   const DATABASE_URL = env.DATABASE_URL;
   if (!DATABASE_URL) {
     return new Response(
       JSON.stringify({ success: false, message: "DATABASE_URL not configured." }),
-      { status: 500, headers }
+      { status: 500, headers: headers(NO_STORE) }
     );
   }
 
@@ -73,7 +138,7 @@ export async function onRequest(context) {
       console.error("capex-history DB query failed", { status: dbRes.status, detail: errText });
       return new Response(
         JSON.stringify({ success: false, message: "History is temporarily unavailable." }),
-        { status: 500, headers }
+        { status: 500, headers: headers(NO_STORE) }
       );
     }
 
@@ -92,16 +157,18 @@ export async function onRequest(context) {
       };
     }).sort((a, b) => new Date(a.fetchedAt) - new Date(b.fetchedAt));
 
+    const payload = { success: true, count: history.length, history };
+    await writeKvJson(env.SHARED_DATA, payload);
     return new Response(
-      JSON.stringify({ success: true, count: history.length, history }),
-      { status: 200, headers }
+      JSON.stringify(payload),
+      { status: 200, headers: headers(DATA_CACHE_CONTROL) }
     );
 
   } catch (err) {
     console.error("capex-history unexpected error", err);
     return new Response(
       JSON.stringify({ success: false, message: "History is temporarily unavailable." }),
-      { status: 500, headers }
+      { status: 500, headers: headers(NO_STORE) }
     );
   }
 }

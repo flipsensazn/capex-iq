@@ -13,19 +13,44 @@
 // Excess = event return minus QQQ over the same window, percentage points.
 // Horizon stats only include events whose window has matured.
 
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
 import {
   buildDataHealth,
   fetchLatestManifest,
   isExpectedBootstrap,
   latestAsOf,
 } from "./data-health.js";
+import { hasFeature, isServiceRequest } from "./entitlements.js";
 
 const PROSPECTIVE_START = "2026-08-17";
 const PIPELINE = "signal_scoreboard";
 const STALE_AFTER_HOURS = 9 * 24;
-const DATA_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
-const BOOTSTRAP_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
+const CACHE_KEY = "scoreboardView_v1";
+const CACHE_TTL_SECONDS = 600;
+const DATA_CACHE_CONTROL = "private, max-age=300";
+const BOOTSTRAP_CACHE_CONTROL = "private, max-age=300";
 const NO_STORE = "no-store";
+
+async function readKvJson(kv) {
+  if (!kv) return null;
+  try {
+    return await kv.get(CACHE_KEY, "json");
+  } catch (error) {
+    console.error(`[scoreboard] KV read failed for ${CACHE_KEY}:`, error);
+    return null;
+  }
+}
+
+async function writeKvJson(kv, value) {
+  if (!kv) return;
+  try {
+    await kv.put(CACHE_KEY, JSON.stringify(value), {
+      expirationTtl: CACHE_TTL_SECONDS,
+    });
+  } catch (error) {
+    console.error(`[scoreboard] KV write failed for ${CACHE_KEY}:`, error);
+  }
+}
 
 const METHODOLOGY = Object.freeze({
   version: 2,
@@ -83,6 +108,40 @@ export async function onRequest(context) {
     return new Response("Method Not Allowed", {
       status: 405,
       headers: headers(NO_STORE),
+    });
+  }
+
+  if (!(await isServiceRequest(request, env))) {
+    const accessPayload = await getAccessPayload(request, env);
+    const email = accessPayload?.email?.toLowerCase();
+    if (!email) {
+      return new Response(JSON.stringify({ error: "Authentication required" }), {
+        status: 401,
+        headers: headers(NO_STORE),
+      });
+    }
+    if (!isTrustedOrigin(request, env)) {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403,
+        headers: headers(NO_STORE),
+      });
+    }
+    if (!(await hasFeature(email, env, "signals"))) {
+      return new Response(JSON.stringify({
+        error: "Signals access is not enabled for this account",
+        code: "members_only",
+      }), {
+        status: 403,
+        headers: headers(NO_STORE),
+      });
+    }
+  }
+
+  const cached = await readKvJson(env.SHARED_DATA);
+  if (cached) {
+    return new Response(JSON.stringify(cached), {
+      status: 200,
+      headers: headers(DATA_CACHE_CONTROL),
     });
   }
 
@@ -279,21 +338,23 @@ export async function onRequest(context) {
     const stats = statsByCohort.prospective;
     const events = eventsByCohort.prospective;
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        stats,
-        events,
-        statsByCohort,
-        eventsByCohort,
-        methodology,
-        health: buildDataHealth({
-          pipeline: PIPELINE,
-          manifest,
-          fallbackAsOf: latestAsOf(eventRows, "observed_at", "event_date"),
-          staleAfterHours: STALE_AFTER_HOURS,
-        }),
+    const payload = {
+      success: true,
+      stats,
+      events,
+      statsByCohort,
+      eventsByCohort,
+      methodology,
+      health: buildDataHealth({
+        pipeline: PIPELINE,
+        manifest,
+        fallbackAsOf: latestAsOf(eventRows, "observed_at", "event_date"),
+        staleAfterHours: STALE_AFTER_HOURS,
       }),
+    };
+    await writeKvJson(env.SHARED_DATA, payload);
+    return new Response(
+      JSON.stringify(payload),
       { status: 200, headers: headers(DATA_CACHE_CONTROL) }
     );
 
@@ -302,12 +363,14 @@ export async function onRequest(context) {
     // Before the first manifest-backed run, an absent table is an expected
     // bootstrap state. After initialization, the same error is data loss.
     if (err.missingTable && isExpectedBootstrap(manifest)) {
+      const payload = emptyPayload(buildDataHealth({
+        pipeline: PIPELINE,
+        manifest,
+        staleAfterHours: STALE_AFTER_HOURS,
+      }));
+      await writeKvJson(env.SHARED_DATA, payload);
       return new Response(
-        JSON.stringify(emptyPayload(buildDataHealth({
-          pipeline: PIPELINE,
-          manifest,
-          staleAfterHours: STALE_AFTER_HOURS,
-        }))),
+        JSON.stringify(payload),
         { status: 200, headers: headers(BOOTSTRAP_CACHE_CONTROL) }
       );
     }

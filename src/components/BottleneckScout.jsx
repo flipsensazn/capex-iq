@@ -151,9 +151,10 @@ function CandidateCard({ c, isAdmin, onReview, onTickerClick }) {
   );
 }
 
-export default function BottleneckScout({ candidates = [], isAdmin, onReview, onTickerClick }) {
+export default function BottleneckScout({ candidates = [], locked = false, isAdmin, onReview, onTickerClick }) {
   const pending = candidates.filter(c => c.status === "pending");
   const decided = candidates.filter(c => c.status !== "pending");
+  if (locked) return null;
   if (!candidates.length) return null;
 
   return (

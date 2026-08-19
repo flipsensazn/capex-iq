@@ -108,7 +108,7 @@ function EventChips({ events, onTickerClick, label }) {
   );
 }
 
-export default function SignalScoreboard({ data, onTickerClick }) {
+export default function SignalScoreboard({ data, locked = false, onTickerClick }) {
   const isVersioned = Number(data?.methodology?.version) >= 2;
   const prospectiveStats = isVersioned ? data?.statsByCohort?.prospective ?? [] : [];
   const retrospectiveStats = isVersioned ? data?.statsByCohort?.retrospective ?? [] : [];
@@ -144,6 +144,10 @@ export default function SignalScoreboard({ data, onTickerClick }) {
       : isVersioned
         ? `Forward-observed tracking began ${prospectiveStart || "at the methodology-v2 launch"}; results appear as its 1w / 1m / 3m windows mature.`
         : "Awaiting versioned cohort data; legacy blended results are intentionally hidden.";
+
+  if (locked || data?.locked) {
+    return <div style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</div>;
+  }
 
   return (
     <div style={{ borderRadius: "var(--radius-2xl)", border: "1px solid var(--border-hairline)", background: "var(--surface-card)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", boxShadow: "var(--shadow-panel)", padding: "14px 18px" }}>
