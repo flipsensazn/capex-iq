@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
-export function usePresence() {
-  const [onlineCount, setOnlineCount] = useState(1);
+export function usePresence(enabled = true) {
+  const [onlineCount, setOnlineCount] = useState(enabled ? 1 : null);
   const sessionId = useRef(crypto.randomUUID());
 
   useEffect(() => {
+    if (!enabled) {
+      setOnlineCount(null);
+      return;
+    }
+
+    setOnlineCount(count => count ?? 1);
+
     const pingPresence = async () => {
       if (document.hidden) return;
       try {
@@ -18,10 +25,10 @@ export function usePresence() {
       } catch (e) {}
     };
 
-    pingPresence();
-    const id = setInterval(pingPresence, 30000);
+    void pingPresence();
+    const id = setInterval(() => void pingPresence(), 30000);
     return () => clearInterval(id);
-  }, []);
+  }, [enabled]);
 
   return { onlineCount };
 }

@@ -160,7 +160,7 @@ export default function SupplyGraph({
       </div>
 
       {signalsLocked && (
-        <div style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)", marginBottom: 10 }}>🔒 Members</div>
+        <a href="/#register" style={{ display: "inline-block", fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)", marginBottom: 10, textDecoration: "none" }}>🔒 Members — join free</a>
       )}
 
       {topBottlenecks.length > 0 && (

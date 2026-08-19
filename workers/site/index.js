@@ -10,6 +10,7 @@
 // CI does exactly that on every merge to main (.github/workflows/deploy-site.yml).
 
 import * as analyze        from "../../functions/analyze.js";
+import * as auth           from "../../functions/auth.js";
 import * as candidates     from "../../functions/candidates.js";
 import * as capexHistory   from "../../functions/capex-history.js";
 import * as capexIntel     from "../../functions/capex-intel.js";
@@ -34,12 +35,14 @@ import * as research       from "../../functions/research.js";
 import * as roboticsCapex  from "../../functions/robotics-capex.js";
 import * as roboticsIntel  from "../../functions/robotics-intel.js";
 import * as scoreboard     from "../../functions/scoreboard.js";
+import * as scoreboardTeaser from "../../functions/scoreboard-teaser.js";
 import * as shortlist      from "../../functions/shortlist.js";
 import * as stress         from "../../functions/stress.js";
 import { refreshIntelCoordinated } from "../../functions/operation-coordinator.js";
 
 const ROUTES = {
   "/analyze":         analyze,
+  "/auth":            auth,
   "/candidates":      candidates,
   "/capex-history":   capexHistory,
   "/capex-intel":     capexIntel,
@@ -64,6 +67,7 @@ const ROUTES = {
   "/robotics-capex":  roboticsCapex,
   "/robotics-intel":  roboticsIntel,
   "/scoreboard":      scoreboard,
+  "/scoreboard-teaser": scoreboardTeaser,
   "/shortlist":       shortlist,
   "/stress":          stress,
 };

@@ -1245,10 +1245,10 @@ export default function App() {
   const [adminChecked, setAdminChecked] = useState(false);
   const [appNotice, setAppNotice] = useState(null);
 
-  // Admin identity comes entirely from Cloudflare Access now: the whole /app
-  // route is behind Access OTP, so anyone here has already authenticated.
-  // /me verifies the Access JWT and reports whether this email is on the
-  // Admins list — if so, editing turns on automatically (the admin-gated
+  // /me reports identity from the Cloudflare Access cookie. Before the path
+  // flip, Access mints it at /app; afterward /auth mints it before redirecting
+  // members here. /me verifies the Access JWT and reports whether this email
+  // is on the Admins list — if so, editing turns on automatically (the admin-gated
   // endpoints accept the same JWT cookie, sent with every same-origin POST).
   useEffect(() => {
     fetch("/me")
@@ -1269,6 +1269,7 @@ export default function App() {
 
   const canRadar = Boolean(features?.radar);
   const canFunds = Boolean(features?.funds);
+  const isAnonymous = adminChecked && !identityEmail;
 
   // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
   // robotics · "earnings" = the calendar · "radar" = the members screener
@@ -1358,7 +1359,7 @@ export default function App() {
     getAllTickers,
   });
 
-  const { onlineCount } = usePresence();
+  const { onlineCount } = usePresence(identityEmail != null);
 
   // Keep the price-refresh scope in sync with the active view, and pull the
   // newly-shown view's prices immediately on switch (don't wait for the 30s tick).
@@ -1660,7 +1661,7 @@ export default function App() {
           pinned view-tab nav below it. */}
       <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", color: "var(--ink-100)", paddingTop: "calc(var(--topbar-h, 72px) + var(--nav-h, 44px))" }}>
 
-        <TopBar marketData={marketData} onlineCount={onlineCount} />
+        <TopBar marketData={marketData} onlineCount={onlineCount} isAnonymous={isAnonymous} />
 
         {/* Redesigned view tabs, fixed directly under the market pills. */}
         <nav className="dash-nav">

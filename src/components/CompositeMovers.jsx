@@ -28,7 +28,7 @@ export default function CompositeMovers({ tickers = [], composite = {}, locked =
   }, [tickers, composite]);
 
   if (locked) {
-    return <div style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</div>;
+    return <a href="/#register" style={{ display: "inline-block", fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)", textDecoration: "none" }}>🔒 Members — join free</a>;
   }
 
   // Nothing scored on this map at all — the ETL hasn't reached these tickers.

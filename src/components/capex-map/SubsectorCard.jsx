@@ -56,7 +56,7 @@ export default function SubsectorCard({
         />
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {signalsLocked && (
-            <span style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</span>
+            <a href="/#register" style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)", textDecoration: "none" }}>🔒 Members — join free</a>
           )}
           {!signalsLocked && <CompositeChip tickers={sub.tickers} composite={composite} open={stressOpen} onClick={() => setStressOpen(v => !v)} />}
           <StressBadge stress={stress} locked={signalsLocked} open={stressOpen} onClick={() => setStressOpen(v => !v)} />

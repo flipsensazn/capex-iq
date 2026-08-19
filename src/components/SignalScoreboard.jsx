@@ -1,6 +1,8 @@
 // Signal Performance Scoreboard — prospective evidence is kept separate from
 // historical reconstructions. Fed weekly by src/signal_scoreboard.py.
 
+import { useEffect, useState } from "react";
+
 const TYPE_LABELS = {
   cbs_cross_70:    "⬢ CBS crossed 70",
   cbs_jump_15:     "⬢ CBS +15 jump",
@@ -10,6 +12,10 @@ const TYPE_LABELS = {
 };
 
 const HORIZONS = ["1w", "1m", "3m"];
+// Decorative only: these fixed rank-derived widths never use API score data.
+const TEASER_BAR_WIDTHS = { 1: "88%", 2: "72%", 3: "58%" };
+
+const teaserBarWidth = rank => TEASER_BAR_WIDTHS[Number(rank)] ?? "64%";
 
 const excessColor = v => (v == null ? "var(--ink-500)" : v > 0 ? "var(--pos)" : v < 0 ? "var(--neg)" : "var(--ink-300)");
 const fmtExcess = v => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}pp`);
@@ -109,6 +115,35 @@ function EventChips({ events, onTickerClick, label }) {
 }
 
 export default function SignalScoreboard({ data, locked = false, onTickerClick }) {
+  const effectiveLocked = locked || Boolean(data?.locked);
+  const [teaser, setTeaser] = useState(null);
+
+  useEffect(() => {
+    if (!effectiveLocked) {
+      setTeaser(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setTeaser(null);
+    fetch("/scoreboard-teaser", { signal: controller.signal })
+      .then(response => {
+        if (!response.ok) throw new Error("Scoreboard teaser unavailable");
+        return response.json();
+      })
+      .then(payload => {
+        if (!payload?.success || !Array.isArray(payload.top)) {
+          throw new Error("Invalid scoreboard teaser payload");
+        }
+        if (!controller.signal.aborted) setTeaser(payload);
+      })
+      .catch(error => {
+        if (error.name !== "AbortError") setTeaser(null);
+      });
+
+    return () => controller.abort();
+  }, [effectiveLocked]);
+
   const isVersioned = Number(data?.methodology?.version) >= 2;
   const prospectiveStats = isVersioned ? data?.statsByCohort?.prospective ?? [] : [];
   const retrospectiveStats = isVersioned ? data?.statsByCohort?.retrospective ?? [] : [];
@@ -145,8 +180,44 @@ export default function SignalScoreboard({ data, locked = false, onTickerClick }
         ? `Forward-observed tracking began ${prospectiveStart || "at the methodology-v2 launch"}; results appear as its 1w / 1m / 3m windows mature.`
         : "Awaiting versioned cohort data; legacy blended results are intentionally hidden.";
 
-  if (locked || data?.locked) {
+  if (effectiveLocked && !teaser) {
     return <div style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</div>;
+  }
+
+  if (effectiveLocked) {
+    return (
+      <div style={{ borderRadius: "var(--radius-2xl)", border: "1px solid var(--border-hairline)", background: "var(--surface-card)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", boxShadow: "var(--shadow-panel)", padding: "14px 18px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: "var(--ink-300)", letterSpacing: "0.15em", textTransform: "uppercase", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 14 }}>⚖</span> Signal Scoreboard
+          </div>
+          <div style={{ fontSize: 10, color: "var(--ink-500)" }}>Weekly composite leadership</div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {teaser.top.slice(0, 3).map(item => (
+            <div key={`${item.ticker}-${item.rank}`} style={{ display: "grid", gridTemplateColumns: "30px minmax(54px, 72px) minmax(110px, 1fr)", alignItems: "center", gap: 10 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--ink-500)" }}>#{item.rank}</span>
+              <span style={{ fontFamily: "var(--font-condensed)", fontSize: 12, fontWeight: 800, color: "var(--ink-100)", letterSpacing: "0.06em" }}>{item.ticker}</span>
+              <span aria-hidden="true" style={{ height: 9, borderRadius: "var(--radius-pill)", background: "var(--surface-inset)", border: "1px solid var(--border-hairline)", overflow: "hidden" }}>
+                <span style={{ display: "block", width: teaserBarWidth(item.rank), height: "100%", borderRadius: "var(--radius-pill)", background: "linear-gradient(90deg, var(--accent), var(--pos), var(--event))", filter: "blur(5px)" }} />
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 12, fontSize: 11, color: "var(--ink-400)" }}>
+          {teaser.moverCount} signals moved this week across {teaser.totalTracked} tracked names
+        </div>
+
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border-hairline)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-300)" }}>Members see the full scoreboard</span>
+          <a href="/#register" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-pill)", padding: "6px 12px", background: "var(--accent)", border: "1px solid var(--accent)", boxShadow: "var(--glow-cyan-soft)", color: "var(--on-accent)", fontFamily: "var(--font-condensed)", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", textDecoration: "none" }}>
+            Join free
+          </a>
+        </div>
+      </div>
+    );
   }
 
   return (
