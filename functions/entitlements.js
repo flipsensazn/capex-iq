@@ -1,6 +1,6 @@
 import { isAdminEmail, isAnalyzeAllowedEmail } from "./access-lib.js";
 
-const FEATURES = ["research", "radar", "funds", "signals"];
+export const FEATURES = ["research", "radar", "funds", "signals"];
 const DEFAULT_RESEARCH_QUOTA = 50;
 const MAX_RESEARCH_QUOTA = 10_000;
 const RESEARCH_USAGE_TTL_SECONDS = 62 * 24 * 60 * 60;

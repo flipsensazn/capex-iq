@@ -23,6 +23,7 @@ import * as gauges         from "../../functions/gauges.js";
 import * as history        from "../../functions/history.js";
 import * as marketNews     from "../../functions/market-news.js";
 import * as me             from "../../functions/me.js";
+import * as members        from "../../functions/members.js";
 import * as muskCapex      from "../../functions/musk-capex.js";
 import * as muskIntel      from "../../functions/musk-intel.js";
 import * as news           from "../../functions/news.js";
@@ -55,6 +56,7 @@ const ROUTES = {
   "/history":         history,
   "/market-news":     marketNews,
   "/me":              me,
+  "/members":         members,
   "/musk-capex":      muskCapex,
   "/musk-intel":      muskIntel,
   "/news":            news,
