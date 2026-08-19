@@ -1326,7 +1326,9 @@ export default function App() {
     compositeData,
     datasetHealth,
     scoreboardData,
+    lockedSignals,
     candidates,
+    candidatesLocked,
     setCandidates,
     muskCapexData,
     setMuskCapexData,
@@ -1716,6 +1718,7 @@ export default function App() {
             tracks={activeLiveData.tracks}
             marketData={view === "ai" ? marketData : prices}
             history={view === "ai" ? capexHistory : []}
+            historyLocked={view === "ai" && lockedSignals.capexHistory}
             companyConfig={isRobotics ? ROBOTICS_COMPANIES : isMusk ? MUSK_COMPANIES : undefined}
             subtitle={isRobotics ? "Humanoid Robot Investment" : isMusk ? "Musk Companies Capex" : undefined}
             activeTrack={activeTrack}
@@ -1728,6 +1731,7 @@ export default function App() {
               stressBySub={subsectorStress}
               gauges={gaugesData}
               composite={compositeData}
+              signalsLocked={lockedSignals.stress || lockedSignals.gauges || lockedSignals.composite}
               onAddTicker={addTickerToSubsector} onRemoveTicker={removeTickerFromSubsector} onTickerClick={openPopup}
               onAddSubsector={addSubsector}
               onRemoveSubsector={removeSubsector}
@@ -1745,6 +1749,7 @@ export default function App() {
             gaugesData={gaugesData}
             exposureData={exposureData}
             compositeData={compositeData}
+            signalsLocked={lockedSignals.stress || lockedSignals.gauges || lockedSignals.exposure || lockedSignals.composite}
             prices={prices}
             onTickerClick={openPopup}
             graphNodes={isRobotics ? ROBOTICS_GRAPH_NODES : isMusk ? MUSK_GRAPH_NODES : undefined}
@@ -1756,17 +1761,20 @@ export default function App() {
           <CompositeMovers
             tickers={watchlistTickers}
             composite={compositeData}
+            locked={lockedSignals.composite}
             onTickerClick={openPopup}
           />
 
 
           <SignalScoreboard
             data={scoreboardData}
+            locked={lockedSignals.scoreboard}
             onTickerClick={openPopup}
           />
 
           <BottleneckScout
             candidates={candidates}
+            locked={candidatesLocked}
             isAdmin={isAdmin}
             onReview={reviewCandidate}
             onTickerClick={openPopup}

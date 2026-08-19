@@ -1,6 +1,6 @@
 import { isAdminEmail, isAnalyzeAllowedEmail } from "./access-lib.js";
 
-const FEATURES = ["research", "radar", "funds"];
+const FEATURES = ["research", "radar", "funds", "signals"];
 
 export async function resolveEntitlements(email, env) {
   if (!email) return { tier: "anonymous", features: {} };
@@ -8,7 +8,7 @@ export async function resolveEntitlements(email, env) {
   if (isAdminEmail(email, env)) {
     return {
       tier: "admin",
-      features: { research: true, radar: true, funds: true },
+      features: { research: true, radar: true, funds: true, signals: true },
     };
   }
 

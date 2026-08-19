@@ -8,18 +8,41 @@
 //
 //   { success: true, data: { NVDA: { latest: {...}, prev: {...}|null }, ... } }
 
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
 import { buildDataHealth, fetchLatestManifest, latestAsOf } from "./data-health.js";
+import { hasFeature } from "./entitlements.js";
 
 const PIPELINE = "transcript_stress";
 const STALE_AFTER_HOURS = 9 * 24;
-// Health travels with the payload, so cached green responses must expire
-// quickly enough to reveal a failed or degraded ETL run.
-const DATA_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
+const CACHE_KEY = "stressView_v1";
+const CACHE_TTL_SECONDS = 600;
+const DATA_CACHE_CONTROL = "private, max-age=300";
 const NO_STORE = "no-store";
 const SOURCE_METHODOLOGY = "transcript-stress-v1";
 const MAX_SOURCE_PERIOD_AGE_DAYS = 365;
 const MAX_FUTURE_SOURCE_PERIOD_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function readKvJson(kv) {
+  if (!kv) return null;
+  try {
+    return await kv.get(CACHE_KEY, "json");
+  } catch (error) {
+    console.error(`[stress] KV read failed for ${CACHE_KEY}:`, error);
+    return null;
+  }
+}
+
+async function writeKvJson(kv, value) {
+  if (!kv) return;
+  try {
+    await kv.put(CACHE_KEY, JSON.stringify(value), {
+      expirationTtl: CACHE_TTL_SECONDS,
+    });
+  } catch (error) {
+    console.error(`[stress] KV write failed for ${CACHE_KEY}:`, error);
+  }
+}
 
 function numberOrNull(value) {
   return value != null && Number.isFinite(Number(value)) ? Number(value) : null;
@@ -149,6 +172,38 @@ export async function onRequest(context) {
     });
   }
 
+  const accessPayload = await getAccessPayload(request, env);
+  const email = accessPayload?.email?.toLowerCase();
+  if (!email) {
+    return new Response(
+      JSON.stringify({ error: "Authentication required" }),
+      { status: 401, headers: headers(NO_STORE) }
+    );
+  }
+  if (!isTrustedOrigin(request, env)) {
+    return new Response(
+      JSON.stringify({ error: "Forbidden" }),
+      { status: 403, headers: headers(NO_STORE) }
+    );
+  }
+  if (!(await hasFeature(email, env, "signals"))) {
+    return new Response(
+      JSON.stringify({
+        error: "Signals access is not enabled for this account",
+        code: "members_only",
+      }),
+      { status: 403, headers: headers(NO_STORE) }
+    );
+  }
+
+  const cached = await readKvJson(env.SHARED_DATA);
+  if (cached) {
+    return new Response(JSON.stringify(cached), {
+      status: 200,
+      headers: headers(DATA_CACHE_CONTROL),
+    });
+  }
+
   const DATABASE_URL = env.DATABASE_URL;
   if (!DATABASE_URL) {
     return new Response(
@@ -249,18 +304,20 @@ export async function onRequest(context) {
       data[ticker] = attachStressTrend(data[ticker]);
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        count: Object.keys(data).length,
-        data,
-        health: buildDataHealth({
-          pipeline: PIPELINE,
-          manifest,
-          fallbackAsOf: latestAsOf(rows, "analyzed_at", "call_date"),
-          staleAfterHours: STALE_AFTER_HOURS,
-        }),
+    const payload = {
+      success: true,
+      count: Object.keys(data).length,
+      data,
+      health: buildDataHealth({
+        pipeline: PIPELINE,
+        manifest,
+        fallbackAsOf: latestAsOf(rows, "analyzed_at", "call_date"),
+        staleAfterHours: STALE_AFTER_HOURS,
       }),
+    };
+    await writeKvJson(env.SHARED_DATA, payload);
+    return new Response(
+      JSON.stringify(payload),
       { status: 200, headers: headers(DATA_CACHE_CONTROL) }
     );
 

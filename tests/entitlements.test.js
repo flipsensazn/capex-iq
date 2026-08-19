@@ -33,25 +33,28 @@ test("admins implicitly receive every feature", async () => {
 
   assert.deepEqual(await resolveEntitlements("admin@example.com", env), {
     tier: "admin",
-    features: { research: true, radar: true, funds: true },
+    features: { research: true, radar: true, funds: true, signals: true },
   });
 });
 
 test("KV member records grant features independently and override the legacy fallback", async () => {
   const gets = [];
-  const env = envWithRecord({ features: { radar: true } }, {
+  const env = envWithRecord({ features: { radar: true, signals: true } }, {
     ANALYZE_ALLOWED_EMAILS: "member@example.com",
     SHARED_DATA: {
       get: async (...args) => {
         gets.push(args);
-        return { features: { radar: true } };
+        return { features: { radar: true, signals: true } };
       },
     },
   });
 
   const result = await resolveEntitlements("MEMBER@example.com", env);
 
-  assert.deepEqual(result, { tier: "member", features: { radar: true } });
+  assert.deepEqual(result, {
+    tier: "member",
+    features: { radar: true, signals: true },
+  });
   assert.equal(Boolean(result.features.research), false);
   assert.deepEqual(gets, [["member:member@example.com", "json"]]);
 });
@@ -62,13 +65,14 @@ test("KV feature records keep only approved boolean values", async () => {
       research: true,
       radar: "true",
       funds: false,
+      signals: true,
       unknown: true,
     },
   }));
 
   assert.deepEqual(result, {
     tier: "member",
-    features: { research: true, funds: false },
+    features: { research: true, funds: false, signals: true },
   });
 });
 
@@ -115,15 +119,17 @@ test("KV read errors log once and fall through without crashing", { concurrency:
 });
 
 test("legacy allow-list members receive research only when KV is unavailable", async () => {
-  const result = await resolveEntitlements("member@example.com", {
+  const env = {
     ADMIN_EMAILS: "admin@example.com",
     ANALYZE_ALLOWED_EMAILS: "other@example.com, MEMBER@EXAMPLE.COM ",
-  });
+  };
+  const result = await resolveEntitlements("member@example.com", env);
 
   assert.deepEqual(result, {
     tier: "member",
     features: { research: true },
   });
+  assert.equal(await hasFeature("member@example.com", env, "signals"), false);
 });
 
 test("unentitled identities are visitors", async () => {
@@ -134,7 +140,9 @@ test("unentitled identities are visitors", async () => {
 });
 
 test("hasFeature returns false for unknown feature names", async () => {
-  const env = envWithRecord({ features: { research: true, radar: true, funds: true } });
+  const env = envWithRecord({
+    features: { research: true, radar: true, funds: true, signals: true },
+  });
 
   assert.equal(await hasFeature("member@example.com", env, "unknown"), false);
   assert.equal(await hasFeature("member@example.com", env, "toString"), false);

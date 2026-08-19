@@ -8,6 +8,7 @@ export default function SubsectorCard({
   stress,
   gauges = {},
   composite = {},
+  signalsLocked = false,
   isAdmin,
   onAddTicker,
   onRemoveTicker,
@@ -54,9 +55,12 @@ export default function SubsectorCard({
           textStyles={{ fontSize: 12, fontWeight: 600, color: "var(--ink-200)", lineHeight: 1.4 }}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <CompositeChip tickers={sub.tickers} composite={composite} open={stressOpen} onClick={() => setStressOpen(v => !v)} />
-          <StressBadge stress={stress} open={stressOpen} onClick={() => setStressOpen(v => !v)} />
-          <GaugeChip tickers={sub.tickers} gauges={gauges} open={stressOpen} onClick={() => setStressOpen(v => !v)} />
+          {signalsLocked && (
+            <span style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</span>
+          )}
+          {!signalsLocked && <CompositeChip tickers={sub.tickers} composite={composite} open={stressOpen} onClick={() => setStressOpen(v => !v)} />}
+          <StressBadge stress={stress} locked={signalsLocked} open={stressOpen} onClick={() => setStressOpen(v => !v)} />
+          {!signalsLocked && <GaugeChip tickers={sub.tickers} gauges={gauges} open={stressOpen} onClick={() => setStressOpen(v => !v)} />}
           {isAdmin && (
             <button
               onClick={e => {
@@ -106,7 +110,7 @@ export default function SubsectorCard({
         </div>
       )}
 
-      {(stress || hasGaugeData(sub.tickers, gauges) || compositeSummary(sub.tickers, composite)) && (
+      {!signalsLocked && (stress || hasGaugeData(sub.tickers, gauges) || compositeSummary(sub.tickers, composite)) && (
         <div>
           <button onClick={() => setStressOpen(v => !v)} style={{ background: "none", border: "none", color: "var(--ink-400)", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, padding: 0, fontFamily: "inherit" }}>
             <span style={{ display: "inline-block", transition: "transform .2s", transform: stressOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>

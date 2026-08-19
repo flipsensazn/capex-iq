@@ -50,6 +50,7 @@ const DIR_LABEL = {
 
 export default function SupplyGraph({
   stressData = {}, gaugesData = {}, exposureData = {}, compositeData = {}, prices = {}, onTickerClick,
+  signalsLocked = false,
   // Dataset props — default to the AI hyperscaler graph; the Musk Galaxy
   // view passes its own nodes/edges/layers.
   graphNodes = GRAPH_NODES, graphEdges = GRAPH_EDGES, layers = LAYERS,
@@ -60,7 +61,10 @@ export default function SupplyGraph({
   // Edges upgraded with filed customer-concentration percentages where a
   // disclosed, named customer matches — these carry "(filed)" facts in the
   // UI and override curated criticality in the propagation weight.
-  const edges = useMemo(() => enrichEdges(graphEdges, exposureData), [graphEdges, exposureData]);
+  const edges = useMemo(
+    () => enrichEdges(graphEdges, signalsLocked ? {} : exposureData),
+    [graphEdges, exposureData, signalsLocked],
+  );
 
   const { positions, width, height } = useMemo(() => {
     const byLayer = layers.map(() => []);
@@ -78,7 +82,10 @@ export default function SupplyGraph({
     return { positions: pos, width: PAD_X * 2 + layers.length * COL_W - (COL_W - NODE_W), height: h };
   }, [graphNodes, layers]);
 
-  const strength = useMemo(() => computeStrength(graphNodes, stressData, gaugesData), [graphNodes, stressData, gaugesData]);
+  const strength = useMemo(
+    () => computeStrength(graphNodes, signalsLocked ? {} : stressData, signalsLocked ? {} : gaugesData),
+    [graphNodes, stressData, gaugesData, signalsLocked],
+  );
   const risk = useMemo(() => propagate(graphNodes, edges, strength), [graphNodes, edges, strength]);
 
   // Relative color scale. When the whole chain runs hot (every transcript
@@ -122,7 +129,7 @@ export default function SupplyGraph({
 
   const selNode = graphNodes.find(n => n.id === selected);
   const selNbrs = selected ? neighbors(edges, selected) : null;
-  const selExposure = selected ? exposureData[selected] : null;
+  const selExposure = selected && !signalsLocked ? exposureData[selected] : null;
 
   function edgeState(e) {
     if (!selected) return "idle";
@@ -151,6 +158,10 @@ export default function SupplyGraph({
           {edges.some(e => e.exposurePct != null) && ` · ${edges.filter(e => e.exposurePct != null).length} with filed exposure`}
         </div>
       </div>
+
+      {signalsLocked && (
+        <div style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)", marginBottom: 10 }}>🔒 Members</div>
+      )}
 
       {topBottlenecks.length > 0 && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
@@ -275,7 +286,7 @@ export default function SupplyGraph({
           {/* intrinsic signals */}
           <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--ink-300)", lineHeight: 1.5 }}>
             {selNode.note && <div>{selNode.note}</div>}
-            {compositeData[selected]?.score != null && (
+            {!signalsLocked && compositeData[selected]?.score != null && (
               <div>
                 ⬢ Composite Bottleneck Score: <span style={{ color: "var(--ink-100)", fontWeight: 700 }}>{compositeData[selected].score.toFixed(0)}</span>
                 {compositeData[selected].delta != null && (
@@ -285,14 +296,14 @@ export default function SupplyGraph({
                 )}
               </div>
             )}
-            {stressData[selected]?.latest && (
+            {!signalsLocked && stressData[selected]?.latest && (
               <div>
                 Transcript: <span style={{ color: "var(--ink-100)", fontWeight: 700 }}>{stressData[selected].latest.stressScore?.toFixed(0)}</span>
                 {stressData[selected].latest.direction && <> · {DIR_LABEL[stressData[selected].latest.direction] ?? stressData[selected].latest.direction}</>}
                 {stressData[selected].latest.summary && <> — {stressData[selected].latest.summary}</>}
               </div>
             )}
-            {gaugesData[selected] && (gaugesData[selected].orderGap != null || gaugesData[selected].inventoryDays != null) && (
+            {!signalsLocked && gaugesData[selected] && (gaugesData[selected].orderGap != null || gaugesData[selected].inventoryDays != null) && (
               <div style={{ color: "#7dd3fc" }}>
                 XBRL:
                 {gaugesData[selected].rpoYoy != null && <> backlog {gaugesData[selected].rpoYoy >= 0 ? "+" : ""}{gaugesData[selected].rpoYoy.toFixed(0)}% YoY</>}

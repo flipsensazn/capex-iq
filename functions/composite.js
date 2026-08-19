@@ -10,18 +10,43 @@
 //       history: [{ date, score }, ...]                // oldest → newest, ~12 weeks
 //   } } }
 
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
 import {
   buildDataHealth,
   fetchLatestManifest,
   isExpectedBootstrap,
   latestAsOf,
 } from "./data-health.js";
+import { hasFeature } from "./entitlements.js";
 
 const PIPELINE = "composite_score";
 const STALE_AFTER_HOURS = 9 * 24;
-const DATA_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
-const BOOTSTRAP_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
+const CACHE_KEY = "compositeView_v1";
+const CACHE_TTL_SECONDS = 600;
+const DATA_CACHE_CONTROL = "private, max-age=300";
+const BOOTSTRAP_CACHE_CONTROL = "private, max-age=300";
 const NO_STORE = "no-store";
+
+async function readKvJson(kv) {
+  if (!kv) return null;
+  try {
+    return await kv.get(CACHE_KEY, "json");
+  } catch (error) {
+    console.error(`[composite] KV read failed for ${CACHE_KEY}:`, error);
+    return null;
+  }
+}
+
+async function writeKvJson(kv, value) {
+  if (!kv) return;
+  try {
+    await kv.put(CACHE_KEY, JSON.stringify(value), {
+      expirationTtl: CACHE_TTL_SECONDS,
+    });
+  } catch (error) {
+    console.error(`[composite] KV write failed for ${CACHE_KEY}:`, error);
+  }
+}
 
 function jsonObject(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) return value;
@@ -157,6 +182,38 @@ export async function onRequest(context) {
     });
   }
 
+  const accessPayload = await getAccessPayload(request, env);
+  const email = accessPayload?.email?.toLowerCase();
+  if (!email) {
+    return new Response(JSON.stringify({ error: "Authentication required" }), {
+      status: 401,
+      headers: headers(NO_STORE),
+    });
+  }
+  if (!isTrustedOrigin(request, env)) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403,
+      headers: headers(NO_STORE),
+    });
+  }
+  if (!(await hasFeature(email, env, "signals"))) {
+    return new Response(JSON.stringify({
+      error: "Signals access is not enabled for this account",
+      code: "members_only",
+    }), {
+      status: 403,
+      headers: headers(NO_STORE),
+    });
+  }
+
+  const cached = await readKvJson(env.SHARED_DATA);
+  if (cached) {
+    return new Response(JSON.stringify(cached), {
+      status: 200,
+      headers: headers(DATA_CACHE_CONTROL),
+    });
+  }
+
   const DATABASE_URL = env.DATABASE_URL;
   if (!DATABASE_URL) {
     return new Response(
@@ -223,7 +280,7 @@ export async function onRequest(context) {
       // Before the first manifest-backed run, an absent table is an expected
       // bootstrap state. After initialization, the same error is data loss.
       if (primaryTableMissing && isExpectedBootstrap(manifest)) {
-        return new Response(JSON.stringify({
+        const payload = {
           success: true,
           data: {},
           health: buildDataHealth({
@@ -231,7 +288,12 @@ export async function onRequest(context) {
             manifest,
             staleAfterHours: STALE_AFTER_HOURS,
           }),
-        }), { status: 200, headers: headers(BOOTSTRAP_CACHE_CONTROL) });
+        };
+        await writeKvJson(env.SHARED_DATA, payload);
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: headers(BOOTSTRAP_CACHE_CONTROL),
+        });
       }
       console.error("composite DB query failed", { status: dbRes.status, detail });
       const health = buildDataHealth({
@@ -316,18 +378,20 @@ export async function onRequest(context) {
       delete entry._vintages;
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        count: Object.keys(data).length,
-        data,
-        health: buildDataHealth({
-          pipeline: PIPELINE,
-          manifest,
-          fallbackAsOf: latestAsOf(rows, "computed_at", "as_of_date"),
-          staleAfterHours: STALE_AFTER_HOURS,
-        }),
+    const payload = {
+      success: true,
+      count: Object.keys(data).length,
+      data,
+      health: buildDataHealth({
+        pipeline: PIPELINE,
+        manifest,
+        fallbackAsOf: latestAsOf(rows, "computed_at", "as_of_date"),
+        staleAfterHours: STALE_AFTER_HOURS,
       }),
+    };
+    await writeKvJson(env.SHARED_DATA, payload);
+    return new Response(
+      JSON.stringify(payload),
       { status: 200, headers: headers(DATA_CACHE_CONTROL) }
     );
 

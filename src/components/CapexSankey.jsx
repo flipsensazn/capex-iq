@@ -49,6 +49,7 @@ function Sparkline({ history }) {
 
 export default function CapexSankey({
   total, live, byCompany, tracks, marketData, history, onTrackClick, activeTrack,
+  historyLocked = false,
   companyConfig = AI_COMPANIES,
   subtitle = "Hyperscaler Capex",
 }) {
@@ -157,9 +158,11 @@ export default function CapexSankey({
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ fontSize: 9.5, color: "var(--ink-500)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Guidance trend</div>
-          {history?.length >= 2
-            ? <Sparkline history={history} />
-            : <span style={{ fontSize: 10, color: "var(--ink-500)" }}>building history…</span>}
+          {historyLocked
+            ? <span style={{ fontFamily: "var(--font-condensed)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-500)" }}>🔒 Members</span>
+            : history?.length >= 2
+              ? <Sparkline history={history} />
+              : <span style={{ fontSize: 10, color: "var(--ink-500)" }}>building history…</span>}
         </div>
       </div>
 

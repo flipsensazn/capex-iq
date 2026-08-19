@@ -19,13 +19,26 @@ import {
   startDashboardRefreshLoop,
 } from "../src/hooks/useDashboardData.js";
 import { computeStrength } from "../src/components/capex-map/supplyGraphData.js";
+import {
+  createAccessFixture,
+  memberKv,
+  warmAccessFixture,
+} from "./access-fixture.js";
 
+const MEMBER_EMAIL = "member@example.com";
+const access = await createAccessFixture("data-health");
+const memberJwt = await access.createJwt({ email: MEMBER_EMAIL });
+await warmAccessFixture(access, memberJwt);
 const ENV = {
+  ACCESS_TEAM_DOMAIN: access.teamDomain,
+  ACCESS_AUD: access.accessAud,
+  ADMIN_EMAILS: "admin@example.com",
   DATABASE_URL: "postgresql://example.neon.tech/watchlist",
   ALLOWED_ORIGIN: "https://capex.example",
+  SHARED_DATA: memberKv(MEMBER_EMAIL),
 };
-const HEALTH_AWARE_DATA_CACHE = "public, max-age=60, s-maxage=300";
-const BOOTSTRAP_CACHE = "public, max-age=60, s-maxage=300";
+const HEALTH_AWARE_DATA_CACHE = "private, max-age=300";
+const BOOTSTRAP_CACHE = "private, max-age=300";
 const NO_STORE = "no-store";
 const ENDPOINTS = [
   [stressRequest, "/stress"],
@@ -38,7 +51,10 @@ const ENDPOINTS = [
 function request(path, method = "GET") {
   return new Request(`https://capex.example${path}`, {
     method,
-    headers: { Origin: ENV.ALLOWED_ORIGIN },
+    headers: {
+      Origin: ENV.ALLOWED_ORIGIN,
+      Cookie: `CF_Authorization=${memberJwt}`,
+    },
   });
 }
 
@@ -490,7 +506,7 @@ test("unverified, stale, or future gauge periods cannot propagate graph bottlene
   assert.equal(exactly365DaysOld.backlogScore, 99);
 });
 
-test("scoreboard successful payload preserves its public dataset cache", { concurrency: false }, async t => {
+test("scoreboard successful payload uses the private dataset cache", { concurrency: false }, async t => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async (_url, init) => {
@@ -536,7 +552,7 @@ test("preflight, method errors, and database misconfiguration are never cached",
 
     const missingConfigResponse = await handler({
       request: request(path),
-      env: { ALLOWED_ORIGIN: ENV.ALLOWED_ORIGIN },
+      env: { ...ENV, DATABASE_URL: undefined },
     });
     assert.equal(missingConfigResponse.status, 500);
     assert.equal(missingConfigResponse.headers.get("Cache-Control"), NO_STORE);

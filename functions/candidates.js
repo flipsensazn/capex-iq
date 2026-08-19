@@ -9,7 +9,12 @@
 // responsible for actually inserting the ticker into the capex map (it owns
 // the current map state and the existing admin save flow).
 
-import { isAuthorizedAdmin } from "./access-lib.js";
+import {
+  getAccessPayload,
+  isAdminEmail,
+  isAuthorizedAdmin,
+  isTrustedOrigin,
+} from "./access-lib.js";
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -23,6 +28,7 @@ export async function onRequest(context) {
     "Content-Type": "application/json",
     "Vary": "Origin",
   };
+  const gateHeaders = { ...headers, "Cache-Control": "no-store" };
 
   if (request.method === "OPTIONS") {
     return new Response(null, {
@@ -33,6 +39,36 @@ export async function onRequest(context) {
         "Access-Control-Allow-Headers": "Content-Type",
       },
     });
+  }
+
+  if (request.method !== "GET" && request.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405, headers: gateHeaders });
+  }
+
+  if (request.method === "GET") {
+    const accessPayload = await getAccessPayload(request, env);
+    const email = accessPayload?.email?.toLowerCase();
+    if (!email) {
+      return new Response(
+        JSON.stringify({ error: "Authentication required" }),
+        { status: 401, headers: gateHeaders }
+      );
+    }
+    if (!isTrustedOrigin(request, env)) {
+      return new Response(
+        JSON.stringify({ error: "Forbidden" }),
+        { status: 403, headers: gateHeaders }
+      );
+    }
+    if (!isAdminEmail(email, env)) {
+      return new Response(
+        JSON.stringify({
+          error: "Candidate review is admin-only",
+          code: "admin_only",
+        }),
+        { status: 403, headers: gateHeaders }
+      );
+    }
   }
 
   const DATABASE_URL = env.DATABASE_URL;
@@ -147,6 +183,4 @@ export async function onRequest(context) {
       return new Response(JSON.stringify({ success: false, message: "Queue unavailable." }), { status: 500, headers });
     }
   }
-
-  return new Response("Method Not Allowed", { status: 405, headers });
 }

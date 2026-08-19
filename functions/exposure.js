@@ -6,15 +6,40 @@
 //   { success: true, data: { FN: { topRevenuePct: 35,
 //       customers: [{ label, ticker, pct, basis, period, form, quote }] } } }
 
+import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
 import { buildDataHealth, fetchLatestManifest, latestAsOf } from "./data-health.js";
+import { hasFeature } from "./entitlements.js";
 
 const PIPELINE = "customer_exposure";
 const STALE_AFTER_HOURS = 40 * 24;
-const DATA_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
+const CACHE_KEY = "exposureView_v1";
+const CACHE_TTL_SECONDS = 600;
+const DATA_CACHE_CONTROL = "private, max-age=300";
 const NO_STORE = "no-store";
 const MAX_SOURCE_PERIOD_AGE_DAYS = 550;
 const MAX_FUTURE_SOURCE_PERIOD_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function readKvJson(kv) {
+  if (!kv) return null;
+  try {
+    return await kv.get(CACHE_KEY, "json");
+  } catch (error) {
+    console.error(`[exposure] KV read failed for ${CACHE_KEY}:`, error);
+    return null;
+  }
+}
+
+async function writeKvJson(kv, value) {
+  if (!kv) return;
+  try {
+    await kv.put(CACHE_KEY, JSON.stringify(value), {
+      expirationTtl: CACHE_TTL_SECONDS,
+    });
+  } catch (error) {
+    console.error(`[exposure] KV write failed for ${CACHE_KEY}:`, error);
+  }
+}
 
 function numberOrNull(value) {
   return value != null && Number.isFinite(Number(value)) ? Number(value) : null;
@@ -103,6 +128,38 @@ export async function onRequest(context) {
     return new Response("Method Not Allowed", {
       status: 405,
       headers: headers(NO_STORE),
+    });
+  }
+
+  const accessPayload = await getAccessPayload(request, env);
+  const email = accessPayload?.email?.toLowerCase();
+  if (!email) {
+    return new Response(
+      JSON.stringify({ error: "Authentication required" }),
+      { status: 401, headers: headers(NO_STORE) }
+    );
+  }
+  if (!isTrustedOrigin(request, env)) {
+    return new Response(
+      JSON.stringify({ error: "Forbidden" }),
+      { status: 403, headers: headers(NO_STORE) }
+    );
+  }
+  if (!(await hasFeature(email, env, "signals"))) {
+    return new Response(
+      JSON.stringify({
+        error: "Signals access is not enabled for this account",
+        code: "members_only",
+      }),
+      { status: 403, headers: headers(NO_STORE) }
+    );
+  }
+
+  const cached = await readKvJson(env.SHARED_DATA);
+  if (cached) {
+    return new Response(JSON.stringify(cached), {
+      status: 200,
+      headers: headers(DATA_CACHE_CONTROL),
     });
   }
 
@@ -203,18 +260,20 @@ export async function onRequest(context) {
       }
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        count: Object.keys(data).length,
-        data,
-        health: buildDataHealth({
-          pipeline: PIPELINE,
-          manifest,
-          fallbackAsOf: latestAsOf(rows, "extracted_at"),
-          staleAfterHours: STALE_AFTER_HOURS,
-        }),
+    const payload = {
+      success: true,
+      count: Object.keys(data).length,
+      data,
+      health: buildDataHealth({
+        pipeline: PIPELINE,
+        manifest,
+        fallbackAsOf: latestAsOf(rows, "extracted_at"),
+        staleAfterHours: STALE_AFTER_HOURS,
       }),
+    };
+    await writeKvJson(env.SHARED_DATA, payload);
+    return new Response(
+      JSON.stringify(payload),
       { status: 200, headers: headers(DATA_CACHE_CONTROL) }
     );
 
