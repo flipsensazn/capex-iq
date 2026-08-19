@@ -1,7 +1,13 @@
 // functions/research.js
 
 import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
-import { hasFeature } from "./entitlements.js";
+import {
+  getResearchQuota,
+  getResearchUsage,
+  hasFeature,
+  incrementResearchUsage,
+  nextMonthResetDate,
+} from "./entitlements.js";
 import { onRequest as fundamentalsHandler } from "./fundamentals.js";
 import { onRequest as historyHandler } from "./history.js";
 import { findNotablePoints } from "./notable-points.js";
@@ -508,7 +514,22 @@ export async function onRequest(context) {
 
   const cacheKey = `${CACHE_KEY_PREFIX}${ticker}`;
   const cached = await readKvJson(env.SHARED_DATA, cacheKey);
-  if (cached) return jsonResponse(cached, 200, headers);
+  const quota = await getResearchQuota(email, env);
+  let usage = quota;
+  if (!quota.unmetered) {
+    usage = { used: await getResearchUsage(email, env), limit: quota.limit };
+  }
+  if (cached) return jsonResponse({ ...cached, usage }, 200, headers);
+
+  if (!quota.unmetered && usage.used >= usage.limit) {
+    return jsonResponse({
+      error: "Monthly research limit reached",
+      code: "quota_exceeded",
+      used: usage.used,
+      limit: usage.limit,
+      resetsOn: nextMonthResetDate(),
+    }, 429, headers);
+  }
 
   // Cache hits are free. Fail closed and rate-limit only work that can fan out
   // to SEC/Yahoo and a paid Gemini request.
@@ -685,8 +706,14 @@ export async function onRequest(context) {
       disclaimer: "This is a model-generated projection from filed data, and the verdict is a model-assisted composite, not investment advice.",
     };
 
+    if (!quota.unmetered) {
+      usage = {
+        used: await incrementResearchUsage(email, env),
+        limit: quota.limit,
+      };
+    }
     await writeKvJson(env.SHARED_DATA, cacheKey, result);
-    return jsonResponse(result, 200, headers);
+    return jsonResponse({ ...result, usage }, 200, headers);
   } catch (err) {
     console.error("[research] analysis failed:", err);
     return jsonResponse({ error: "Analysis failed", detail: String(err?.message || err).slice(0, 400) }, 502, headers);

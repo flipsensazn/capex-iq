@@ -70,16 +70,21 @@ development.
 
 Per-member feature grants live in `SHARED_DATA` KV under a lowercased
 `member:<email>` key. Each record contains a `features` object with boolean
-grants. Self-registration creates an empty `features` object for lead capture
-and does not grant Access sign-in.
+grants and may contain a top-level numeric integer `researchQuota` from 1 to
+10000. Missing or invalid quota values default to 50 analyses per UTC month;
+admins are unmetered. Self-registration creates an empty `features` object for
+lead capture and does not grant Access sign-in.
 
 Granting full membership is a two-step owner action; both steps are required:
 
 1. Write the member's KV features record (using the same lowercased email):
 
 ```sh
-npx wrangler kv key put --namespace-id 1dadc46e52b146bea2fbc4b8511c7d90 "member:someone@example.com" '{"features":{"research":true,"radar":true,"funds":true,"signals":true}}'
+npx wrangler kv key put --namespace-id 1dadc46e52b146bea2fbc4b8511c7d90 "member:someone@example.com" '{"features":{"research":true,"radar":true,"funds":true,"signals":true},"researchQuota":200}'
 ```
+
+This example grants all features and a 200-analysis monthly allowance. Omit
+`researchQuota` to use the default allowance.
 
 2. Add that email to the **Capex IQ Members** Access list in Cloudflare Zero
    Trust so the member can sign in at `/auth`.

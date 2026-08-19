@@ -447,6 +447,8 @@ async function requestResearch({
   ticker = "MSFT",
   geminiAnalysis,
   cachedResult,
+  memberRecord,
+  initialUsage,
   geminiKey = "test-gemini-key",
   companyFacts = companyFactsFixture(),
   currentPrice = 400,
@@ -484,6 +486,17 @@ async function requestResearch({
   if (cachedResult) {
     await kv.put(`research_v7_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
+  if (memberRecord !== undefined) {
+    await kv.put(`member:${email.toLowerCase()}`, JSON.stringify(memberRecord));
+  }
+  if (initialUsage !== undefined) {
+    await kv.put(
+      `usage:${email.toLowerCase()}:${new Date().toISOString().slice(0, 7)}`,
+      String(initialUsage),
+      { expirationTtl: 62 * 24 * 60 * 60 }
+    );
+  }
+  kv.puts.length = 0;
 
   const originalFetch = globalThis.fetch;
   const upstreamRequests = [];
@@ -667,6 +680,65 @@ test("research rate-limits cache misses before upstream work", { concurrency: fa
   assert.equal(geminiCalls, 0);
 });
 
+test("research rejects a cache miss at the monthly quota before upstream work", { concurrency: false }, async () => {
+  const { response, kv, upstreamRequests, geminiCalls, rateLimitKeys } = await requestResearch({
+    email: "member@example.com",
+    sub: "research-member",
+    adminEmails: "admin@example.com",
+    memberRecord: { features: { research: true }, researchQuota: 2 },
+    initialUsage: 2,
+  });
+  const body = await response.json();
+  const now = new Date();
+  const resetsOn = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+    .toISOString()
+    .slice(0, 10);
+
+  assert.equal(response.status, 429);
+  assert.deepEqual(body, {
+    error: "Monthly research limit reached",
+    code: "quota_exceeded",
+    used: 2,
+    limit: 2,
+    resetsOn,
+  });
+  assert.equal(response.headers.get("Cache-Control"), "private, no-store");
+  assert.equal(upstreamRequests.length, 0);
+  assert.equal(geminiCalls, 0);
+  assert.equal(rateLimitKeys.length, 0);
+  assert.equal(kv.puts.filter(({ key }) => key.startsWith("usage:")).length, 0);
+});
+
+test("research increments monthly usage once after a successful cache miss", { concurrency: false }, async () => {
+  const { response, kv, geminiCalls } = await requestResearch({
+    geminiAnalysis: geminiAnalysisForCase("pe", {
+      revenueCagr: 5,
+      exitNetMargin: 20,
+      multipleValue: 20,
+    }),
+    email: "member@example.com",
+    sub: "research-member",
+    adminEmails: "admin@example.com",
+    memberRecord: { features: { research: true }, researchQuota: 3 },
+    initialUsage: 1,
+  });
+  const body = await response.json();
+  const usagePuts = kv.puts.filter(({ key }) => key.startsWith("usage:"));
+  const cachedWrite = kv.puts.find(({ key }) => key === "research_v7_MSFT");
+
+  assert.equal(response.status, 200);
+  assert.equal(geminiCalls, 1);
+  assert.deepEqual(body.usage, { used: 2, limit: 3 });
+  assert.deepEqual(usagePuts, [{
+    key: `usage:member@example.com:${new Date().toISOString().slice(0, 7)}`,
+    value: "2",
+    options: { expirationTtl: 62 * 24 * 60 * 60 },
+  }]);
+  assert.ok(cachedWrite);
+  assert.equal("usage" in JSON.parse(cachedWrite.value), false);
+  assert.ok(kv.puts.indexOf(usagePuts[0]) < kv.puts.indexOf(cachedWrite));
+});
+
 test("research fails closed when the rate limiter is unavailable", { concurrency: false }, async () => {
   const { response, upstreamRequests, geminiCalls } = await requestResearch({
     rateLimiterEnabled: false,
@@ -680,14 +752,19 @@ test("research fails closed when the rate limiter is unavailable", { concurrency
   assert.equal(geminiCalls, 0);
 });
 
-test("research aborts a model request at its configured deadline", { concurrency: false }, async () => {
+test("research aborts a model request at its configured deadline without incrementing usage", { concurrency: false }, async () => {
   const geminiAnalysis = geminiAnalysisForCase("pe", {
     revenueCagr: 5,
     exitNetMargin: 20,
     multipleValue: 20,
   });
-  const { response, geminiCalls } = await requestResearch({
+  const { response, kv, geminiCalls } = await requestResearch({
     geminiAnalysis,
+    email: "member@example.com",
+    sub: "research-member",
+    adminEmails: "admin@example.com",
+    memberRecord: { features: { research: true }, researchQuota: 3 },
+    initialUsage: 1,
     researchModelTimeoutMs: 10,
     geminiFetch: async (_url, options) => new Promise((resolve, reject) => {
       if (options.signal.aborted) {
@@ -703,6 +780,7 @@ test("research aborts a model request at its configured deadline", { concurrency
   assert.equal(geminiCalls, 1);
   assert.equal(body.error, "Analysis failed");
   assert.match(body.detail, /Analysis model timed out after 10ms/);
+  assert.equal(kv.puts.filter(({ key }) => key.startsWith("usage:")).length, 0);
 });
 
 test("research keeps the model deadline active while reading the response body", { concurrency: false }, async () => {
@@ -792,6 +870,7 @@ test("research returns server-derived price context and model technical and macr
   const body = await response.json();
 
   assert.equal(response.status, 200);
+  assert.deepEqual(body.usage, { used: 1, limit: 50 });
   assert.equal(geminiCalls, 1);
   assert.deepEqual(body.priceContext, priceEntry);
   assert.deepEqual(body.analysis.technical, technical);
@@ -814,6 +893,7 @@ test("research applies one set-level P/S method to all three cases", { concurren
   const expectedBasePrice = (1200 * 2) / 100;
 
   assert.equal(response.status, 200);
+  assert.deepEqual(body.usage, { unmetered: true });
   assert.equal(cases.multipleType, "ps");
   assert.equal(cases.currentPs, body.marketContext.currentPs);
   assert.deepEqual([cases.bear.impliedPrice, cases.base.impliedPrice, cases.bull.impliedPrice], [12, 24, 36]);
@@ -1143,7 +1223,7 @@ test("research degrades gracefully when history is unavailable", { concurrency: 
   ));
 });
 
-test("research returns a cached result without calling Gemini", { concurrency: false }, async () => {
+test("research returns a cached result with usage and without incrementing", { concurrency: false }, async () => {
   const cachedResult = {
     ticker: "MSFT",
     entityName: "MICROSOFT CORP",
@@ -1154,14 +1234,23 @@ test("research returns a cached result without calling Gemini", { concurrency: f
     model: "gemini-2.5-flash",
     disclaimer: "This is a model-generated projection from filed data, not investment advice.",
   };
-  const { response, upstreamRequests, geminiCalls, rateLimitKeys } = await requestResearch({
+  const { response, kv, upstreamRequests, geminiCalls, rateLimitKeys } = await requestResearch({
     cachedResult,
     geminiKey: undefined,
+    email: "member@example.com",
+    sub: "research-member",
+    adminEmails: "admin@example.com",
+    memberRecord: { features: { research: true }, researchQuota: 10 },
+    initialUsage: 10,
   });
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), cachedResult);
+  assert.deepEqual(await response.json(), {
+    ...cachedResult,
+    usage: { used: 10, limit: 10 },
+  });
   assert.equal(geminiCalls, 0);
   assert.equal(upstreamRequests.length, 0);
   assert.equal(rateLimitKeys.length, 0);
+  assert.equal(kv.puts.filter(({ key }) => key.startsWith("usage:")).length, 0);
 });

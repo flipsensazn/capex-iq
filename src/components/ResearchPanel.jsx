@@ -145,6 +145,10 @@ async function responseError(response) {
   return {
     message,
     detail: typeof body?.detail === "string" ? body.detail : "",
+    code: typeof body?.code === "string" ? body.code : "",
+    used: body?.used,
+    limit: body?.limit,
+    resetsOn: typeof body?.resetsOn === "string" ? body.resetsOn : "",
   };
 }
 
@@ -966,6 +970,8 @@ export default function ResearchPanel({ initialTicker }) {
   const latestYear = years.length ? years[years.length - 1] : null;
   const analysis = research?.analysis;
   const busy = fundamentalsLoading || aiLoading;
+  const usage = research?.usage;
+  const showUsage = Number.isFinite(usage?.used) && Number.isFinite(usage?.limit) && usage.limit > 0;
   const hasTechnical = hasLensContent(analysis?.technical)
     || Boolean(research?.history)
     || (Array.isArray(research?.technicalScore?.components) && research.technicalScore.components.length > 0);
@@ -999,6 +1005,11 @@ export default function ResearchPanel({ initialTicker }) {
           <div>
             <h1 style={{ margin: 0, color: "var(--ink-100)", fontSize: 22, lineHeight: 1.2 }}>Financial trajectory &amp; three-year cases</h1>
             <p style={{ margin: "7px 0 0", color: "var(--ink-400)", fontSize: 11 }}>Filed SEC figures first; model analysis follows when ready.</p>
+            {showUsage && (
+              <div style={{ marginTop: 7, color: usage.used / usage.limit >= 0.8 ? "var(--warn)" : "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 10 }}>
+                {usage.used} of {usage.limit} analyses this month
+              </div>
+            )}
           </div>
           <form onSubmit={analyzeTicker} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -1051,14 +1062,20 @@ export default function ResearchPanel({ initialTicker }) {
 
       {aiLoading && <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--ink-400)", fontSize: 12 }}>Analyzing the filed figures and checking scenario arithmetic…</div>}
       {aiError && (
-        <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--down-400)", fontSize: 12 }}>
-          <div>{aiError.message}</div>
-          {aiError.detail && (
-            <div style={{ marginTop: 7, maxHeight: 120, overflow: "auto", color: "var(--ink-400)", fontFamily: "var(--font-mono)", fontSize: 10.5, lineHeight: 1.45, wordBreak: "break-word" }}>
-              {aiError.detail}
-            </div>
-          )}
-        </div>
+        aiError.code === "quota_exceeded" ? (
+          <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--ink-300)", fontSize: 12 }}>
+            You've used all {aiError.limit} analyses this month. Your allowance resets on {aiError.resetsOn}.
+          </div>
+        ) : (
+          <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--down-400)", fontSize: 12 }}>
+            <div>{aiError.message}</div>
+            {aiError.detail && (
+              <div style={{ marginTop: 7, maxHeight: 120, overflow: "auto", color: "var(--ink-400)", fontFamily: "var(--font-mono)", fontSize: 10.5, lineHeight: 1.45, wordBreak: "break-word" }}>
+                {aiError.detail}
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {analysis && (

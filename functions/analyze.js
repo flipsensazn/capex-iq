@@ -8,7 +8,13 @@
 // 3-year price projection.  Results cached in KV for 24 hours.
 
 import { getAccessPayload, isTrustedOrigin } from "./access-lib.js";
-import { hasFeature } from "./entitlements.js";
+import {
+  getResearchQuota,
+  getResearchUsage,
+  hasFeature,
+  incrementResearchUsage,
+  nextMonthResetDate,
+} from "./entitlements.js";
 
 const CACHE_KEY_PREFIX = "analysis_v3_";
 const CACHE_TTL_SEC    = 24 * 60 * 60;
@@ -459,6 +465,23 @@ export async function onRequest(context) {
   // ── Build shared user prompt ──────────────────────────────
   // Cached reports are free to read, but each cache miss fans out to four
   // Gemini requests. Rate-limit misses by the verified Access member ID.
+  const quota = await getResearchQuota(email, env);
+  if (!quota.unmetered) {
+    const used = await getResearchUsage(email, env);
+    if (used >= quota.limit) {
+      return new Response(
+        JSON.stringify({
+          error: "Monthly research limit reached",
+          code: "quota_exceeded",
+          used,
+          limit: quota.limit,
+          resetsOn: nextMonthResetDate(),
+        }),
+        { status: 429, headers }
+      );
+    }
+  }
+
   if (!env.ANALYZE_RATE_LIMITER) {
     return new Response(
       JSON.stringify({ error: "Analysis service is temporarily unavailable" }),
@@ -518,6 +541,10 @@ Analyze ${ticker} based on the above data points and your training knowledge of 
       generatedAt: Date.now(),
       disclaimer:  "AI-generated analysis based on training data through August 2025. Not financial advice. Always conduct your own due diligence.",
     };
+
+    if (!quota.unmetered) {
+      await incrementResearchUsage(email, env);
+    }
 
     // ── Cache result ──────────────────────────────────────
     if (env.SHARED_DATA) {
