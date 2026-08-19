@@ -307,36 +307,37 @@ test("OperationCoordinator schedules stale refreshes on a durable alarm", async 
   assert.equal(values.has("pendingIntelRefresh"), false);
 });
 
-test("OperationCoordinator serializes registration mutations and mirrors successes", { concurrency: false }, async () => {
+test("OperationCoordinator serializes KV registration writes and mirrors successes", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
-  const firstRosterRead = deferred();
-  const firstRosterReadStarted = deferred();
+  const firstMemberRead = deferred();
+  const firstMemberReadStarted = deferred();
   const { state, sqlCalls, ready } = fakeDurableObjectState();
+  const sharedData = kvWith();
+  const originalGet = sharedData.get.bind(sharedData);
+  const memberWrites = [];
+  let memberReads = 0;
+  sharedData.get = async (key, type) => {
+    memberReads += 1;
+    if (memberReads === 1) {
+      firstMemberReadStarted.resolve();
+      await firstMemberRead.promise;
+    }
+    return originalGet(key, type);
+  };
+  const originalPut = sharedData.put.bind(sharedData);
+  sharedData.put = async (key, value) => {
+    memberWrites.push({ key, value: JSON.parse(value) });
+    await originalPut(key, value);
+  };
   const coordinator = new OperationCoordinator(state, {
-    ACCESS_MEMBERS_GROUP_ID: "members-group",
-    CF_ACCESS_API_TOKEN: "test-token",
+    SHARED_DATA: sharedData,
   });
-  let rosterReads = 0;
-  let rosterWrites = 0;
+  const cloudflareApiCalls = [];
 
-  globalThis.fetch = async (url, options = {}) => {
-    const pathname = new URL(url).pathname;
-    if (pathname.endsWith("/access/groups/members-group") && options.method !== "PUT") {
-      rosterReads += 1;
-      if (rosterReads === 1) {
-        firstRosterReadStarted.resolve();
-        return firstRosterRead.promise;
-      }
-      return Response.json({
-        success: true,
-        result: { name: "Capex IQ Members", include: [], exclude: [], require: [] },
-      });
-    }
-    if (pathname.endsWith("/access/groups/members-group") && options.method === "PUT") {
-      rosterWrites += 1;
-      return Response.json({ success: true, result: {} });
-    }
-    throw new Error(`Unexpected Access API call: ${url}`);
+  globalThis.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (new URL(url).hostname === "api.cloudflare.com") cloudflareApiCalls.push(url);
+    throw new Error(`Unexpected external fetch: ${url}`);
   };
 
   try {
@@ -348,18 +349,32 @@ test("OperationCoordinator serializes registration mutations and mirrors success
       email: "second@example.com",
     }));
 
-    await firstRosterReadStarted.promise;
-    assert.equal(rosterReads, 1, "second mutation must wait for the first");
-    firstRosterRead.resolve(Response.json({
-      success: true,
-      result: { name: "Capex IQ Members", include: [], exclude: [], require: [] },
-    }));
+    await firstMemberReadStarted.promise;
+    assert.equal(memberReads, 1, "second mutation must wait for the first");
+    firstMemberRead.resolve();
 
     const [firstResponse, secondResponse] = await Promise.all([first, second]);
     assert.equal(firstResponse.status, 200);
     assert.equal(secondResponse.status, 200);
-    assert.equal(rosterReads, 2);
-    assert.equal(rosterWrites, 2);
+    const freshResult = {
+      success: true,
+      already: false,
+      message: "You're on the list! The free dashboard is open — membership unlocks the full signal stack.",
+    };
+    assert.deepEqual(await firstResponse.json(), freshResult);
+    assert.deepEqual(await secondResponse.json(), freshResult);
+    assert.equal(memberReads, 2);
+    assert.equal(memberWrites.length, 2);
+    assert.deepEqual(memberWrites.map(write => write.key), [
+      "member:first@example.com",
+      "member:second@example.com",
+    ]);
+    for (const { value } of memberWrites) {
+      assert.deepEqual(value.features, {});
+      assert.equal(value.source, "self-register");
+      assert.equal(new Date(value.registeredAt).toISOString(), value.registeredAt);
+    }
+    assert.equal(cloudflareApiCalls.length, 0, "registration must not call api.cloudflare.com");
 
     const mirroredEmails = sqlCalls
       .filter(call => call.query.includes("INSERT INTO members"))
@@ -368,6 +383,79 @@ test("OperationCoordinator serializes registration mutations and mirrors success
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("OperationCoordinator returns already without overwriting granted member features", { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  const grantedRecord = {
+    features: { research: true, radar: true },
+    registeredAt: "2026-08-01T12:00:00.000Z",
+    source: "owner-grant",
+  };
+  const memberKey = "member:granted@example.com";
+  const sharedData = kvWith({ [memberKey]: grantedRecord });
+  const originalRecord = sharedData.values.get(memberKey);
+  const originalPut = sharedData.put.bind(sharedData);
+  let putCalls = 0;
+  sharedData.put = async (...args) => {
+    putCalls += 1;
+    return originalPut(...args);
+  };
+  const { state, sqlCalls, ready } = fakeDurableObjectState();
+  const coordinator = new OperationCoordinator(state, { SHARED_DATA: sharedData });
+  const cloudflareApiCalls = [];
+
+  globalThis.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (new URL(url).hostname === "api.cloudflare.com") cloudflareApiCalls.push(url);
+    throw new Error(`Unexpected external fetch: ${url}`);
+  };
+
+  try {
+    await ready();
+    const response = await coordinator.fetch(jsonRequest("/register-member", {
+      email: "Granted@Example.com",
+    }));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      success: true,
+      already: true,
+      message: "You're already on the list — the free dashboard is open to everyone.",
+    });
+    assert.equal(
+      sharedData.values.get(memberKey),
+      originalRecord,
+      "re-registering must not overwrite a granted member record"
+    );
+    assert.equal(putCalls, 0, "re-registering must not write an existing member record");
+    assert.deepEqual(JSON.parse(sharedData.values.get(memberKey)), grantedRecord);
+    assert.equal(cloudflareApiCalls.length, 0, "registration must not call api.cloudflare.com");
+
+    const memberInsert = sqlCalls.find(call => call.query.includes("INSERT INTO members"));
+    assert.equal(memberInsert.params[0], "granted@example.com");
+    assert.equal(memberInsert.params[3], 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OperationCoordinator rejects registration when SHARED_DATA is unconfigured", async () => {
+  const { state, sqlCalls, ready } = fakeDurableObjectState();
+  const coordinator = new OperationCoordinator(state, {});
+  await ready();
+
+  const response = await coordinator.fetch(jsonRequest("/register-member", {
+    email: "member@example.com",
+  }));
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    success: false,
+    code: "registration_unavailable",
+    message: "Registration isn't open yet — check back soon.",
+  });
+  assert.equal(sqlCalls.some(call => call.query.includes("INSERT INTO members")), false);
 });
 
 test("scheduled handler prewarms all three intel coordinator instances", async () => {

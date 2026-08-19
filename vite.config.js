@@ -6,7 +6,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       // Two entries: index.html is the public hero page, app.html is the
-      // dashboard (served at /app by the site Worker, behind Access).
+      // public dashboard (served at /app by the site Worker).
       input: {
         main: "index.html",
         app: "app.html",

@@ -5,14 +5,11 @@
 import { isTrustedOrigin } from "./access-lib.js";
 import { readBoundedJson } from "./bounded-json.js";
 
-const MEMBERS_GROUP_NAME = "Capex IQ Members";
-const GROUP_ID_KV_KEY = "accessMembersTargetExact_v2";
 const TURNSTILE_ACTION = "turnstile-spin-v1";
 const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 const MAX_BODY_BYTES = 4 * 1024;
 const MAX_TURNSTILE_TOKEN_LENGTH = 2048;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const DEFAULT_ACCOUNT_ID = "0e727bf4fae81b99443d3150ca244484";
 
 export class AccessRegistrationError extends Error {
   constructor(status, code, message) {
@@ -54,174 +51,39 @@ function validEmail(email) {
   return email.length <= 254 && EMAIL_RE.test(email);
 }
 
-function normalizedName(value) {
-  return typeof value === "string" ? value.toLowerCase().replace(/\s+/g, " ").trim() : "";
-}
-
-function exactRosterName(value) {
-  return normalizedName(value) === normalizedName(MEMBERS_GROUP_NAME);
-}
-
-async function cloudflareJson(url, options, failureMessage) {
-  let response;
-  try {
-    response = await fetch(url, {
-      ...options,
-      signal: options?.signal || AbortSignal.timeout(10_000),
-    });
-  } catch {
-    throw new AccessRegistrationError(502, "access_api_failed", failureMessage);
-  }
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    throw new AccessRegistrationError(502, "access_api_failed", failureMessage);
-  }
-  if (!response.ok || body?.success === false) {
-    throw new AccessRegistrationError(502, "access_api_failed", failureMessage);
-  }
-  return body;
-}
-
-async function discoverRoster(env, base, apiHeaders) {
-  const [groupsResult, listsResult] = await Promise.allSettled([
-    cloudflareJson(
-      `${base}/access/groups?per_page=50`,
-      { headers: apiHeaders },
-      "Unable to discover the member roster"
-    ),
-    cloudflareJson(
-      `${base}/gateway/lists`,
-      { headers: apiHeaders },
-      "Unable to discover the member roster"
-    ),
-  ]);
-  if (groupsResult.status === "rejected" && listsResult.status === "rejected") {
-    throw new AccessRegistrationError(502, "access_api_failed", "Unable to discover the member roster");
-  }
-  const groupsBody = groupsResult.status === "fulfilled" ? groupsResult.value : null;
-  const listsBody = listsResult.status === "fulfilled" ? listsResult.value : null;
-  const groups = Array.isArray(groupsBody?.result) ? groupsBody.result : [];
-  const lists = Array.isArray(listsBody?.result) ? listsBody.result : [];
-  const emailLists = lists.filter(item => String(item?.type || "").toUpperCase() === "EMAIL");
-
-  const exactList = emailLists.find(item => exactRosterName(item?.name));
-  const exactGroup = groups.find(item => exactRosterName(item?.name));
-  if (exactList) return `list:${exactList.id}`;
-  if (exactGroup) return `group:${exactGroup.id}`;
-  throw new AccessRegistrationError(503, "roster_unavailable", "Registration is being set up — check back soon.");
-}
-
-async function resolveRosterTarget(env, base, apiHeaders) {
-  const configuredList = typeof env.ACCESS_MEMBERS_LIST_ID === "string"
-    ? env.ACCESS_MEMBERS_LIST_ID.trim()
-    : "";
-  if (configuredList) return `list:${configuredList}`;
-
-  const configuredGroup = typeof env.ACCESS_MEMBERS_GROUP_ID === "string"
-    ? env.ACCESS_MEMBERS_GROUP_ID.trim()
-    : "";
-  if (configuredGroup) return `group:${configuredGroup}`;
-
-  let cached = null;
-  if (env.SHARED_DATA) {
-    try { cached = await env.SHARED_DATA.get(GROUP_ID_KV_KEY); } catch {}
-  }
-  if (/^(?:list|group):[^:]+$/.test(cached || "")) return cached;
-
-  const target = await discoverRoster(env, base, apiHeaders);
-  if (env.SHARED_DATA) {
-    try { await env.SHARED_DATA.put(GROUP_ID_KV_KEY, target); } catch {}
-  }
-  return target;
-}
-
-export async function registerMemberInAccess(env, emailValue) {
+export async function registerInterest(env, emailValue) {
   const email = normalizeEmail(emailValue);
   if (!validEmail(email)) {
     throw new AccessRegistrationError(400, "invalid_email", "That doesn't look like a valid email address.");
   }
-  if (!env.CF_ACCESS_API_TOKEN) {
+  if (!env.SHARED_DATA) {
     throw new AccessRegistrationError(503, "registration_unavailable", "Registration isn't open yet — check back soon.");
   }
 
-  const accountId = env.ACCESS_ACCOUNT_ID || DEFAULT_ACCOUNT_ID;
-  const base = `https://api.cloudflare.com/client/v4/accounts/${accountId}`;
-  const apiHeaders = {
-    "Authorization": `Bearer ${env.CF_ACCESS_API_TOKEN}`,
-    "Content-Type": "application/json",
-  };
-
+  const key = `member:${email}`;
   try {
-    const target = await resolveRosterTarget(env, base, apiHeaders);
-    const separator = target.indexOf(":");
-    const kind = target.slice(0, separator);
-    const targetId = target.slice(separator + 1);
-    let already = false;
-
-    if (kind === "list") {
-      const itemsBody = await cloudflareJson(
-        `${base}/gateway/lists/${targetId}/items?per_page=1000`,
-        { headers: apiHeaders },
-        "Unable to read the member roster"
-      );
-      const items = Array.isArray(itemsBody?.result) ? itemsBody.result : [];
-      already = items.some(item => normalizeEmail(item?.value) === email);
-      if (!already) {
-        await cloudflareJson(
-          `${base}/gateway/lists/${targetId}`,
-          {
-            method: "PATCH",
-            headers: apiHeaders,
-            body: JSON.stringify({ append: [{ value: email }], remove: [] }),
-          },
-          "Unable to update the member roster"
-        );
-      }
-    } else if (kind === "group") {
-      const groupBody = await cloudflareJson(
-        `${base}/access/groups/${targetId}`,
-        { headers: apiHeaders },
-        "Unable to read the member roster"
-      );
-      const group = groupBody?.result;
-      if (!group || typeof group !== "object") {
-        throw new AccessRegistrationError(502, "access_api_failed", "Unable to read the member roster");
-      }
-      const include = Array.isArray(group.include) ? [...group.include] : [];
-      already = include.some(rule => normalizeEmail(rule?.email?.email) === email);
-      if (!already) {
-        include.push({ email: { email } });
-        await cloudflareJson(
-          `${base}/access/groups/${targetId}`,
-          {
-            method: "PUT",
-            headers: apiHeaders,
-            body: JSON.stringify({
-              name: group.name,
-              include,
-              exclude: Array.isArray(group.exclude) ? group.exclude : [],
-              require: Array.isArray(group.require) ? group.require : [],
-            }),
-          },
-          "Unable to update the member roster"
-        );
-      }
-    } else {
-      throw new AccessRegistrationError(503, "roster_unavailable", "Registration is being set up — check back soon.");
+    const existing = await env.SHARED_DATA.get(key);
+    if (existing !== null) {
+      return {
+        success: true,
+        already: true,
+        message: "You're already on the list — the free dashboard is open to everyone.",
+      };
     }
 
+    await env.SHARED_DATA.put(key, JSON.stringify({
+      features: {},
+      registeredAt: new Date().toISOString(),
+      source: "self-register",
+    }));
     return {
       success: true,
-      already,
-      message: already
-        ? "You're already registered — click Sign In to continue with Google."
-        : "You're in! Click Sign In to continue with Google.",
+      already: false,
+      message: "You're on the list! The free dashboard is open — membership unlocks the full signal stack.",
     };
   } catch (error) {
     if (error instanceof AccessRegistrationError) throw error;
-    throw new AccessRegistrationError(502, "access_api_failed", "Registration failed — please try again.");
+    throw new AccessRegistrationError(503, "registration_unavailable", "Registration failed — please try again.");
   }
 }
 
@@ -318,7 +180,7 @@ export async function onRequest(context) {
 
   if (
     !env.TURNSTILE_SECRET_KEY
-    || !env.CF_ACCESS_API_TOKEN
+    || !env.SHARED_DATA
     || !env.REGISTER_RATE_LIMITER
     || typeof env.OPERATION_COORDINATOR?.getByName !== "function"
   ) {

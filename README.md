@@ -18,7 +18,7 @@ https://capex-iq.us (custom domain on the `capex-iq` Worker).
   `CLOUDFLARE_API_TOKEN` repo secret). Manual: `npx vite build` at the root,
   then `npx wrangler deploy` in `workers/site/`.
 - Secrets on the Worker: `ADMIN_PASSWORD`, `DATABASE_URL`, `GEMINI_API_KEY`,
-  `FINNHUB_KEY`, `CF_ACCESS_API_TOKEN`, and `TURNSTILE_SECRET_KEY` (set via
+  `FINNHUB_KEY`, and `TURNSTILE_SECRET_KEY` (set via
   dashboard or `wrangler secret put`). Set the public Turnstile widget key as
   the `TURNSTILE_SITE_KEY` GitHub Actions repository variable. `ALLOWED_ORIGIN`,
   the `SHARED_DATA` KV binding, the rate-limit bindings, and the
@@ -33,44 +33,59 @@ https://capex-iq.us (custom domain on the `capex-iq` Worker).
 
 ### Tiered access (Cloudflare Zero Trust)
 
-`/` is the public hero/landing page (static `index.html`); the dashboard is
-the second Vite entry (`app.html`) served at `/app`, which Cloudflare Access
-protects at the edge with One-time PIN sign-in against two Access Groups:
-**Members** (self-service, populated by `POST /register` through the
-Cloudflare API using the `CF_ACCESS_API_TOKEN` Worker secret) and
-**Admins**. Signed-in admins get editing automatically: the admin-gated
-endpoints accept a verified Access JWT (`functions/access-lib.js` checks
+`/` is the public hero/landing page (static `index.html`), and `/app` is the
+public free dashboard served by the second Vite entry (`app.html`). Full-member
+sign-in at `/auth` is protected by Cloudflare Access. The **Capex IQ Members**
+Access list is a curated roster that the owner maintains manually; registering
+does not add an email to it or grant sign-in access.
+
+`POST /register` is free-tier lead capture and writes only to `SHARED_DATA` KV.
+After verifying the Turnstile challenge's action and hostname, it creates
+`member:<email>` with empty features, a registration timestamp, and
+`source: "self-register"`.
+If the record already exists, registration leaves it untouched so it cannot
+erase features that were granted later.
+
+Signed-in admins get editing automatically: the admin-gated endpoints accept a
+verified Access JWT (`functions/access-lib.js` checks
 signature against the team JWKS, AUD, expiry, and membership in
 `ADMIN_EMAILS`) as an alternative to the legacy admin password, and the app
-auto-enables admin UI via `GET /me`. Public registration requires a Turnstile
-challenge whose action and hostname are verified server-side; roster mutations
-are serialized by a Durable Object so concurrent group updates cannot overwrite
-one another. Read-only market endpoints stay public — the prewarm Worker and
-local digest depend on unauthenticated reads — while identity-bearing endpoints
-such as `/presence` verify the Access JWT themselves. Config
+auto-enables admin UI via `GET /me`. Registration operations are serialized by
+a Durable Object. Read-only market endpoints stay public — the prewarm Worker
+and local digest depend on unauthenticated reads — while identity-bearing
+endpoints such as `/presence` verify the Access JWT themselves. Config
 vars in `workers/site/wrangler.jsonc`: `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`
-(both empty = auth features off), `ADMIN_EMAILS`. To move members behind a
-paywall later, stop auto-adding in `/register` and let the payment webhook
-do the group add — the Access policy itself doesn't change.
+(both empty = auth features off), `ADMIN_EMAILS`.
 
 Create the production Turnstile widget as a Managed widget restricted to
 `capex-iq.us`. Store its site key in the GitHub repository variable
 `TURNSTILE_SITE_KEY` and its secret in the GitHub repository secret
 `TURNSTILE_SECRET_KEY`; the deploy workflow syncs both without committing
-either value. Set `ACCESS_MEMBERS_LIST_ID` (preferred) or
-`ACCESS_MEMBERS_GROUP_ID` as a repository variable to pin registration to the
-intended roster; exact-name discovery is only a fail-closed fallback. Use
-Cloudflare's published test keys for local development.
+either value. `ACCESS_MEMBERS_LIST_ID`, `ACCESS_MEMBERS_GROUP_ID`, and
+`CF_ACCESS_API_TOKEN` are no longer used by registration; the Access roster is
+curated manually in Zero Trust. Use Cloudflare's published test keys for local
+development.
 
 ### Member entitlements
 
 Per-member feature grants live in `SHARED_DATA` KV under a lowercased
 `member:<email>` key. Each record contains a `features` object with boolean
-grants, for example:
+grants. Self-registration creates an empty `features` object for lead capture
+and does not grant Access sign-in.
+
+Granting full membership is a two-step owner action; both steps are required:
+
+1. Write the member's KV features record (using the same lowercased email):
 
 ```sh
 npx wrangler kv key put --namespace-id 1dadc46e52b146bea2fbc4b8511c7d90 "member:someone@example.com" '{"features":{"research":true,"radar":true,"funds":true,"signals":true}}'
 ```
+
+2. Add that email to the **Capex IQ Members** Access list in Cloudflare Zero
+   Trust so the member can sign in at `/auth`.
+
+The KV record controls product features, while the curated Access list controls
+sign-in. Existing Access-list members are unaffected by self-registration.
 
 The default member grant is all four features: `research`, `radar`, `funds`,
 and `signals`. Admins listed in `ADMIN_EMAILS` implicitly hold every feature.
