@@ -37,6 +37,7 @@ export default defineConfig({
       '/scoreboard':  'http://localhost:8788',
       '/radar':       'http://localhost:8788',
       '/me':          'http://localhost:8788',
+      '/members':     'http://localhost:8788',
       '/register':    'http://localhost:8788',
     },
   },

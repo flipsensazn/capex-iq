@@ -3,6 +3,7 @@ import BottleneckScout from "./components/BottleneckScout";
 import CapexSankey from "./components/CapexSankey";
 import CompositeMovers from "./components/CompositeMovers";
 import FearGreedGauge from "./components/FearGreedGauge";
+import MembersPanel from "./components/MembersPanel";
 import RadarPanel from "./components/RadarPanel";
 import ResearchPanel from "./components/ResearchPanel";
 import SignalScoreboard from "./components/SignalScoreboard";
@@ -1780,6 +1781,8 @@ export default function App() {
             onReview={reviewCandidate}
             onTickerClick={openPopup}
           />
+
+          {isAdmin && <MembersPanel />}
 
           <div>
             <div className="bottom-grid-all">
