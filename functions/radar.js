@@ -14,7 +14,7 @@ import { hasFeature } from "./entitlements.js";
 
 const PIPELINE = "radar_scores";
 const STALE_AFTER_HOURS = 9 * 24;
-const CACHE_KEY = "radarView_v2";
+const CACHE_KEY = "radarView_v3";
 const CACHE_TTL_SECONDS = 60 * 60;
 const CACHE_CONTROL = "private, max-age=300";
 const TICKER_PATTERN = /^[A-Z0-9^][A-Z0-9.^=-]{0,14}$/;
@@ -119,19 +119,39 @@ function compareDatesDescending(left, right) {
 function buildScreenerPayload(rows, manifest) {
   const dates = [...new Set(
     rows.map(row => row.as_of_date).filter(value => value != null).map(String)
-  )].sort(compareDatesDescending).slice(0, 2);
+  )].sort(compareDatesDescending).slice(0, 12);
   const [latestDate = null, previousDate = null] = dates;
+  const chronologicalDates = [...dates].reverse();
+  const recentDates = new Set(dates);
   const latestRows = new Map();
   const previousRows = new Map();
+  const rowsByTicker = new Map();
 
   for (const row of rows) {
     const asOf = row.as_of_date == null ? null : String(row.as_of_date);
+    if (recentDates.has(asOf)) {
+      let tickerRows = rowsByTicker.get(row.ticker);
+      if (!tickerRows) {
+        tickerRows = new Map();
+        rowsByTicker.set(row.ticker, tickerRows);
+      }
+      if (!tickerRows.has(asOf)) tickerRows.set(asOf, row);
+    }
     if (asOf === latestDate && !latestRows.has(row.ticker)) latestRows.set(row.ticker, row);
     if (asOf === previousDate && !previousRows.has(row.ticker)) previousRows.set(row.ticker, row);
   }
 
   const screenerRows = [...latestRows.values()].map(row => {
     const previous = previousRows.get(row.ticker);
+    const tickerRows = rowsByTicker.get(row.ticker);
+    const trend = chronologicalDates.flatMap(asOf => {
+      const trendRow = tickerRows?.get(asOf);
+      return trendRow ? [{
+        asOf,
+        quality: numberOrNull(trendRow.quality_score),
+        technical: numberOrNull(trendRow.technical_score),
+      }] : [];
+    });
     return {
       ticker: row.ticker,
       coverage: row.coverage,
@@ -146,6 +166,7 @@ function buildScreenerPayload(rows, manifest) {
       price: numberOrNull(row.price),
       marketCap: numberOrNull(row.market_cap),
       asOf: latestDate,
+      trend,
     };
   });
 
@@ -191,7 +212,7 @@ async function serveScreener(env, headers) {
         SELECT DISTINCT as_of_date
         FROM radar_scores
         ORDER BY as_of_date DESC
-        LIMIT 2
+        LIMIT 12
       )
       SELECT ticker, as_of_date, coverage,
              quality_score, technical_score,

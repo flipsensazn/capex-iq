@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { EYEBROW_STYLE, PANEL_STYLE, ScoreBreakdown } from "./ResearchPanel";
+import { useEffect, useMemo, useState } from "react";
+import { EYEBROW_STYLE, PANEL_STYLE } from "./ResearchPanel";
 
 const PRESETS = [
   { value: "all", label: "All", color: "var(--accent)" },
@@ -26,10 +26,36 @@ const COVERAGE_BADGES = {
   fund: { label: "Fund", color: "var(--info)" },
 };
 
-const CELL_STYLE = {
-  padding: "11px 12px",
-  whiteSpace: "nowrap",
+const STOCK_COLUMNS = "44px 84px minmax(150px,1.2fr) minmax(150px,1.2fr) 70px 150px minmax(100px,0.9fr)";
+const FUND_COLUMNS = "44px 84px minmax(150px,1.3fr) minmax(110px,1fr) 80px 80px minmax(150px,1.2fr) 150px";
+const STOCK_SORT_KEYS = new Set(["ticker", "quality", "technical", "delta"]);
+const FUND_SORT_KEYS = new Set(["ticker", "expense", "aum", "technical"]);
+
+const GRID_CELL_STYLE = {
+  minWidth: 0,
+  padding: "7px 10px",
 };
+
+const STOCK_HEADERS = [
+  { label: "#", align: "right" },
+  { label: "Ticker", key: "ticker" },
+  { label: "Quality", key: "quality" },
+  { label: "Technical", key: "technical" },
+  { label: "Δwk", key: "delta", align: "right" },
+  { label: "12w trend" },
+  { label: "Chains" },
+];
+
+const FUND_HEADERS = [
+  { label: "#", align: "right" },
+  { label: "Ticker", key: "ticker" },
+  { label: "Theme" },
+  { label: "Category" },
+  { label: "Expense", key: "expense", align: "right" },
+  { label: "AUM", key: "aum", align: "right" },
+  { label: "Technical", key: "technical" },
+  { label: "12w trend" },
+];
 
 function finiteNumber(value) {
   if (value == null || value === "") return null;
@@ -43,19 +69,34 @@ function rowDelta(row) {
   return quality == null || previous == null ? null : quality - previous;
 }
 
-function scoreComparator(field) {
-  return (left, right) => {
+function sortValue(row, key) {
+  if (key === "ticker") return String(row?.ticker || "");
+  if (key === "delta") return rowDelta(row);
+  if (key === "expense") return finiteNumber(row?.fundProfile?.expenseRatio);
+  if (key === "aum") return finiteNumber(row?.fundProfile?.totalAssets);
+  return finiteNumber(row?.[key]);
+}
+
+function compareRows(left, right, key, direction, prioritizeCoverage) {
+  if (prioritizeCoverage) {
     const leftScored = left.coverage === "scored";
     const rightScored = right.coverage === "scored";
     if (leftScored !== rightScored) return leftScored ? -1 : 1;
+  }
 
-    const leftScore = finiteNumber(left[field]);
-    const rightScore = finiteNumber(right[field]);
-    if (leftScore == null && rightScore != null) return 1;
-    if (leftScore != null && rightScore == null) return -1;
-    if (leftScore !== rightScore) return (rightScore ?? 0) - (leftScore ?? 0);
-    return String(left.ticker).localeCompare(String(right.ticker));
-  };
+  const leftValue = sortValue(left, key);
+  const rightValue = sortValue(right, key);
+  if (leftValue == null && rightValue != null) return 1;
+  if (leftValue != null && rightValue == null) return -1;
+
+  let comparison = 0;
+  if (typeof leftValue === "string" && typeof rightValue === "string") {
+    comparison = leftValue.localeCompare(rightValue);
+  } else if (leftValue != null && rightValue != null) {
+    comparison = leftValue - rightValue;
+  }
+  if (comparison !== 0) return comparison * direction;
+  return String(left.ticker).localeCompare(String(right.ticker));
 }
 
 function membershipTitle(row) {
@@ -145,134 +186,248 @@ function CoverageBadge({ coverage }) {
   );
 }
 
-function TrendSparkline({ trend, technicalOnly = false }) {
-  const points = Array.isArray(trend)
-    ? [...trend].sort((left, right) => String(left?.asOf || "").localeCompare(String(right?.asOf || "")))
-    : [];
-  if (!points.length) return <span style={{ color: "var(--ink-500)", fontSize: 10 }}>No trend history yet.</span>;
+function ScoreBar({ value, color }) {
+  const score = finiteNumber(value);
+  const width = score == null ? 0 : Math.min(100, Math.max(0, score));
+  return (
+    <div style={{ ...GRID_CELL_STYLE, display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ flex: 1, height: 4, borderRadius: 999, background: "rgba(255,255,255,.06)", overflow: "hidden" }}>
+        <div style={{ width: `${width}%`, height: "100%", borderRadius: 999, background: color }} />
+      </div>
+      <span style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 700, width: 22, textAlign: "right" }}>
+        {score == null ? "—" : score.toFixed(0)}
+      </span>
+    </div>
+  );
+}
 
-  const width = 120;
-  const height = 28;
+function TrendSparkline({ trend, technicalOnly = false }) {
+  const width = 130;
+  const height = 22;
   const padding = 2;
+  const points = Array.isArray(trend)
+    ? [...trend]
+      .sort((left, right) => String(left?.asOf || "").localeCompare(String(right?.asOf || "")))
+      .slice(-12)
+    : [];
   const denominator = Math.max(1, points.length - 1);
   const seriesPoints = field => points.map((point, index) => {
     const value = finiteNumber(point?.[field]);
     if (value == null) return null;
-    return {
-      x: padding + (index / denominator) * (width - padding * 2),
-      y: height - padding - (Math.min(100, Math.max(0, value)) / 100) * (height - padding * 2),
-    };
-  }).filter(Boolean);
-  const qualityPoints = technicalOnly ? [] : seriesPoints("quality");
-  const technicalPoints = seriesPoints("technical");
-
-  const Series = ({ values, color }) => values.length > 1 ? (
-    <polyline
-      points={values.map(point => `${point.x},${point.y}`).join(" ")}
-      fill="none"
-      stroke={color}
-      strokeWidth="1.5"
-      vectorEffect="non-scaling-stroke"
-    />
-  ) : values.length === 1 ? (
-    <circle cx={values[0].x} cy={values[0].y} r="1.5" fill={color} />
-  ) : null;
+    const x = padding + (index / denominator) * (width - padding * 2);
+    const y = height - padding - (Math.min(100, Math.max(0, value)) / 100) * (height - padding * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).filter(Boolean).join(" ");
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={technicalOnly ? "Radar technical score trend" : "Radar score trend"}>
-        <title>{`${points.length} weekly Radar snapshots`}</title>
-        {!technicalOnly && <Series values={qualityPoints} color="var(--accent)" />}
-        <Series values={technicalPoints} color="var(--info)" />
-      </svg>
-      <div style={{ display: "flex", gap: 8, color: "var(--ink-500)", fontSize: 9 }}>
-        {!technicalOnly && <span><span style={{ color: "var(--accent)" }}>●</span> Quality</span>}
-        <span><span style={{ color: "var(--info)" }}>●</span> Technical</span>
-      </div>
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={technicalOnly ? "Radar technical score trend" : "Radar quality and technical score trend"}>
+      <title>{`${points.length} weekly Radar snapshots`}</title>
+      {!technicalOnly && (
+        <polyline points={seriesPoints("quality")} fill="none" stroke="var(--accent)" strokeWidth="1.2" opacity="0.9" />
+      )}
+      <polyline points={seriesPoints("technical")} fill="none" stroke="var(--info-400)" strokeWidth="1.2" opacity="0.9" />
+    </svg>
+  );
+}
+
+function GridHeader({ columns, headers, sortKey, sortDir, onSort }) {
+  return (
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: columns,
+      position: "sticky",
+      top: 0,
+      zIndex: 10,
+      background: "var(--surface-popup)",
+      borderBottom: "1px solid var(--border-hairline)",
+    }}>
+      {headers.map(header => {
+        const sortable = Boolean(header.key);
+        const active = sortable && sortKey === header.key;
+        return (
+          <button
+            key={header.label}
+            type="button"
+            aria-disabled={!sortable}
+            aria-label={active ? `${header.label}, sorted ${sortDir === -1 ? "descending" : "ascending"}` : undefined}
+            onClick={sortable ? () => onSort(header.key) : undefined}
+            tabIndex={sortable ? 0 : -1}
+            style={{
+              appearance: "none",
+              minWidth: 0,
+              background: "none",
+              border: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: header.align === "right" ? "flex-end" : "flex-start",
+              gap: 4,
+              padding: 10,
+              cursor: sortable ? "pointer" : "default",
+              color: active ? "var(--accent)" : "var(--ink-500)",
+              fontFamily: "var(--font-condensed)",
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: "0.15em",
+              textAlign: header.align === "right" ? "right" : "left",
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {header.label}
+            {active && <span style={{ fontSize: 8 }}>{sortDir === -1 ? "▼" : "▲"}</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-function FundProfilePanel({ profile }) {
-  const fundProfile = profile && typeof profile === "object" ? profile : {};
-  const fields = [
-    ["Category", typeof fundProfile.category === "string" && fundProfile.category ? fundProfile.category : "—"],
-    ["Expense ratio", formatFundPercent(fundProfile.expenseRatio)],
-    ["AUM", formatFundAssets(fundProfile.totalAssets)],
-    ["Legal type", typeof fundProfile.legalType === "string" && fundProfile.legalType ? fundProfile.legalType : "—"],
-  ];
-  if (finiteNumber(fundProfile.yield) != null) fields.push(["Yield", formatFundPercent(fundProfile.yield)]);
-
+function TickerButton({ ticker, onTickerClick }) {
   return (
-    <section style={{ ...PANEL_STYLE, padding: 14 }}>
-      <div style={{ ...EYEBROW_STYLE, marginBottom: 10 }}>Fund profile</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px 14px" }}>
-        {fields.map(([label, value]) => (
-          <div key={label}>
-            <div style={{ color: "var(--ink-500)", fontSize: 9, marginBottom: 3 }}>{label}</div>
-            <div style={{ color: "var(--ink-100)", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700 }}>{value}</div>
+    <button
+      type="button"
+      onClick={event => onTickerClick?.(ticker, event.currentTarget.getBoundingClientRect())}
+      style={{
+        ...GRID_CELL_STYLE,
+        appearance: "none",
+        background: "none",
+        border: 0,
+        color: "var(--accent)",
+        cursor: "pointer",
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        fontWeight: 800,
+        textAlign: "left",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {ticker}
+    </button>
+  );
+}
+
+function RankCell({ rank }) {
+  return (
+    <div style={{ ...GRID_CELL_STYLE, color: "var(--ink-600)", fontFamily: "var(--font-mono)", fontSize: 9.5, textAlign: "right" }}>
+      {rank}
+    </div>
+  );
+}
+
+function StockGrid({ rows, sortKey, sortDir, onSort, onTickerClick }) {
+  return (
+    <div style={{ minWidth: 900, fontSize: 11 }}>
+      <GridHeader columns={STOCK_COLUMNS} headers={STOCK_HEADERS} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+      {rows.map((row, index) => {
+        const delta = rowDelta(row);
+        const deltaIsZero = delta != null && Math.abs(delta) < 0.0001;
+        const deltaColor = delta == null || deltaIsZero
+          ? "var(--ink-500)"
+          : delta > 0 ? "var(--up-400)" : "var(--down-400)";
+        const deltaText = delta == null
+          ? "—"
+          : deltaIsZero ? "0.0" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta).toFixed(1)}`;
+        const chains = Array.isArray(row.chains) ? row.chains : [];
+        return (
+          <div
+            key={row.ticker}
+            onMouseEnter={event => { event.currentTarget.style.background = "var(--surface-hover)"; }}
+            onMouseLeave={event => { event.currentTarget.style.background = ""; }}
+            style={{
+              display: "grid",
+              gridTemplateColumns: STOCK_COLUMNS,
+              alignItems: "center",
+              borderBottom: "1px solid var(--border-hairline)",
+              transition: "background .15s",
+            }}
+          >
+            <RankCell rank={index + 1} />
+            <TickerButton ticker={row.ticker} onTickerClick={onTickerClick} />
+            {row.coverage === "scored" ? (
+              <>
+                <ScoreBar value={row.quality} color="var(--accent)" />
+                <ScoreBar value={row.technical} color="var(--info-400)" />
+              </>
+            ) : (
+              <div style={{ ...GRID_CELL_STYLE, gridColumn: "span 2", display: "flex", justifyContent: "center" }}>
+                <CoverageBadge coverage={row.coverage} />
+              </div>
+            )}
+            <div style={{ ...GRID_CELL_STYLE, color: deltaColor, fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, textAlign: "right" }}>
+              {deltaText}
+            </div>
+            <div style={{ minWidth: 0, padding: "5px 10px" }}>
+              <TrendSparkline trend={row.trend} />
+            </div>
+            <div style={{ ...GRID_CELL_STYLE, color: "var(--ink-300)", whiteSpace: "nowrap" }} title={membershipTitle(row)}>
+              {chains.length ? chains.map(chain => CHAIN_EMOJI[chain] || chain).join(" ") : "—"}
+            </div>
           </div>
-        ))}
-      </div>
-    </section>
+        );
+      })}
+    </div>
   );
 }
 
-function DetailSection({ ticker, state, onOpenResearch, isFund = false, fundProfile = null }) {
-  if (!state || state.status === "loading") {
-    return <div style={{ padding: "14px 2px", color: "var(--ink-400)", fontSize: 11 }}>Loading score details…</div>;
-  }
-  if (state.status === "error") {
-    return <div style={{ padding: "14px 2px", color: "var(--down-400)", fontSize: 11 }}>{state.message}</div>;
-  }
-
-  const detail = state.data || {};
-  const qualityScoreObject = {
-    basis: detail.fiscalYearBasis == null ? null : `FY${detail.fiscalYearBasis}`,
-    components: Array.isArray(detail.qualityComponents) ? detail.qualityComponents : [],
-  };
-  const technicalScoreObject = {
-    basis: "3-month daily series",
-    components: Array.isArray(detail.technicalComponents) ? detail.technicalComponents : [],
-  };
-
+function FundGrid({ rows, sortKey, sortDir, onSort, onTickerClick }) {
   return (
-    <div style={{ padding: "2px 2px 14px" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
-        {!isFund && <ScoreBreakdown title="Quality" scoreObject={qualityScoreObject} />}
-        <ScoreBreakdown title="Technical" scoreObject={technicalScoreObject} />
-        {isFund && <FundProfilePanel profile={detail.fundProfile ?? fundProfile} />}
+    <div style={{ minWidth: 900, fontSize: 11 }}>
+      <GridHeader columns={FUND_COLUMNS} headers={FUND_HEADERS} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+      {rows.map((row, index) => {
+        const profile = row.fundProfile && typeof row.fundProfile === "object" ? row.fundProfile : {};
+        const themes = membershipNames(row);
+        return (
+          <div
+            key={row.ticker}
+            onMouseEnter={event => { event.currentTarget.style.background = "var(--surface-hover)"; }}
+            onMouseLeave={event => { event.currentTarget.style.background = ""; }}
+            style={{
+              display: "grid",
+              gridTemplateColumns: FUND_COLUMNS,
+              alignItems: "center",
+              borderBottom: "1px solid var(--border-hairline)",
+              transition: "background .15s",
+            }}
+          >
+            <RankCell rank={index + 1} />
+            <TickerButton ticker={row.ticker} onTickerClick={onTickerClick} />
+            <div style={{ ...GRID_CELL_STYLE, color: "var(--ink-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={membershipTitle(row)}>
+              {themes[0] || "—"}
+            </div>
+            <div style={{ ...GRID_CELL_STYLE, color: "var(--ink-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {typeof profile.category === "string" && profile.category ? profile.category : "—"}
+            </div>
+            <div style={{ ...GRID_CELL_STYLE, color: "var(--ink-300)", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>
+              {formatFundPercent(profile.expenseRatio)}
+            </div>
+            <div style={{ ...GRID_CELL_STYLE, color: "var(--ink-300)", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>
+              {formatFundAssets(profile.totalAssets)}
+            </div>
+            <ScoreBar value={row.technical} color="var(--info-400)" />
+            <div style={{ minWidth: 0, padding: "5px 10px" }}>
+              <TrendSparkline trend={row.trend} technicalOnly />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function HeaderStat({ label, value, color }) {
+  return (
+    <div style={{ textAlign: "right" }}>
+      <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-condensed)", fontSize: 8.5, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase" }}>
+        {label}
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, marginTop: 14, flexWrap: "wrap" }}>
-        <div>
-          <div style={{ ...EYEBROW_STYLE, marginBottom: 5 }}>12-week trend</div>
-          <TrendSparkline trend={detail.trend} technicalOnly={isFund} />
-        </div>
-        {!isFund && <button
-          type="button"
-          onClick={() => onOpenResearch?.(ticker)}
-          style={{
-            color: "var(--void-900)",
-            background: "var(--accent)",
-            border: 0,
-            borderRadius: "var(--radius-md)",
-            padding: "8px 12px",
-            cursor: "pointer",
-            fontFamily: "var(--font-condensed)",
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-          }}
-        >
-          Open in Research →
-        </button>}
+      <div style={{ color, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, marginTop: 2 }}>
+        {value}
       </div>
     </div>
   );
 }
 
-function Header({ asOf }) {
+function Header({ asOf, bestRiser, biggestFaller }) {
   return (
     <section style={{ ...PANEL_STYLE, padding: 18 }}>
       <div style={EYEBROW_STYLE}>Member Radar</div>
@@ -281,22 +436,31 @@ function Header({ asOf }) {
           <h1 style={{ margin: 0, color: "var(--ink-100)", fontSize: 22, lineHeight: 1.2 }}>Quality and momentum screener</h1>
           <p style={{ margin: "7px 0 0", color: "var(--ink-400)", fontSize: 11 }}>Compare every company across the AI, Musk, and robotics chains.</p>
         </div>
-        {asOf && <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9.5 }}>Scores as of {String(asOf).slice(0, 10)}</div>}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <HeaderStat label="Best riser" value={bestRiser} color="var(--up-400)" />
+          <div style={{ width: 1, height: 26, background: "var(--border-hairline)" }} />
+          <HeaderStat label="Biggest faller" value={biggestFaller} color="var(--down-400)" />
+          <div style={{ width: 1, height: 26, background: "var(--border-hairline)" }} />
+          <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9.5 }}>
+            Scores as of {asOf ? String(asOf).slice(0, 10) : "—"}
+          </div>
+        </div>
       </div>
     </section>
   );
 }
 
-export default function RadarPanel({ onTickerClick, onOpenResearch, showFunds = false }) {
+export default function RadarPanel({ onTickerClick, showFunds = false }) {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [subview, setSubview] = useState("stocks");
   const [fundsNotice, setFundsNotice] = useState(false);
   const [preset, setPreset] = useState("all");
-  const [expandedTicker, setExpandedTicker] = useState(null);
-  const [details, setDetails] = useState({});
-  const detailControllers = useRef(new Map());
+  const [filter, setFilter] = useState("");
+  const [filterFocused, setFilterFocused] = useState(false);
+  const [sortKey, setSortKey] = useState("quality");
+  const [sortDir, setSortDir] = useState(-1);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -325,30 +489,50 @@ export default function RadarPanel({ onTickerClick, onOpenResearch, showFunds = 
     return () => controller.abort();
   }, []);
 
-  useEffect(() => () => {
-    detailControllers.current.forEach(controller => controller.abort());
-    detailControllers.current.clear();
-  }, []);
-
   const rows = Array.isArray(payload?.rows) ? payload.rows : [];
   const stockRows = useMemo(() => rows.filter(row => row.coverage !== "fund"), [rows]);
   const fundRows = useMemo(() => rows.filter(row => row.coverage === "fund"), [rows]);
   const visibleRows = useMemo(() => {
-    if (subview === "funds") return [...fundRows].sort(scoreComparator("technical"));
-    if (preset === "quality") {
-      return stockRows.filter(row => row.coverage === "scored").sort(scoreComparator("quality"));
+    let nextRows = subview === "funds" ? [...fundRows] : [...stockRows];
+    if (subview === "stocks") {
+      if (preset === "quality" || preset === "momentum") {
+        nextRows = nextRows.filter(row => row.coverage === "scored");
+      } else if (preset === "multi") {
+        nextRows = nextRows.filter(row => finiteNumber(row.chainCount) > 1);
+      } else if (preset === "uncovered") {
+        nextRows = nextRows.filter(row => row.coverage === "no_filings");
+      }
     }
-    if (preset === "momentum") {
-      return stockRows.filter(row => row.coverage === "scored").sort(scoreComparator("technical"));
+
+    const tickerFilter = filter.trim().toLowerCase();
+    if (tickerFilter) {
+      nextRows = nextRows.filter(row => String(row.ticker).toLowerCase().includes(tickerFilter));
     }
-    if (preset === "multi") {
-      return stockRows.filter(row => finiteNumber(row.chainCount) > 1).sort(scoreComparator("quality"));
-    }
-    if (preset === "uncovered") {
-      return stockRows.filter(row => row.coverage === "no_filings").sort((left, right) => String(left.ticker).localeCompare(String(right.ticker)));
-    }
-    return [...stockRows].sort(scoreComparator("quality"));
-  }, [fundRows, preset, stockRows, subview]);
+    return nextRows.sort((left, right) => compareRows(
+      left,
+      right,
+      sortKey,
+      sortDir,
+      subview === "stocks"
+    ));
+  }, [filter, fundRows, preset, sortDir, sortKey, stockRows, subview]);
+
+  const { bestRiser, biggestFaller } = useMemo(() => {
+    const changes = stockRows
+      .filter(row => row.coverage === "scored")
+      .map(row => ({ ticker: row.ticker, delta: rowDelta(row) }))
+      .filter(item => item.delta != null);
+    const risers = changes
+      .filter(item => item.delta > 0)
+      .sort((left, right) => right.delta - left.delta || String(left.ticker).localeCompare(String(right.ticker)));
+    const fallers = changes
+      .filter(item => item.delta < 0)
+      .sort((left, right) => left.delta - right.delta || String(left.ticker).localeCompare(String(right.ticker)));
+    return {
+      bestRiser: risers.length ? `${risers[0].ticker} +${risers[0].delta.toFixed(1)}` : "—",
+      biggestFaller: fallers.length ? `${fallers[0].ticker} ${fallers[0].delta.toFixed(1)}` : "—",
+    };
+  }, [stockRows]);
 
   const deltas = stockRows.map(rowDelta).filter(delta => delta != null);
   const everyDeltaZero = deltas.length > 0 && deltas.every(delta => Math.abs(delta) < 0.0001);
@@ -360,52 +544,30 @@ export default function RadarPanel({ onTickerClick, onOpenResearch, showFunds = 
   const health = payload?.health;
   const healthWarning = health?.stale || health?.state === "failure";
 
-  async function loadDetail(ticker) {
-    if (details[ticker]?.status === "ready" || detailControllers.current.has(ticker)) return;
-    const controller = new AbortController();
-    detailControllers.current.set(ticker, controller);
-    setDetails(current => ({ ...current, [ticker]: { status: "loading" } }));
-    try {
-      const response = await fetch(`/radar?ticker=${encodeURIComponent(ticker)}`, { signal: controller.signal });
-      if (!response.ok) {
-        const requestError = await responseError(response);
-        if (!controller.signal.aborted) {
-          setDetails(current => ({ ...current, [ticker]: { status: "error", message: requestError.message } }));
-        }
-        return;
-      }
-      const data = await response.json();
-      if (!controller.signal.aborted) {
-        setDetails(current => ({ ...current, [ticker]: { status: "ready", data } }));
-      }
-    } catch (requestError) {
-      if (!controller.signal.aborted) {
-        setDetails(current => ({ ...current, [ticker]: { status: "error", message: "Unable to load score details." } }));
-      }
-    } finally {
-      if (detailControllers.current.get(ticker) === controller) detailControllers.current.delete(ticker);
-    }
-  }
-
-  function toggleRow(ticker) {
-    const opening = expandedTicker !== ticker;
-    setExpandedTicker(opening ? ticker : null);
-    if (opening) void loadDetail(ticker);
-  }
-
   function selectSubview(nextSubview) {
     if (nextSubview === "funds" && !showFunds) {
       setFundsNotice(true);
       return;
     }
+    if (nextSubview !== subview) {
+      const validKeys = nextSubview === "funds" ? FUND_SORT_KEYS : STOCK_SORT_KEYS;
+      if (!validKeys.has(sortKey)) {
+        setSortKey(nextSubview === "funds" ? "technical" : "quality");
+        setSortDir(-1);
+      }
+    }
     setSubview(nextSubview);
     setFundsNotice(false);
-    setExpandedTicker(null);
+  }
+
+  function toggleSort(nextSortKey) {
+    setSortDir(sortKey === nextSortKey ? -sortDir : nextSortKey === "ticker" ? 1 : -1);
+    setSortKey(nextSortKey);
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <Header asOf={payload?.asOf} />
+      <Header asOf={payload?.asOf} bestRiser={bestRiser} biggestFaller={biggestFaller} />
 
       {healthWarning && (
         <div role="status" style={{
@@ -428,86 +590,126 @@ export default function RadarPanel({ onTickerClick, onOpenResearch, showFunds = 
         <div style={{ ...PANEL_STYLE, padding: 18, color: "var(--ink-400)", fontSize: 12 }}>Radar scores are not available yet.</div>
       ) : (
         <section style={{ ...PANEL_STYLE, overflow: "hidden" }}>
-          <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid var(--border-hairline)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: subview === "stocks" ? 13 : 0 }}>
-              <div aria-label="Radar view" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                {["stocks", "funds"].map(item => {
-                  const active = subview === item;
-                  const locked = item === "funds" && !showFunds;
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "12px 16px", borderBottom: "1px solid var(--border-hairline)" }}>
+            <div aria-label="Radar view" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {["stocks", "funds"].map(item => {
+                const active = subview === item;
+                const locked = item === "funds" && !showFunds;
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => selectSubview(item)}
+                    title={locked ? "Fund Radar is a members feature" : `Show ${item}`}
+                    style={{
+                      color: active ? "var(--accent)" : "var(--ink-400)",
+                      background: active ? "var(--accent-quiet)" : "var(--surface-inset)",
+                      border: `1px solid ${active ? "var(--border-cyan)" : "var(--border-hairline)"}`,
+                      boxShadow: active ? "var(--ring-accent)" : "none",
+                      borderRadius: "var(--radius-pill)",
+                      padding: "4px 10px",
+                      cursor: "pointer",
+                      fontFamily: "var(--font-condensed)",
+                      fontSize: 9,
+                      fontWeight: 800,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {item}
+                  </button>
+                );
+              })}
+            </div>
+            {fundsNotice && !showFunds && (
+              <span role="status" style={{ color: "var(--down-300)", fontSize: 9, lineHeight: 1.3 }}>
+                Fund Radar is a members feature.
+              </span>
+            )}
+            <div style={{ width: 1, height: 20, background: "var(--border-hairline)" }} />
+            {subview === "stocks" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                {PRESETS.map(item => {
+                  const active = preset === item.value;
                   return (
                     <button
-                      key={item}
+                      key={item.value}
                       type="button"
                       aria-pressed={active}
-                      onClick={() => selectSubview(item)}
-                      title={locked ? "Fund Radar is a members feature" : `Show ${item}`}
+                      onClick={() => setPreset(item.value)}
                       style={{
-                        color: active ? "var(--accent)" : "var(--ink-400)",
-                        background: active ? "var(--accent-quiet)" : "var(--surface-inset)",
-                        border: `1px solid ${active ? "var(--border-cyan)" : "var(--border-hairline)"}`,
-                        boxShadow: active ? "var(--ring-accent)" : "none",
+                        color: item.color,
+                        background: `color-mix(in srgb, ${item.color} 9%, transparent)`,
+                        border: `1px solid color-mix(in srgb, ${item.color} 33%, transparent)`,
+                        boxShadow: active ? `inset 0 0 0 1px ${item.color}` : "none",
                         borderRadius: "var(--radius-pill)",
-                        padding: "4px 10px",
+                        padding: "5px 10px",
                         cursor: "pointer",
+                        opacity: active ? 1 : 0.72,
                         fontFamily: "var(--font-condensed)",
-                        fontSize: 9,
+                        fontSize: 9.5,
                         fontWeight: 800,
-                        letterSpacing: "0.08em",
-                        textTransform: "uppercase",
+                        letterSpacing: "0.06em",
                       }}
                     >
-                      {item}
+                      {item.label}
                     </button>
                   );
                 })}
               </div>
-              {fundsNotice && !showFunds && (
-                <span role="status" style={{ color: "var(--down-300)", fontSize: 9, lineHeight: 1.3 }}>
-                  Fund Radar is a members feature.
+            )}
+            <div style={{ flex: 1 }} />
+            <div style={{ position: "relative", width: 130, flex: "0 0 130px" }}>
+              <input
+                type="search"
+                aria-label="Filter Radar tickers"
+                value={filter}
+                onChange={event => setFilter(event.target.value)}
+                onFocus={() => setFilterFocused(true)}
+                onBlur={() => setFilterFocused(false)}
+                style={{
+                  boxSizing: "border-box",
+                  width: "100%",
+                  background: "var(--surface-inset)",
+                  border: `1px solid ${filterFocused ? "var(--border-cyan)" : "var(--border-hairline)"}`,
+                  borderRadius: "var(--radius-md)",
+                  boxShadow: filterFocused ? "var(--ring-accent)" : "none",
+                  outline: "none",
+                  padding: "5px 10px",
+                  color: "var(--ink-100)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10.5,
+                }}
+              />
+              {!filter && (
+                <span aria-hidden="true" style={{
+                  position: "absolute",
+                  top: "50%",
+                  left: 10,
+                  color: "var(--ink-500)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10.5,
+                  lineHeight: 1,
+                  pointerEvents: "none",
+                  transform: "translateY(-50%)",
+                }}>
+                  Filter tickers…
                 </span>
               )}
             </div>
-
-            {subview === "stocks" && (
-              <>
-                <div style={{ ...EYEBROW_STYLE, marginBottom: 8 }}>Presets</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                  {PRESETS.map(item => {
-                    const active = preset === item.value;
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => setPreset(item.value)}
-                        style={{
-                          color: item.color,
-                          background: `color-mix(in srgb, ${item.color} 9%, transparent)`,
-                          border: `1px solid color-mix(in srgb, ${item.color} 33%, transparent)`,
-                          boxShadow: active ? `inset 0 0 0 1px ${item.color}` : "none",
-                          borderRadius: "var(--radius-pill)",
-                          padding: "5px 10px",
-                          cursor: "pointer",
-                          opacity: active ? 1 : 0.72,
-                          fontFamily: "var(--font-condensed)",
-                          fontSize: 9.5,
-                          fontWeight: 800,
-                          letterSpacing: "0.06em",
-                        }}
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                {everyDeltaZero && (
-                  <div style={{ marginTop: 10, color: "var(--ink-500)", fontSize: 10.5, lineHeight: 1.5 }}>
-                    No quality score changed this week across {deltas.length} names with history. Fundamentals move when filings land, so quiet weeks are normal.
-                  </div>
-                )}
-              </>
-            )}
+            <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9.5, whiteSpace: "nowrap" }}>
+              {visibleRows.length} {subview === "funds" ? "funds" : "names"}
+            </div>
           </div>
+
+          {subview === "stocks" && everyDeltaZero && (
+            <div style={{ padding: "0 16px 12px" }}>
+              <div style={{ marginTop: 10, color: "var(--ink-500)", fontSize: 10.5, lineHeight: 1.5 }}>
+                No quality score changed this week across {deltas.length} names with history. Fundamentals move when filings land, so quiet weeks are normal.
+              </div>
+            </div>
+          )}
 
           {subview === "funds" && !fundDataAvailable ? (
             <div style={{ minHeight: 280, padding: 18, color: "var(--ink-400)", fontSize: 12 }}>
@@ -515,135 +717,11 @@ export default function RadarPanel({ onTickerClick, onOpenResearch, showFunds = 
             </div>
           ) : (
             <div style={{ maxHeight: "70vh", minHeight: 280, overflow: "auto", WebkitOverflowScrolling: "touch" }}>
-              <table style={{ width: "100%", minWidth: subview === "funds" ? 880 : 620, borderCollapse: "collapse", textAlign: "left", fontSize: 11 }}>
-                <thead style={{ ...EYEBROW_STYLE, position: "sticky", top: 0, zIndex: 10, color: "var(--ink-500)", background: "var(--surface-popup)" }}>
-                  <tr style={{ borderBottom: "1px solid var(--border-hairline)" }}>
-                    <th style={CELL_STYLE}>Ticker</th>
-                    {subview === "funds" ? (
-                      <>
-                        <th style={CELL_STYLE}>Theme</th>
-                        <th style={CELL_STYLE}>Category</th>
-                        <th style={{ ...CELL_STYLE, textAlign: "right" }}>Expense</th>
-                        <th style={{ ...CELL_STYLE, textAlign: "right" }}>AUM</th>
-                        <th style={{ ...CELL_STYLE, textAlign: "right" }}>Technical</th>
-                        <th style={CELL_STYLE}>Chains</th>
-                      </>
-                    ) : (
-                      <>
-                        <th style={{ ...CELL_STYLE, textAlign: "right" }}>Quality</th>
-                        <th style={{ ...CELL_STYLE, textAlign: "right" }}>Technical</th>
-                        <th style={{ ...CELL_STYLE, textAlign: "right" }}>Δwk</th>
-                        <th style={CELL_STYLE}>Chains</th>
-                      </>
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRows.map(row => {
-                    const expanded = expandedTicker === row.ticker;
-                    const quality = finiteNumber(row.quality);
-                    const technical = finiteNumber(row.technical);
-                    const delta = rowDelta(row);
-                    const deltaColor = delta == null || Math.abs(delta) < 0.0001
-                      ? "var(--ink-500)"
-                      : delta > 0 ? "var(--up-400)" : "var(--down-400)";
-                    const chains = Array.isArray(row.chains) ? row.chains : [];
-                    const themes = membershipNames(row);
-                    const profile = row.fundProfile && typeof row.fundProfile === "object" ? row.fundProfile : {};
-                    return (
-                      <Fragment key={row.ticker}>
-                        <tr
-                          aria-expanded={expanded}
-                          onClick={() => toggleRow(row.ticker)}
-                          onKeyDown={event => {
-                            if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return;
-                            event.preventDefault();
-                            toggleRow(row.ticker);
-                          }}
-                          onMouseEnter={event => { event.currentTarget.style.background = "var(--surface-hover)"; }}
-                          onMouseLeave={event => { event.currentTarget.style.background = ""; }}
-                          tabIndex={0}
-                          style={{ borderBottom: "1px solid var(--border-hairline)", cursor: "pointer", transition: "background .15s" }}
-                        >
-                          <td
-                            onClick={event => {
-                              event.stopPropagation();
-                              onTickerClick?.(row.ticker, event.currentTarget.getBoundingClientRect());
-                            }}
-                            onKeyDown={event => {
-                              if (!["Enter", " "].includes(event.key)) return;
-                              event.preventDefault();
-                              event.stopPropagation();
-                              onTickerClick?.(row.ticker, event.currentTarget.getBoundingClientRect());
-                            }}
-                            role="button"
-                            tabIndex={0}
-                            style={{ ...CELL_STYLE, color: "var(--accent)", fontFamily: "var(--font-mono)", fontWeight: 800, cursor: "pointer" }}
-                          >
-                            {row.ticker}
-                          </td>
-                          {subview === "funds" ? (
-                            <>
-                              <td style={{ ...CELL_STYLE, color: "var(--ink-300)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>
-                                <span title={membershipTitle(row)}>{themes[0] || "—"}</span>
-                              </td>
-                              <td style={{ ...CELL_STYLE, color: "var(--ink-300)" }}>
-                                {typeof profile.category === "string" && profile.category ? profile.category : "—"}
-                              </td>
-                              <td style={{ ...CELL_STYLE, color: "var(--ink-300)", fontFamily: "var(--font-mono)", fontWeight: 700, textAlign: "right" }}>
-                                {formatFundPercent(profile.expenseRatio)}
-                              </td>
-                              <td style={{ ...CELL_STYLE, color: "var(--ink-300)", fontFamily: "var(--font-mono)", fontWeight: 700, textAlign: "right" }}>
-                                {formatFundAssets(profile.totalAssets)}
-                              </td>
-                              <td style={{ ...CELL_STYLE, color: technical == null ? "var(--ink-500)" : "var(--accent)", fontFamily: "var(--font-mono)", fontWeight: 700, textAlign: "right" }}>
-                                {technical == null ? "—" : `${technical.toFixed(0)}/100`}
-                              </td>
-                              <td style={{ ...CELL_STYLE, color: "var(--ink-300)" }}>
-                                <span title={membershipTitle(row)}>{chains.length ? chains.map(chain => CHAIN_EMOJI[chain] || chain).join(" ") : "—"}</span>
-                              </td>
-                            </>
-                          ) : (
-                            <>
-                              {row.coverage === "scored" ? (
-                                <>
-                                  <td style={{ ...CELL_STYLE, color: quality == null ? "var(--ink-500)" : "var(--accent)", fontFamily: "var(--font-mono)", fontWeight: 700, textAlign: "right" }}>
-                                    {quality == null ? "—" : `${quality.toFixed(0)}/100`}
-                                  </td>
-                                  <td style={{ ...CELL_STYLE, color: technical == null ? "var(--ink-500)" : "var(--accent)", fontFamily: "var(--font-mono)", fontWeight: 700, textAlign: "right" }}>
-                                    {technical == null ? "—" : `${technical.toFixed(0)}/100`}
-                                  </td>
-                                </>
-                              ) : (
-                                <td colSpan={2} style={{ ...CELL_STYLE, textAlign: "center" }}><CoverageBadge coverage={row.coverage} /></td>
-                              )}
-                              <td style={{ ...CELL_STYLE, color: deltaColor, fontFamily: "var(--font-mono)", fontWeight: 700, textAlign: "right" }}>
-                                {delta == null ? "—" : Math.abs(delta) < 0.0001 ? "0.0" : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}`}
-                              </td>
-                              <td style={{ ...CELL_STYLE, color: "var(--ink-300)" }}>
-                                <span title={membershipTitle(row)}>{chains.length ? chains.map(chain => CHAIN_EMOJI[chain] || chain).join(" ") : "—"}</span>
-                              </td>
-                            </>
-                          )}
-                        </tr>
-                        {expanded && (
-                          <tr style={{ borderBottom: "1px solid var(--border-hairline)", background: "var(--surface-inset)" }}>
-                            <td colSpan={subview === "funds" ? 7 : 5} style={{ padding: "0 12px" }}>
-                              <DetailSection
-                                ticker={row.ticker}
-                                state={details[row.ticker]}
-                                onOpenResearch={onOpenResearch}
-                                isFund={subview === "funds"}
-                                fundProfile={row.fundProfile}
-                              />
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+              {subview === "funds" ? (
+                <FundGrid rows={visibleRows} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} onTickerClick={onTickerClick} />
+              ) : (
+                <StockGrid rows={visibleRows} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} onTickerClick={onTickerClick} />
+              )}
             </div>
           )}
         </section>
