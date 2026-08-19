@@ -28,3 +28,15 @@ test("public registration requires the server-configured Turnstile challenge", a
   assert.doesNotMatch(html, /TURNSTILE_SECRET_KEY/);
   assert.doesNotMatch(html, /1x00000000000000000000AA/);
 });
+
+test("public registration success points to the free dashboard immediately", async () => {
+  const html = await readFile(landingPath, "utf8");
+
+  assert.ok(html.includes("Enter your email to join the list — the free dashboard is open to everyone, and membership unlocks the full signal stack."));
+  assert.match(html, /<a class="btn btn-primary glow" href="\/app"[^>]*>Explore the free dashboard →<\/a>/);
+  assert.match(html, /Already a member\? <a href="\/auth">Sign in<\/a>/);
+  assert.match(html, /function showRegistrationSuccess\(message\)[\s\S]*activateMsg\.textContent = message;/);
+  assert.match(html, /showRegistrationSuccess\(r\.data\.message\)/);
+  assert.doesNotMatch(html, /countdown|60[- ]seconds?|setInterval|startActivation|armSignIn|regSignIn|activating your access/i);
+  assert.doesNotMatch(html, /Click Sign In to continue with Google/);
+});

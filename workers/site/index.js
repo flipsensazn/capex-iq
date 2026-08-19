@@ -188,7 +188,7 @@ export class OperationCoordinator {
   }
 
   async registerMember(email) {
-    const result = await register.registerMemberInAccess(this.env, email);
+    const result = await register.registerInterest(this.env, email);
     const now = Date.now();
     this.state.storage.sql.exec(`
       INSERT INTO members (email, registered_at, last_confirmed_at, already_registered)
@@ -332,9 +332,8 @@ export default {
     const url = new URL(request.url);
     const { pathname } = url;
 
-    // The dashboard lives at /app (Cloudflare Access protects this path at
-    // the edge — see README). The built asset is app.html; rewrite so the
-    // clean URL serves it.
+    // The public dashboard lives at /app. The built asset is app.html;
+    // rewrite so the clean URL serves it.
     if (pathname === "/app" || pathname === "/app/") {
       const response = await env.ASSETS.fetch(new Request(`${url.origin}/app.html`, request));
       return withSecurityHeaders(response);

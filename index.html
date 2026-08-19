@@ -490,7 +490,7 @@ footer{border-top:1px solid var(--border-hairline)}
     <h2>If the edge fades, the scoreboard says so.</h2>
     <div class="register-card" id="register">
       <h3>Register — free during beta</h3>
-      <p>Enter your email to join the members list. Sign in with your Google account — no password to remember.</p>
+      <p>Enter your email to join the list — the free dashboard is open to everyone, and membership unlocks the full signal stack.</p>
       <form id="regForm" novalidate>
         <label for="regEmail" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Email address</label>
         <input class="input" type="email" id="regEmail" placeholder="you@example.com" autocomplete="email" required>
@@ -499,10 +499,11 @@ footer{border-top:1px solid var(--border-hairline)}
         <div id="regSecurityMsg" role="status" aria-live="polite">Preparing security check…</div>
       </form>
       <div id="regMsg" role="status" aria-live="polite"></div>
-      <!-- Confirms registration and hands off to Google sign-in. -->
+      <!-- Confirms registration and points visitors to the public dashboard. -->
       <div id="regActivate" hidden style="margin-top:16px;display:flex;flex-direction:column;gap:12px;align-items:center">
         <p id="regActivateMsg" role="status" aria-live="polite" style="font-size:12.5px;color:var(--text-secondary);line-height:1.55;margin:0"></p>
-        <button id="regSignIn" class="btn btn-primary glow" type="button" style="font-size:14px;padding:11px 20px" disabled>Sign In</button>
+        <a class="btn btn-primary glow" href="/app" style="font-size:14px;padding:11px 20px">Explore the free dashboard →</a>
+        <p style="font-size:11.5px;color:var(--text-muted);margin:0">Already a member? <a href="/auth">Sign in</a></p>
       </div>
     </div>
   </section>
@@ -714,14 +715,13 @@ footer{border-top:1px solid var(--border-hairline)}
     document.getElementById("edgeEyebrow").textContent = txt;
   }).catch(function(){});
 
-  /* ── Register (posts to the same /register endpoint the Members list uses) ── */
+  /* ── Register ── */
   var form = document.getElementById("regForm");
   var input = document.getElementById("regEmail");
   var msg = document.getElementById("regMsg");
   var btn = document.getElementById("regBtn");
   var activate = document.getElementById("regActivate");
   var activateMsg = document.getElementById("regActivateMsg");
-  var signInBtn = document.getElementById("regSignIn");
   var turnstileScript = document.getElementById("turnstileScript");
   var turnstileElement = document.getElementById("regTurnstile");
   var securityMsg = document.getElementById("regSecurityMsg");
@@ -833,24 +833,11 @@ footer{border-top:1px solid var(--border-hairline)}
     updateRegisterButton();
   });
 
-  signInBtn.addEventListener("click", function(){
-    if (!signInBtn.disabled) window.location.href = "/auth";
-  });
-
-  function armSignIn(){
-    signInBtn.disabled = false;
-    signInBtn.style.opacity = "";
-    signInBtn.textContent = "Sign In";
-  }
-
-  function startActivation(already){
+  function showRegistrationSuccess(message){
     form.hidden = true;
     msg.textContent = ""; msg.className = "";
     activate.hidden = false;
-    activateMsg.textContent = already
-      ? "You're already registered. Click Sign In to continue with Google."
-      : "You're in! Click Sign In to continue with Google.";
-    armSignIn();
+    activateMsg.textContent = message;
   }
 
   input.addEventListener("input", function(){ input.classList.remove("invalid"); });
@@ -879,7 +866,7 @@ footer{border-top:1px solid var(--border-hairline)}
     }).then(function(r){
       if (r.ok && r.data.success){
         input.value = "";
-        startActivation(!!r.data.already);
+        showRegistrationSuccess(r.data.message);
       } else {
         msg.className = "err";
         msg.textContent = r.data.message || "Registration failed — please try again.";

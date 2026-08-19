@@ -9,7 +9,7 @@ import {
 import {
   AccessRegistrationError,
   onRequest as register,
-  registerMemberInAccess,
+  registerInterest,
 } from "../functions/register.js";
 
 const b64url = value => Buffer.from(value).toString("base64url");
@@ -204,12 +204,28 @@ function registerRequest(body, headers = {}) {
   });
 }
 
+function registerKv(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  const writes = [];
+  return {
+    values,
+    writes,
+    async get(key) {
+      return values.has(key) ? values.get(key) : null;
+    },
+    async put(key, value) {
+      writes.push({ key, value });
+      values.set(key, value);
+    },
+  };
+}
+
 function baseRegisterEnv(overrides = {}) {
   return {
     ALLOWED_ORIGIN: "https://capex-iq.us",
     TURNSTILE_SITE_KEY: "public-site-key",
     TURNSTILE_SECRET_KEY: "private-secret-key",
-    CF_ACCESS_API_TOKEN: "access-token",
+    SHARED_DATA: registerKv(),
     REGISTER_RATE_LIMITER: { limit: async () => ({ success: true }) },
     OPERATION_COORDINATOR: {
       getByName: () => ({ fetch: async () => Response.json({ success: true, already: false }) }),
@@ -275,6 +291,35 @@ test("register cancels an oversized streamed body without Content-Length", async
   assert.equal(response.status, 413);
   assert.equal((await response.json()).code, "request_too_large");
   assert.equal(limiterCalls, 0);
+});
+
+test("register is unavailable without the Turnstile secret or shared KV", { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("Unconfigured registration must not make external requests");
+  };
+  try {
+    for (const overrides of [
+      { TURNSTILE_SECRET_KEY: "" },
+      { SHARED_DATA: null },
+    ]) {
+      const response = await register({
+        request: registerRequest({ email: "member@example.com", turnstileToken: "challenge-token" }),
+        env: baseRegisterEnv(overrides),
+      });
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), {
+        success: false,
+        code: "registration_unavailable",
+        message: "Registration isn't open yet — check back soon.",
+      });
+    }
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("register rate limit denial never consumes the Turnstile challenge", { concurrency: false }, async () => {
@@ -366,36 +411,71 @@ test("register rejects a valid challenge with the wrong action or hostname", { c
   }
 });
 
-test("Access registration uses a configured email list atomically", { concurrency: false }, async () => {
+test("registration writes a fresh KV interest record without calling the Cloudflare API", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
-  const requests = [];
-  globalThis.fetch = async (url, options = {}) => {
-    requests.push({ url: String(url), options });
-    if (String(url).endsWith("/items?per_page=1000")) return Response.json({ success: true, result: [] });
-    return Response.json({ success: true, result: {} });
+  const sharedData = registerKv();
+  const cloudflareApiCalls = [];
+  globalThis.fetch = async input => {
+    const url = typeof input === "string" ? input : input.url;
+    if (new URL(url).hostname === "api.cloudflare.com") cloudflareApiCalls.push(url);
+    throw new Error(`Unexpected external fetch: ${url}`);
   };
   try {
-    const result = await registerMemberInAccess({
-      CF_ACCESS_API_TOKEN: "access-token",
-      ACCESS_MEMBERS_LIST_ID: "members-list",
-    }, "MEMBER@EXAMPLE.COM");
-    assert.equal(result.success, true);
-    assert.equal(result.already, false);
-    assert.equal(requests.length, 2);
-    assert.match(requests[0].url, /gateway\/lists\/members-list\/items/);
-    assert.equal(requests[1].options.method, "PATCH");
-    assert.deepEqual(JSON.parse(requests[1].options.body), {
-      append: [{ value: "member@example.com" }],
-      remove: [],
+    const result = await registerInterest({ SHARED_DATA: sharedData }, "MEMBER@EXAMPLE.COM");
+    assert.deepEqual(result, {
+      success: true,
+      already: false,
+      message: "You're on the list! The free dashboard is open — membership unlocks the full signal stack.",
     });
+    assert.equal(sharedData.writes.length, 1);
+    assert.equal(sharedData.writes[0].key, "member:member@example.com");
+    const record = JSON.parse(sharedData.writes[0].value);
+    assert.deepEqual(record.features, {});
+    assert.equal(record.source, "self-register");
+    assert.equal(new Date(record.registeredAt).toISOString(), record.registeredAt);
+    assert.equal(cloudflareApiCalls.length, 0, "registration must not call api.cloudflare.com");
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("Access registration failures retain safe status and code metadata", async () => {
+test("re-registering returns already without clobbering granted KV features", { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  const memberKey = "member:member@example.com";
+  const grantedRecord = JSON.stringify({
+    features: { research: true, radar: true },
+    registeredAt: "2026-08-01T12:00:00.000Z",
+    source: "owner-grant",
+  });
+  const sharedData = registerKv({ [memberKey]: grantedRecord });
+  const cloudflareApiCalls = [];
+  globalThis.fetch = async input => {
+    const url = typeof input === "string" ? input : input.url;
+    if (new URL(url).hostname === "api.cloudflare.com") cloudflareApiCalls.push(url);
+    throw new Error(`Unexpected external fetch: ${url}`);
+  };
+  try {
+    const result = await registerInterest({ SHARED_DATA: sharedData }, "MEMBER@EXAMPLE.COM");
+    assert.deepEqual(result, {
+      success: true,
+      already: true,
+      message: "You're already on the list — the free dashboard is open to everyone.",
+    });
+    assert.equal(sharedData.writes.length, 0, "re-register must not overwrite an existing entitlement record");
+    assert.equal(sharedData.values.get(memberKey), grantedRecord);
+    assert.deepEqual(JSON.parse(sharedData.values.get(memberKey)).features, {
+      research: true,
+      radar: true,
+    });
+    assert.equal(cloudflareApiCalls.length, 0, "registration must not call api.cloudflare.com");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("KV registration failures retain safe status and code metadata", async () => {
   await assert.rejects(
-    registerMemberInAccess({}, "member@example.com"),
+    registerInterest({}, "member@example.com"),
     error => error instanceof AccessRegistrationError
       && error.status === 503
       && error.code === "registration_unavailable"
