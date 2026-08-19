@@ -195,6 +195,45 @@ test("analyze allows an email on the allow-list", { concurrency: false }, async 
   assert.equal(limiterCalls, 1);
 });
 
+test("analyze rejects a verified member at the monthly quota before Gemini", { concurrency: false }, async () => {
+  const email = "member@example.com";
+  const month = new Date().toISOString().slice(0, 7);
+  const { response, nonJwksFetches, limiterCalls } = await analyzeAsVerifiedMember({
+    email,
+    sub: "member-at-quota",
+    env: {
+      ADMIN_EMAILS: "admin@example.com",
+      SHARED_DATA: {
+        get: async (key, type) => {
+          if (key === `member:${email}`) {
+            const record = { features: { research: true }, researchQuota: 4 };
+            return type === "json" ? record : JSON.stringify(record);
+          }
+          if (key === `usage:${email}:${month}`) return "4";
+          return null;
+        },
+      },
+    },
+  });
+  const body = await response.json();
+  const now = new Date();
+  const resetsOn = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+    .toISOString()
+    .slice(0, 10);
+
+  assert.equal(response.status, 429);
+  assert.deepEqual(body, {
+    error: "Monthly research limit reached",
+    code: "quota_exceeded",
+    used: 4,
+    limit: 4,
+    resetsOn,
+  });
+  assert.equal(response.headers.get("Cache-Control"), "private, no-store");
+  assert.equal(nonJwksFetches, 0);
+  assert.equal(limiterCalls, 0);
+});
+
 test("prices rejects more than 500 distinct tickers before upstream work", async () => {
   const tickerList = Array.from({ length: 501 }, (_, index) => `T${index}`);
   const response = await prices({
