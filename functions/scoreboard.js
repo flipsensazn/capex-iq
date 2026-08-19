@@ -20,7 +20,7 @@ import {
   isExpectedBootstrap,
   latestAsOf,
 } from "./data-health.js";
-import { hasFeature } from "./entitlements.js";
+import { hasFeature, isServiceRequest } from "./entitlements.js";
 
 const PROSPECTIVE_START = "2026-08-17";
 const PIPELINE = "signal_scoreboard";
@@ -111,28 +111,30 @@ export async function onRequest(context) {
     });
   }
 
-  const accessPayload = await getAccessPayload(request, env);
-  const email = accessPayload?.email?.toLowerCase();
-  if (!email) {
-    return new Response(JSON.stringify({ error: "Authentication required" }), {
-      status: 401,
-      headers: headers(NO_STORE),
-    });
-  }
-  if (!isTrustedOrigin(request, env)) {
-    return new Response(JSON.stringify({ error: "Forbidden" }), {
-      status: 403,
-      headers: headers(NO_STORE),
-    });
-  }
-  if (!(await hasFeature(email, env, "signals"))) {
-    return new Response(JSON.stringify({
-      error: "Signals access is not enabled for this account",
-      code: "members_only",
-    }), {
-      status: 403,
-      headers: headers(NO_STORE),
-    });
+  if (!(await isServiceRequest(request, env))) {
+    const accessPayload = await getAccessPayload(request, env);
+    const email = accessPayload?.email?.toLowerCase();
+    if (!email) {
+      return new Response(JSON.stringify({ error: "Authentication required" }), {
+        status: 401,
+        headers: headers(NO_STORE),
+      });
+    }
+    if (!isTrustedOrigin(request, env)) {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403,
+        headers: headers(NO_STORE),
+      });
+    }
+    if (!(await hasFeature(email, env, "signals"))) {
+      return new Response(JSON.stringify({
+        error: "Signals access is not enabled for this account",
+        code: "members_only",
+      }), {
+        status: 403,
+        headers: headers(NO_STORE),
+      });
+    }
   }
 
   const cached = await readKvJson(env.SHARED_DATA);

@@ -4,8 +4,8 @@
 # note into the thesis/journal vault so it maintains itself.
 #
 # Runs LOCALLY (Windows Task Scheduler, Sunday evening after the cloud ETLs
-# finish) and reads only the deployed site's public endpoints — no DB
-# credentials on this machine:
+# finish) and reads the deployed site's endpoints with an optional first-party
+# service token — no DB credentials on this machine:
 #   /composite   CBS scores + weekly deltas + component parts
 #   /scoreboard  signal-performance stats + recent events
 #   /stress      transcript stress (used for the hottest-names table)
@@ -22,6 +22,7 @@
 # Env vars (all optional):
 #   OBSIDIAN_VAULT       vault root   (default: the iCloud vault path below)
 #   WATCHLIST_BASE_URL   site root    (default: https://wizzles-watchlist.pages.dev)
+#   SIGNALS_SERVICE_TOKEN first-party token for gated signal endpoints
 
 import os
 import sys
@@ -62,7 +63,11 @@ def log(msg):
 
 def get_json(path):
     try:
-        res = requests.get(f"{BASE_URL}{path}", timeout=30)
+        request_options = {"timeout": 30}
+        service_token = os.environ.get("SIGNALS_SERVICE_TOKEN")
+        if service_token:
+            request_options["headers"] = {"X-Service-Token": service_token}
+        res = requests.get(f"{BASE_URL}{path}", **request_options)
         res.raise_for_status()
         return res.json()
     except Exception as e:

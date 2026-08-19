@@ -8,6 +8,7 @@ import { onRequest as exposure } from "../functions/exposure.js";
 import { onRequest as gauges } from "../functions/gauges.js";
 import { onRequest as scoreboard } from "../functions/scoreboard.js";
 import { onRequest as stress } from "../functions/stress.js";
+import { isServiceRequest } from "../functions/entitlements.js";
 import { createAccessFixture, warmAccessFixture } from "./access-fixture.js";
 
 const ORIGIN = "https://capex-iq.us";
@@ -15,6 +16,7 @@ const DATABASE_URL = "postgresql://user:pass@example.neon.tech/watchlist";
 const MEMBER_EMAIL = "member@example.com";
 const VISITOR_EMAIL = "visitor@example.com";
 const ADMIN_EMAIL = "admin@example.com";
+const SERVICE_TOKEN = "signals-service-token";
 
 const access = await createAccessFixture("signals-gating");
 const memberJwt = await access.createJwt({ email: MEMBER_EMAIL, sub: "signals-member" });
@@ -49,7 +51,7 @@ function createKv(entries = {}) {
   };
 }
 
-function createEnv(kv) {
+function createEnv(kv, overrides = {}) {
   return {
     ACCESS_TEAM_DOMAIN: access.teamDomain,
     ACCESS_AUD: access.accessAud,
@@ -57,13 +59,15 @@ function createEnv(kv) {
     ALLOWED_ORIGIN: ORIGIN,
     DATABASE_URL,
     SHARED_DATA: kv,
+    ...overrides,
   };
 }
 
-function endpointRequest(path, jwt, origin = ORIGIN) {
+function endpointRequest(path, jwt, origin = ORIGIN, serviceToken = null) {
   const headers = new Headers();
   if (origin != null) headers.set("Origin", origin);
   if (jwt) headers.set("Cookie", `CF_Authorization=${jwt}`);
+  if (serviceToken != null) headers.set("X-Service-Token", serviceToken);
   return new Request(`${ORIGIN}${path}`, { method: "GET", headers });
 }
 
@@ -92,13 +96,36 @@ for (const [name, path, handler] of signalEndpoints) {
       [`member:${MEMBER_EMAIL}`]: { features: { signals: true } },
       [`member:${VISITOR_EMAIL}`]: { features: {} },
     });
-    const env = createEnv(kv);
+    const env = createEnv(kv, { SIGNALS_SERVICE_TOKEN: SERVICE_TOKEN });
+    const envWithoutServiceToken = createEnv(kv);
 
     await withFetch(async () => Response.json({ rows: [] }), async () => {
       let response = await handler({ request: endpointRequest(path, null), env });
       assert.equal(response.status, 401);
       assert.deepEqual(await response.json(), { error: "Authentication required" });
       assert.equal(response.headers.get("Cache-Control"), "no-store");
+
+      response = await handler({
+        request: endpointRequest(path, null, null, "wrong-service-token"),
+        env,
+      });
+      assert.equal(response.status, 401);
+      assert.deepEqual(await response.json(), { error: "Authentication required" });
+
+      response = await handler({
+        request: endpointRequest(path, null, null, SERVICE_TOKEN),
+        env: envWithoutServiceToken,
+      });
+      assert.equal(response.status, 401);
+      assert.deepEqual(await response.json(), { error: "Authentication required" });
+
+      response = await handler({
+        request: endpointRequest(path, null, null, SERVICE_TOKEN),
+        env,
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("Cache-Control"), "private, max-age=300");
+      assert.equal((await response.json()).success, true);
 
       response = await handler({
         request: endpointRequest(path, memberJwt, "https://attacker.example"),
@@ -131,13 +158,20 @@ for (const [name, path, handler] of signalEndpoints) {
 
 test("candidates GET requires a trusted admin", { concurrency: false }, async () => {
   const kv = createKv();
-  const env = createEnv(kv);
+  const env = createEnv(kv, { SIGNALS_SERVICE_TOKEN: SERVICE_TOKEN });
 
   await withFetch(async () => Response.json({ rows: [] }), async () => {
     let response = await candidates({ request: endpointRequest("/candidates", null), env });
     assert.equal(response.status, 401);
     assert.deepEqual(await response.json(), { error: "Authentication required" });
     assert.equal(response.headers.get("Cache-Control"), "no-store");
+
+    response = await candidates({
+      request: endpointRequest("/candidates", null, null, SERVICE_TOKEN),
+      env,
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: "Authentication required" });
 
     response = await candidates({
       request: endpointRequest("/candidates", adminJwt, "https://attacker.example"),
@@ -159,6 +193,15 @@ test("candidates GET requires a trusted admin", { concurrency: false }, async ()
     assert.equal(response.status, 200);
     assert.equal((await response.json()).success, true);
   });
+});
+
+test("service request tokens must match exactly", async () => {
+  const requestWithToken = token => endpointRequest("/composite", null, null, token);
+  const env = { SIGNALS_SERVICE_TOKEN: SERVICE_TOKEN };
+
+  assert.equal(await isServiceRequest(requestWithToken(SERVICE_TOKEN), env), true);
+  assert.equal(await isServiceRequest(requestWithToken("signals-service-tokem"), env), false);
+  assert.equal(await isServiceRequest(requestWithToken("short"), env), false);
 });
 
 test("signal payload cache is read only after the gate and avoids a second Neon fetch", { concurrency: false }, async () => {
