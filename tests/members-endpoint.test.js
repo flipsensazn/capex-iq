@@ -8,6 +8,9 @@ const ORIGIN = "https://capex-iq.us";
 const ADMIN_EMAIL = "admin@example.com";
 const MEMBER_EMAIL = "member@example.com";
 const SERVICE_TOKEN = "members-service-token";
+const ACCESS_API_TOKEN = "members-access-api-token";
+const ACCESS_MEMBERS_LIST_ID = "capex-iq-members-list";
+const DEFAULT_ACCESS_ACCOUNT_ID = "0e727bf4fae81b99443d3150ca244484";
 const ALL_FEATURES = {
   research: true,
   radar: true,
@@ -105,6 +108,16 @@ function membersRequest(method, jwt, {
 
 async function callMembers(method, jwt, options = {}, env = createEnv()) {
   return members({ request: membersRequest(method, jwt, options), env });
+}
+
+async function withFetchStub(stub, callback) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stub;
+  try {
+    return await callback();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 function assertNoStore(response) {
@@ -275,6 +288,20 @@ test("members GET paginates all KV records, surfaces malformed records, and atta
   assert.equal(kv.gets.some(({ key }) => key === nonResearchUsageKey), false);
 });
 
+test("members GET makes no roster API call when roster sync is configured", { concurrency: false }, async () => {
+  let fetchCalls = 0;
+  const response = await withFetchStub(async () => {
+    fetchCalls += 1;
+    throw new Error("GET must not call the roster API");
+  }, () => callMembers("GET", adminJwt, {}, createEnv(createKv(), {
+    CF_ACCESS_API_TOKEN: ACCESS_API_TOKEN,
+    ACCESS_MEMBERS_LIST_ID,
+  })));
+
+  assert.equal(response.status, 200);
+  assert.equal(fetchCalls, 0);
+});
+
 test("members POST grant rejects unknown and non-boolean feature fields", async () => {
   const kv = createKv();
   const env = createEnv(kv);
@@ -329,6 +356,7 @@ test("members POST grant merges known features over a lead and preserves registr
   assert.equal(body.member.registeredAt, registeredAt);
   assert.equal(body.member.source, "self-register");
   assert.equal(body.member.researchQuota, 75);
+  assert.deepEqual(body.roster, { synced: false, reason: "unconfigured" });
   assert.ok(Date.parse(body.member.grantedAt) >= before);
   assert.ok(Date.parse(body.member.grantedAt) <= after);
   assert.equal(kv.puts.length, 1);
@@ -340,6 +368,92 @@ test("members POST grant merges known features over a lead and preserves registr
   assert.equal(stored.source, "self-register");
   assert.equal(stored.researchQuota, 75);
   assert.equal(stored.grantedAt, body.member.grantedAt);
+});
+
+test("members POST grant patches the configured roster once with the normalized email", { concurrency: false }, async () => {
+  const email = "new-member@example.com";
+  const kv = createKv();
+  const env = createEnv(kv, {
+    CF_ACCESS_API_TOKEN: ACCESS_API_TOKEN,
+    ACCESS_MEMBERS_LIST_ID,
+  });
+  const calls = [];
+
+  const response = await withFetchStub(async (input, init) => {
+    calls.push({ input, init });
+    return Response.json({ success: true });
+  }, () => callMembers("POST", adminJwt, {
+    body: {
+      action: "grant",
+      email: `  ${email.toUpperCase()}  `,
+      features: ALL_FEATURES,
+    },
+  }, env));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(kv.puts.length, 1);
+  assert.deepEqual(body.roster, { synced: true });
+  assert.equal(calls.length, 1);
+  const [{ input, init }] = calls;
+  assert.equal(
+    String(input),
+    `https://api.cloudflare.com/client/v4/accounts/${DEFAULT_ACCESS_ACCOUNT_ID}/gateway/lists/${env.ACCESS_MEMBERS_LIST_ID}`,
+  );
+  assert.equal(init.method, "PATCH");
+  assert.equal(new Headers(init.headers).get("Authorization"), `Bearer ${env.CF_ACCESS_API_TOKEN}`);
+  assert.deepEqual(JSON.parse(init.body), {
+    append: [{ value: email }],
+    remove: [],
+  });
+});
+
+test("members POST reports unconfigured roster sync without attempting fetch", { concurrency: false }, async () => {
+  const kv = createKv();
+  let fetchCalls = 0;
+
+  const response = await withFetchStub(async () => {
+    fetchCalls += 1;
+    throw new Error("Unconfigured roster sync must not call fetch");
+  }, () => callMembers("POST", adminJwt, {
+    body: { action: "grant", email: "unconfigured@example.com", features: ALL_FEATURES },
+  }, createEnv(kv)));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(kv.puts.length, 1);
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(body.roster, { synced: false, reason: "unconfigured" });
+});
+
+test("members POST keeps the KV grant when the roster API fails", { concurrency: false }, async () => {
+  const kv = createKv();
+  const env = createEnv(kv, {
+    CF_ACCESS_API_TOKEN: ACCESS_API_TOKEN,
+    ACCESS_MEMBERS_LIST_ID,
+  });
+  const logged = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => logged.push(args);
+
+  let response;
+  try {
+    response = await withFetchStub(
+      async () => Response.json({ success: false }, { status: 500 }),
+      () => callMembers("POST", adminJwt, {
+        body: { action: "grant", email: "api-failure@example.com", features: ALL_FEATURES },
+      }, env),
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(kv.puts.length, 1);
+  assert.deepEqual(body.roster, { synced: false, reason: "api_error" });
+  assert.ok(logged.some(args => args.includes(500)));
+  assert.equal(JSON.stringify(logged).includes(ACCESS_API_TOKEN), false);
 });
 
 test("members POST rejects invalid actions, emails, and research quotas", async () => {
@@ -393,6 +507,7 @@ test("members POST revoke keeps the lead while clearing grants and quota", async
       source: "self-register",
       researchQuota: null,
     },
+    roster: { synced: false, reason: "unconfigured" },
   });
   const stored = JSON.parse(kv.values.get(`member:${email}`));
   assert.deepEqual(stored.features, {});
@@ -413,9 +528,47 @@ test("members POST delete removes the KV record", async () => {
 
   assert.equal(response.status, 200);
   assertNoStore(response);
-  assert.deepEqual(await response.json(), { success: true, deleted: true });
+  assert.deepEqual(await response.json(), {
+    success: true,
+    deleted: true,
+    roster: { synced: false, reason: "unconfigured" },
+  });
   assert.deepEqual(kv.deletes, [key]);
   assert.equal(kv.values.has(key), false);
+});
+
+test("members POST revoke and delete patch roster removal after the KV mutation", { concurrency: false }, async () => {
+  for (const action of ["revoke", "delete"]) {
+    const email = `${action}@example.com`;
+    const key = `member:${email}`;
+    const kv = createKv({ [key]: { features: ALL_FEATURES, researchQuota: 50 } });
+    const env = createEnv(kv, {
+      CF_ACCESS_API_TOKEN: ACCESS_API_TOKEN,
+      ACCESS_MEMBERS_LIST_ID,
+    });
+    const calls = [];
+
+    const response = await withFetchStub(async (input, init) => {
+      calls.push({ input, init, kvChanged: action === "delete" ? !kv.values.has(key) : kv.puts.length === 1 });
+      return Response.json({ success: true });
+    }, () => callMembers("POST", adminJwt, {
+      body: { action, email },
+    }, env));
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.roster, { synced: true });
+    assert.equal(calls.length, 1);
+    const [{ input, init, kvChanged }] = calls;
+    assert.equal(kvChanged, true);
+    assert.ok(String(input).includes(env.ACCESS_MEMBERS_LIST_ID));
+    assert.equal(init.method, "PATCH");
+    assert.equal(new Headers(init.headers).get("Authorization"), `Bearer ${env.CF_ACCESS_API_TOKEN}`);
+    assert.deepEqual(JSON.parse(init.body), {
+      append: [],
+      remove: [email],
+    });
+  }
 });
 
 test("members POST revoke and delete return 404 for absent records", async () => {
