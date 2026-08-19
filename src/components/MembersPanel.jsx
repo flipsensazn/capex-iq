@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { EYEBROW_STYLE, PANEL_STYLE } from "./ResearchPanel";
 
 const FEATURES = [
@@ -56,13 +56,20 @@ async function readResponse(response) {
   return data;
 }
 
-export default function MembersPanel() {
+export default function MembersPanel({ onMembersData }) {
   const [members, setMembers] = useState([]);
+  const membersRef = useRef([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [mutation, setMutation] = useState(null);
   const [deleteConfirmEmail, setDeleteConfirmEmail] = useState(null);
   const [rosterNotices, setRosterNotices] = useState([]);
+
+  function updateMembers(nextMembers) {
+    membersRef.current = nextMembers;
+    setMembers(nextMembers);
+    onMembersData?.(nextMembers);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -79,7 +86,7 @@ export default function MembersPanel() {
         if (!Array.isArray(data.members)) {
           throw new Error("Member request returned an invalid member list.");
         }
-        if (!controller.signal.aborted) setMembers(data.members);
+        if (!controller.signal.aborted) updateMembers(data.members);
       } catch (requestError) {
         if (!controller.signal.aborted) {
           setError(requestError instanceof Error ? requestError.message : "Unable to load member registrations.");
@@ -119,12 +126,12 @@ export default function MembersPanel() {
 
       let noticeEmail = email;
       if (action === "delete") {
-        setMembers(current => current.filter(member => member.email !== email));
+        updateMembers(membersRef.current.filter(member => member.email !== email));
       } else {
         if (!data.member || typeof data.member !== "object") {
           throw new Error("Member update returned no record.");
         }
-        setMembers(current => current.map(member => (
+        updateMembers(membersRef.current.map(member => (
           member.email === email ? data.member : member
         )));
         noticeEmail = data.member.email;
@@ -173,7 +180,8 @@ export default function MembersPanel() {
   ));
 
   return (
-    <section style={{ ...PANEL_STYLE, overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <section style={{ ...PANEL_STYLE, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", flexWrap: "wrap" }}>
         <div style={EYEBROW_STYLE}>MEMBER REGISTRATIONS</div>
         <div style={{ color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 9.5 }}>
@@ -314,6 +322,7 @@ export default function MembersPanel() {
           </table>
         </div>
       ) : null}
-    </section>
+      </section>
+    </div>
   );
 }

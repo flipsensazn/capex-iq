@@ -9,6 +9,7 @@ import ResearchPanel from "./components/ResearchPanel";
 import SignalScoreboard from "./components/SignalScoreboard";
 import StatusBanner from "./components/StatusBanner";
 import TopBar from "./components/TopBar";
+import { countPendingMembers } from "./lib/members";
 import EarningsCalendar from "./components/EarningsCalendar";
 import SupplyGraph from "./components/capex-map/SupplyGraph";
 import TrackPane from "./components/capex-map/TrackPane";
@@ -1244,6 +1245,8 @@ export default function App() {
   const [features, setFeatures] = useState({});
   const [identityEmail, setIdentityEmail] = useState(null);
   const [adminChecked, setAdminChecked] = useState(false);
+  const [pendingMembers, setPendingMembers] = useState(0);
+  const membersDataVersionRef = useRef(0);
   const [appNotice, setAppNotice] = useState(null);
 
   // /me reports identity from the Cloudflare Access cookie. Before the path
@@ -1268,6 +1271,41 @@ export default function App() {
       .finally(() => setAdminChecked(true));
   }, []);
 
+  useEffect(() => {
+    if (!adminChecked || !isAdmin) return undefined;
+
+    const controller = new AbortController();
+    const dataVersion = membersDataVersionRef.current;
+
+    async function loadPendingMembers() {
+      try {
+        const response = await fetch("/members", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Member request failed (${response.status}).`);
+
+        const data = await response.json();
+        if (!Array.isArray(data.members)) throw new Error("Member request returned an invalid member list.");
+        if (!controller.signal.aborted && dataVersion === membersDataVersionRef.current) {
+          setPendingMembers(countPendingMembers(data.members));
+        }
+      } catch {
+        if (!controller.signal.aborted && dataVersion === membersDataVersionRef.current) {
+          setPendingMembers(0);
+        }
+      }
+    }
+
+    void loadPendingMembers();
+    return () => controller.abort();
+  }, [adminChecked, isAdmin]);
+
+  const handleMembersData = useCallback((members) => {
+    membersDataVersionRef.current += 1;
+    setPendingMembers(countPendingMembers(members));
+  }, []);
+
   const canRadar = Boolean(features?.radar);
   const canFunds = Boolean(features?.funds);
   const isAnonymous = adminChecked && !identityEmail;
@@ -1275,7 +1313,7 @@ export default function App() {
   // "ai" = hyperscaler capex flow · "musk" = Musk Galaxy · "robotics" = humanoid
   // robotics · "earnings" = the calendar · "radar" = the members screener
   // · "research" = the members-only SEC financial research workspace.
-  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "radar", "research"];
+  const VALID_VIEWS = ["ai", "musk", "robotics", "earnings", "radar", "research", "members"];
   const [view, setView] = useState(() => {
     const h = window.location.hash.replace("#", "");
     return VALID_VIEWS.includes(h) ? h : "ai";
@@ -1307,6 +1345,9 @@ export default function App() {
   useEffect(() => {
     if (adminChecked && !canRadar && view === "radar") switchView("ai");
   }, [adminChecked, canRadar, view]);
+  useEffect(() => {
+    if (adminChecked && !isAdmin && view === "members") switchView("ai");
+  }, [adminChecked, isAdmin, view]);
 
   const [timeline, setTimeline] = useState("1D");
   const [activeFilter, setActiveFilter] = useState(null);
@@ -1576,8 +1617,9 @@ export default function App() {
   const isEarnings = view === "earnings";
   const isRadar = view === "radar";
   const isResearch = view === "research";
+  const isMembers = view === "members";
   // Standalone views skip the capex-map panels below.
-  const isMapView = !isEarnings && !isRadar && !isResearch;
+  const isMapView = !isEarnings && !isRadar && !isResearch && !isMembers;
   const dashboardDataNotice = useMemo(
     () => isMapView ? buildDashboardDataNotice(datasetHealth) : null,
     [datasetHealth, isMapView]
@@ -1644,6 +1686,7 @@ export default function App() {
     { value: "earnings", label: "Earnings", icon: "🗓" },
     ...(canRadar ? [{ value: "radar", label: "Radar", icon: "📡" }] : []),
     ...(canResearch ? [{ value: "research", label: "Research", icon: "🔬" }] : []),
+    ...(isAdmin ? [{ value: "members", label: "Members", icon: "👥", badge: pendingMembers }] : []),
   ];
 
   return (
@@ -1680,6 +1723,11 @@ export default function App() {
                     onClick={() => switchView(t.value)}
                   >
                     <span style={{ fontSize: 13 }}>{t.icon}</span>{t.label}
+                    {t.badge > 0 && (
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 999, background: "color-mix(in srgb, var(--warn) 15%, transparent)", color: "var(--warn)", border: "1px solid color-mix(in srgb, var(--warn) 40%, transparent)" }}>
+                        {t.badge}
+                      </span>
+                    )}
                     {on && <span className="dash-tab-ind" aria-hidden="true" />}
                   </button>
                 );
@@ -1709,6 +1757,8 @@ export default function App() {
           {isRadar && canRadar && <RadarPanel onTickerClick={openPopup} onOpenResearch={openResearch} showFunds={canFunds} />}
 
           {isResearch && canResearch && <ResearchPanel initialTicker={researchTicker} />}
+
+          {isMembers && isAdmin && <MembersPanel onMembersData={handleMembersData} />}
 
           {isMapView && <>
           {/* HERO: capex flow Sankey — spenders → tracks, with guidance trend */}
@@ -1781,8 +1831,6 @@ export default function App() {
             onReview={reviewCandidate}
             onTickerClick={openPopup}
           />
-
-          {isAdmin && <MembersPanel />}
 
           <div>
             <div className="bottom-grid-all">
