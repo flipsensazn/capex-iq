@@ -18,6 +18,7 @@ const MEMBER_PREFIX = "member:";
 const MAX_BODY_BYTES = 4 * 1024;
 const MAX_RESEARCH_QUOTA = 10_000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const DEFAULT_ACCESS_ACCOUNT_ID = "0e727bf4fae81b99443d3150ca244484";
 
 function responseHeaders(request, env) {
   const allowedOrigin = env.ALLOWED_ORIGIN || "";
@@ -40,6 +41,41 @@ function normalizeEmail(value) {
 
 function validEmail(email) {
   return email.length <= 254 && EMAIL_RE.test(email);
+}
+
+async function syncRoster(env, email, mode) {
+  if (!env.CF_ACCESS_API_TOKEN || !env.ACCESS_MEMBERS_LIST_ID) {
+    return { synced: false, reason: "unconfigured" };
+  }
+
+  const accountId = env.ACCESS_ACCOUNT_ID || DEFAULT_ACCESS_ACCOUNT_ID;
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/gateway/lists/${env.ACCESS_MEMBERS_LIST_ID}`;
+  const payload = mode === "append"
+    ? { append: [{ value: email }], remove: [] }
+    : { append: [], remove: [email] };
+  let status = "network_error";
+
+  try {
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${env.CF_ACCESS_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    });
+    status = response.status;
+    const body = await response.json();
+    if (!response.ok || body?.success === false) {
+      console.error("members roster sync failed", status);
+      return { synced: false, reason: "api_error" };
+    }
+    return { synced: true };
+  } catch {
+    console.error("members roster sync failed", status);
+    return { synced: false, reason: "api_error" };
+  }
 }
 
 function isRecord(value) {
@@ -170,7 +206,8 @@ async function mutateMember(body, env, headers) {
       return reply(404, { error: "Member not found", code: "not_found" }, headers);
     }
     await env.SHARED_DATA.delete(key);
-    return reply(200, { success: true, deleted: true }, headers);
+    const roster = await syncRoster(env, email, "remove");
+    return reply(200, { success: true, deleted: true, roster }, headers);
   }
 
   if (action === "revoke") {
@@ -181,7 +218,8 @@ async function mutateMember(body, env, headers) {
     delete revoked.researchQuota;
     delete revoked.grantedAt;
     await env.SHARED_DATA.put(key, JSON.stringify(revoked));
-    return reply(200, { success: true, member: memberResponse(email, revoked) }, headers);
+    const roster = await syncRoster(env, email, "remove");
+    return reply(200, { success: true, member: memberResponse(email, revoked), roster }, headers);
   }
 
   const granted = {
@@ -196,7 +234,8 @@ async function mutateMember(body, env, headers) {
     granted.researchQuota = body.researchQuota;
   }
   await env.SHARED_DATA.put(key, JSON.stringify(granted));
-  return reply(200, { success: true, member: memberResponse(email, granted) }, headers);
+  const roster = await syncRoster(env, email, "append");
+  return reply(200, { success: true, member: memberResponse(email, granted), roster }, headers);
 }
 
 export async function onRequest(context) {
