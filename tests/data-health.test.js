@@ -1025,7 +1025,10 @@ test("dashboard health notice distinguishes loading, healthy, and partial data",
     asOf: null,
     state: "unknown",
   }]));
-  assert.match(buildDashboardDataNotice(loading).message, /Loading live supply-chain datasets/);
+  assert.deepEqual(buildDashboardDataNotice(loading), {
+    type: "info",
+    message: "Loading live supply-chain datasets: Transcript stress, XBRL gauges, Customer exposure, Composite scores.",
+  });
 
   const healthy = Object.fromEntries(Object.keys(DASHBOARD_DATASETS).map(key => [key, {
     loading: false,
@@ -1044,11 +1047,29 @@ test("dashboard health notice distinguishes loading, healthy, and partial data",
     composite: { ...healthy.composite, error: "HTTP 500" },
   };
   const notice = buildDashboardDataNotice(partial);
-  assert.equal(notice.type, "warning");
-  assert.match(notice.message, /Partial\/degraded data/);
-  assert.match(notice.message, /refresh failed/);
-  assert.match(notice.message, /stale/);
-  assert.match(notice.message, /freshness unverified/);
-  assert.match(notice.message, /unavailable/);
-  assert.match(notice.message, /not confirmed live/);
+  assert.deepEqual(notice, {
+    type: "warning",
+    message: "Partial/degraded data: Transcript stress refresh failed; last good data 2026-08-16; XBRL gauges stale, as of 2026-07-01; Customer exposure freshness unverified, as of 2099-01-02; Composite scores unavailable. Affected signals may be missing; displayed values are stored snapshots, not confirmed live.",
+  });
+});
+
+test("dashboard health notice excludes locked datasets from the loading scope", () => {
+  const health = Object.fromEntries(Object.keys(DASHBOARD_DATASETS).map(key => [key, {
+    loading: true,
+    locked: key === "stress" || key === "composite",
+  }]));
+
+  assert.deepEqual(buildDashboardDataNotice(health), {
+    type: "info",
+    message: "Loading live supply-chain datasets: XBRL gauges, Customer exposure.",
+  });
+});
+
+test("dashboard health notice is absent when every dataset is locked", () => {
+  const health = Object.fromEntries(Object.keys(DASHBOARD_DATASETS).map(key => [key, {
+    loading: true,
+    locked: true,
+  }]));
+
+  assert.equal(buildDashboardDataNotice(health), null);
 });

@@ -161,7 +161,8 @@ export function buildDashboardDataNotice(dataHealth) {
   const entries = Object.entries(DASHBOARD_DATASETS).map(([key, config]) => ({
     label: config.label,
     health: dataHealth?.[key] ?? initialDatasetHealth()[key],
-  }));
+  })).filter(entry => !entry.health.locked);
+  if (!entries.length) return null;
   const loading = entries.filter(entry => entry.health.loading);
   const issues = entries
     .map(entry => issueDescription(entry.label, entry.health))
