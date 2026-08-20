@@ -13,9 +13,10 @@ import { onRequest as historyHandler } from "./history.js";
 import { findNotablePoints } from "./notable-points.js";
 import { onRequest as pricesHandler } from "./prices.js";
 import { computeQualityScore } from "./quality-score.js";
+import { findSupportResistance } from "./support-resistance.js";
 import { computeTechnicalScore } from "./technical-score.js";
 
-const CACHE_KEY_PREFIX = "research_v8_";
+const CACHE_KEY_PREFIX = "research_v9_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
 const MODEL = "gemini-3.5-flash-lite";
@@ -36,7 +37,8 @@ If the implied P/S differs materially from the current P/S, that case's rational
 After selecting assumptions, cross-check each resulting implied price against the supplied currentPrice. A case may land far from the current price ONLY when its rationale explicitly addresses that gap, for example by stating that the market is pricing in materially more growth than the filings support. A bull case far below the current price without such an explanation is incoherent and must be reconsidered.
 The bear case must produce the lowest implied price and the bull case the highest. If your assumptions do not yield bear <= base <= bull, reconsider them before answering.
 Do NOT contort assumptions merely to match the current price. An honest conclusion that the market is overpaying is acceptable and valuable when the rationale states it explicitly.
-The technical read must cite only the supplied priceContext figures and notablePoints. When a priceContext field is null, say the data is unavailable rather than inferring it.
+The technical read must cite only the supplied priceContext figures, notablePoints, and supportResistance levels (kind, price, and touches). When a priceContext field is null, say the data is unavailable rather than inferring it.
+The technical read SHOULD comment when the supplied currentPrice is within roughly 2% of a supplied supportResistance level.
 Annotations MUST reference only the supplied notablePoints ids. Do NOT invent dates, price levels, support/resistance values or patterns.
 Select only the genuinely informative annotation candidates; fewer is better, and zero is acceptable.
 The technical score is computed deterministically and supplied as technicalScore. Explain it if useful, do not restate or contradict it, and do not emit your own score.
@@ -152,8 +154,8 @@ function extractJson(text) {
   return null;
 }
 
-async function callGemini(apiKey, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite, timeoutMs) {
-  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite })}`;
+async function callGemini(apiKey, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, supportResistance, composite, timeoutMs) {
+  const prompt = `${SYSTEM_PROMPT}\n\nSUPPLIED FILED DATA AND PRICE CONTEXT:\n${JSON.stringify({ fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, supportResistance, composite })}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -604,6 +606,9 @@ export async function onRequest(context) {
   const notablePoints = history
     ? findNotablePoints(history.points, history.displayFrom)
     : [];
+  const supportResistance = history
+    ? findSupportResistance(history.points, history.displayFrom)
+    : [];
   const composite = computeComposite(qualityScore, technicalScore);
   const currentPrice = priceContext.price;
   const fiscalYears = Array.isArray(fundamentals.fiscalYears) ? fundamentals.fiscalYears : [];
@@ -645,7 +650,7 @@ export async function onRequest(context) {
   };
 
   try {
-    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, composite, modelTimeoutMs);
+    const modelAnalysis = await callGemini(env.GEMINI_API_KEY, fundamentals, currentPrice, priceContext, marketContext, calculationInputs, qualityScore, technicalScore, notablePoints, supportResistance, composite, modelTimeoutMs);
     const modelCases = modelAnalysis?.cases && typeof modelAnalysis.cases === "object" && !Array.isArray(modelAnalysis.cases)
       ? modelAnalysis.cases
       : {};
@@ -668,6 +673,7 @@ export async function onRequest(context) {
     delete macroAnalysis.score;
     const analysis = {
       ...modelAnalysis,
+      supportResistance,
       technical: {
         ...technicalAnalysis,
         annotations: validateTechnicalAnnotations(technicalAnalysis, notablePoints),

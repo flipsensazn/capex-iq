@@ -137,6 +137,29 @@ function historyFixture() {
   };
 }
 
+function supportResistanceHistoryFixture() {
+  return {
+    ticker: "MSFT",
+    currency: "USD",
+    points: [
+      { date: "2026-05-01", open: 398, high: 405, low: 395, close: 400, ma20: 400, ma200: 390 },
+      { date: "2026-05-04", open: 400, high: 410, low: 398, close: 405, ma20: 400, ma200: 390 },
+      { date: "2026-05-05", open: 405, high: 425, low: 402, close: 420, ma20: 401, ma200: 390 },
+      { date: "2026-05-06", open: 409, high: 412, low: 399, close: 405, ma20: 401, ma200: 390 },
+      { date: "2026-05-07", open: 404, high: 408, low: 394, close: 400, ma20: 401, ma200: 390 },
+      { date: "2026-05-08", open: 400, high: 406, low: 390, close: 395, ma20: 400, ma200: 390 },
+      { date: "2026-05-11", open: 395, high: 409, low: 392, close: 405, ma20: 400, ma200: 390 },
+      { date: "2026-05-12", open: 405, high: 414, low: 398, close: 410, ma20: 401, ma200: 390 },
+      { date: "2026-05-13", open: 410, high: 427, low: 401, close: 423, ma20: 402, ma200: 390 },
+      { date: "2026-05-14", open: 407, high: 413, low: 397, close: 405, ma20: 402, ma200: 390 },
+      { date: "2026-05-15", open: 402, high: 407, low: 393, close: 400, ma20: 402, ma200: 390 },
+    ],
+    displayFrom: "2026-05-01",
+    source: "Yahoo v8 chart",
+    retrievedAt: "2026-05-15T22:00:00.000Z",
+  };
+}
+
 async function requestFundamentals({
   ticker,
   companyFacts = companyFactsFixture(),
@@ -484,7 +507,7 @@ async function requestResearch({
     await kv.put(`history_v2_${ticker.toUpperCase()}`, JSON.stringify(history), { expirationTtl: 3600 });
   }
   if (cachedResult) {
-    await kv.put(`research_v8_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+    await kv.put(`research_v9_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
   if (memberRecord !== undefined) {
     await kv.put(`member:${email.toLowerCase()}`, JSON.stringify(memberRecord));
@@ -724,7 +747,7 @@ test("research increments monthly usage once after a successful cache miss", { c
   });
   const body = await response.json();
   const usagePuts = kv.puts.filter(({ key }) => key.startsWith("usage:"));
-  const cachedWrite = kv.puts.find(({ key }) => key === "research_v8_MSFT");
+  const cachedWrite = kv.puts.find(({ key }) => key === "research_v9_MSFT");
 
   assert.equal(response.status, 200);
   assert.equal(geminiCalls, 1);
@@ -847,6 +870,7 @@ test("research returns server-derived price context and model technical and macr
   });
   geminiAnalysis.technical = technical;
   geminiAnalysis.macro = macro;
+  geminiAnalysis.supportResistance = [{ kind: "resistance", price: 999, touches: 99 }];
   const priceEntry = {
     price: 400,
     change: -1.5,
@@ -862,6 +886,7 @@ test("research returns server-derived price context and model technical and macr
   const { response, geminiCalls, geminiPrompts } = await requestResearch({
     geminiAnalysis,
     priceEntry,
+    history: supportResistanceHistoryFixture(),
     email: "member@example.com",
     sub: "research-member-allowed",
     adminEmails: "admin@example.com",
@@ -875,7 +900,17 @@ test("research returns server-derived price context and model technical and macr
   assert.deepEqual(body.priceContext, priceEntry);
   assert.deepEqual(body.analysis.technical, technical);
   assert.deepEqual(body.analysis.macro, macro);
+  assert.deepEqual(body.analysis.supportResistance, [{
+    kind: "resistance",
+    price: 426,
+    touches: 2,
+    lastTouch: "2026-05-13",
+  }]);
   assert.match(geminiPrompts[0], /"priceContext":\{"price":400/);
+  assert.match(geminiPrompts[0], /"supportResistance":\[\{"kind":"resistance","price":426,"touches":2,"lastTouch":"2026-05-13"\}\]/);
+  assert.match(geminiPrompts[0], /supportResistance levels \(kind, price, and touches\)/);
+  assert.match(geminiPrompts[0], /currentPrice is within roughly 2%/);
+  assert.match(geminiPrompts[0], /Do NOT invent dates, price levels, support\/resistance values or patterns\./);
   assert.match(geminiPrompts[0], /Choose ONE valuation method for all three cases/);
   assert.match(geminiPrompts[0], /P\/E of N at an exit net margin of M% implies a P\/S of N × M\/100/);
   assert.match(geminiPrompts[0], /bear case must produce the lowest implied price/);
