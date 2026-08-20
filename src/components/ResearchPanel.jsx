@@ -399,7 +399,7 @@ function annotationColor(kind) {
   return "var(--accent)";
 }
 
-function PriceChart({ history, annotations }) {
+function PriceChart({ history, annotations, supportResistance }) {
   if (!history || !Array.isArray(history.points)) return null;
 
   const startIndex = typeof history.displayFrom === "string"
@@ -418,7 +418,17 @@ function PriceChart({ history, annotations }) {
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const plotBottom = height - margin.bottom;
-  const values = points.flatMap(point => [point.low, point.high, point.ma20, point.ma200].filter(Number.isFinite));
+  const levels = (Array.isArray(supportResistance) ? supportResistance : [])
+    .map((level, originalIndex) => ({
+      kind: level?.kind,
+      price: level?.price,
+      originalIndex,
+    }))
+    .filter(level => ["support", "resistance"].includes(level.kind) && Number.isFinite(level.price));
+  const values = [
+    ...points.flatMap(point => [point.low, point.high, point.ma20, point.ma200].filter(Number.isFinite)),
+    ...levels.map(level => level.price),
+  ];
   const dataMin = Math.min(...values);
   const dataMax = Math.max(...values);
   const naturalRange = dataMax - dataMin;
@@ -436,6 +446,27 @@ function PriceChart({ history, annotations }) {
     { length: xTickCount },
     (_, index) => Math.round((index / Math.max(1, xTickCount - 1)) * (points.length - 1)),
   ))];
+  const levelLayouts = levels.reduce((layouts, level) => {
+    const lineY = yFor(level.price);
+    let labelY = lineY;
+
+    if (layouts.some(layout => Math.abs(layout.labelY - labelY) < 10)) {
+      for (let offset = 10; offset <= plotHeight; offset += 10) {
+        const candidate = [lineY + offset, lineY - offset].find(y =>
+          y >= margin.top + 4
+          && y <= plotBottom - 4
+          && layouts.every(layout => Math.abs(layout.labelY - y) >= 10)
+        );
+        if (Number.isFinite(candidate)) {
+          labelY = candidate;
+          break;
+        }
+      }
+    }
+
+    layouts.push({ ...level, lineY, labelY });
+    return layouts;
+  }, []);
 
   function segmentsFor(key) {
     const segments = [];
@@ -577,6 +608,18 @@ function PriceChart({ history, annotations }) {
           );
         })}
         <line x1={margin.left} x2={width - margin.right} y1={plotBottom} y2={plotBottom} stroke="var(--border-hairline)" />
+        {levelLayouts.map(level => (
+          <line
+            key={`level-line-${level.kind}-${level.price}-${level.originalIndex}`}
+            x1={margin.left}
+            x2={width - margin.right}
+            y1={level.lineY}
+            y2={level.lineY}
+            stroke={level.kind === "support" ? "var(--up-400)" : "var(--down-400)"}
+            strokeDasharray="4 3"
+            opacity="0.55"
+          />
+        ))}
         {points.map((point, index) => {
           const x = xFor(index);
           const openY = yFor(point.open);
@@ -654,6 +697,22 @@ function PriceChart({ history, annotations }) {
                 <title>{`${layout.label} · ${layout.annotation.date} · ${formatPrice(layout.point.close)}`}</title>
               </circle>
             </g>
+          );
+        })}
+        {levelLayouts.map(level => {
+          const color = level.kind === "support" ? "var(--up-400)" : "var(--down-400)";
+          return (
+            <text
+              key={`level-label-${level.kind}-${level.price}-${level.originalIndex}`}
+              x={width - margin.right - 3}
+              y={level.labelY + 3}
+              textAnchor="end"
+              fill={color}
+              fontFamily="var(--font-mono)"
+              fontSize="8.5"
+            >
+              {`${level.kind === "support" ? "S" : "R"} ${level.price.toFixed(2)}`}
+            </text>
           );
         })}
       </svg>
@@ -1157,7 +1216,11 @@ export default function ResearchPanel({ initialTicker }) {
                   lens={analysis.technical}
                   beforeRead={(
                     <>
-                      <PriceChart history={research.history} annotations={analysis.technical?.annotations} />
+                      <PriceChart
+                        history={research.history}
+                        annotations={analysis.technical?.annotations}
+                        supportResistance={analysis.supportResistance}
+                      />
                       <PriceContextStrip priceContext={research.priceContext} />
                     </>
                   )}
