@@ -406,7 +406,10 @@ function PriceChart({ history, annotations }) {
     ? history.points.findIndex(point => typeof point?.date === "string" && point.date >= history.displayFrom)
     : 0;
   const points = (startIndex >= 0 ? history.points.slice(startIndex) : [])
-    .filter(point => typeof point?.date === "string" && Number.isFinite(point.close));
+    .filter(point =>
+      typeof point?.date === "string"
+      && [point.open, point.high, point.low, point.close].every(Number.isFinite)
+    );
   if (points.length < 2) return null;
 
   const width = 760;
@@ -415,7 +418,7 @@ function PriceChart({ history, annotations }) {
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const plotBottom = height - margin.bottom;
-  const values = points.flatMap(point => [point.close, point.ma20, point.ma50].filter(Number.isFinite));
+  const values = points.flatMap(point => [point.low, point.high, point.ma20, point.ma200].filter(Number.isFinite));
   const dataMin = Math.min(...values);
   const dataMax = Math.max(...values);
   const naturalRange = dataMax - dataMin;
@@ -423,7 +426,9 @@ function PriceChart({ history, annotations }) {
   const domainMin = dataMin - domainPadding;
   const domainMax = dataMax + domainPadding;
   const domainRange = domainMax - domainMin;
-  const xFor = index => margin.left + (index / (points.length - 1)) * plotWidth;
+  const slotWidth = plotWidth / points.length;
+  const candleWidth = slotWidth * 0.7;
+  const xFor = index => margin.left + (index + 0.5) * slotWidth;
   const yFor = value => margin.top + ((domainMax - value) / domainRange) * plotHeight;
   const yTicks = [domainMax, (domainMax + domainMin) / 2, domainMin];
   const xTickCount = Math.min(5, points.length);
@@ -449,9 +454,8 @@ function PriceChart({ history, annotations }) {
   }
 
   const lineSeries = [
-    { key: "close", label: "Close", color: "var(--accent)", strokeWidth: 1.6, dasharray: null },
-    { key: "ma20", label: "MA20", color: "var(--info-400)", strokeWidth: 1.1, dasharray: "3 3" },
-    { key: "ma50", label: "MA50", color: "var(--event-400)", strokeWidth: 1.1, dasharray: "8 4" },
+    { key: "ma20", label: "SMA 20", color: "var(--accent)", strokeWidth: 1.4, dasharray: null },
+    { key: "ma200", label: "SMA 200", color: "var(--info-400)", strokeWidth: 1.2, dasharray: null },
   ].map(series => ({ ...series, segments: segmentsFor(series.key) }));
 
   const pointByDate = new Map(points.map((point, index) => [point.date, { point, index }]));
@@ -558,7 +562,7 @@ function PriceChart({ history, annotations }) {
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label={`${history.ticker || "Ticker"} three-month closing price with moving averages`}
+        aria-label={`${history.ticker || "Ticker"} three-month candlestick chart with SMA 20 and SMA 200`}
         style={{ display: "block", width: "100%", maxWidth: "100%", height: "auto" }}
       >
         {yTicks.map((tick, index) => {
@@ -573,6 +577,39 @@ function PriceChart({ history, annotations }) {
           );
         })}
         <line x1={margin.left} x2={width - margin.right} y1={plotBottom} y2={plotBottom} stroke="var(--border-hairline)" />
+        {points.map((point, index) => {
+          const x = xFor(index);
+          const openY = yFor(point.open);
+          const closeY = yFor(point.close);
+          const bullish = point.close >= point.open;
+          const color = bullish ? "var(--up-400)" : "var(--down-400)";
+          const naturalBodyHeight = Math.abs(closeY - openY);
+          const bodyHeight = Math.max(1, naturalBodyHeight);
+          const bodyY = Math.min(openY, closeY) - (naturalBodyHeight < 1 ? (1 - naturalBodyHeight) / 2 : 0);
+          return (
+            <g key={`${point.date}-${index}`}>
+              <line
+                x1={x}
+                x2={x}
+                y1={yFor(point.high)}
+                y2={yFor(point.low)}
+                stroke={color}
+                strokeWidth="1"
+              />
+              <rect
+                x={x - candleWidth / 2}
+                y={bodyY}
+                width={candleWidth}
+                height={bodyHeight}
+                fill={color}
+                stroke={color}
+                strokeWidth="0.75"
+              >
+                <title>{`${point.date} · O ${formatPrice(point.open)} · H ${formatPrice(point.high)} · L ${formatPrice(point.low)} · C ${formatPrice(point.close)}`}</title>
+              </rect>
+            </g>
+          );
+        })}
         {lineSeries.map(series => series.segments.map((segment, index) => (
           <path
             key={`${series.key}-${index}`}

@@ -52,7 +52,7 @@ ETF_NAME_PATTERN = re.compile(r"\bETF\b", re.IGNORECASE)
 
 CHUNK_SIZE = 25
 PIPELINE = "radar_scores"
-METHODOLOGY_VERSION = "radar-v1"
+METHODOLOGY_VERSION = "radar-v2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCORER_PATH = REPO_ROOT / "scripts" / "radar_score.mjs"
 
@@ -232,11 +232,12 @@ def _fetch_chart_with_meta(ticker):
     if not quotes:
         return None, instrument_type, short_name, long_name
     timestamps = result.get("timestamp") or []
-    closes = quotes[0].get("close") or []
+    quote_data = quotes[0]
+    closes = quote_data.get("close") or []
     if not timestamps or not closes:
         return None, instrument_type, short_name, long_name
     return (
-        {"timestamps": timestamps, "closes": closes},
+        {"timestamps": timestamps, "quote": quote_data},
         instrument_type,
         short_name,
         long_name,

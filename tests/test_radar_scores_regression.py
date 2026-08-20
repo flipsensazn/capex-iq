@@ -106,7 +106,7 @@ def scored_result(ticker="ALL", coverage="scored"):
         "chainCount": 3,
         "chains": ["ai", "musk", "robotics"],
         "memberships": {"ai": ["AI Track / AI Subsector"]},
-        "methodologyVersion": "radar-v1",
+        "methodologyVersion": "radar-v2",
         "methodologySignature": "method-sig",
         "inputSignature": "input-sig",
     }
@@ -222,6 +222,32 @@ class RadarScoresRegressionTests(unittest.TestCase):
         self.assertEqual(
             long_name, "VistaShares Electrification Supercycle ETF"
         )
+
+        quote_data = {
+            "open": [10.0],
+            "high": [11.0],
+            "low": [9.5],
+            "close": [10.5],
+            "volume": [1_000],
+        }
+        response = FakeResponse({
+            "chart": {
+                "result": [{
+                    "meta": {"instrumentType": "EQUITY"},
+                    "timestamp": [1_700_000_000],
+                    "indicators": {"quote": [quote_data]},
+                }],
+                "error": None,
+            }
+        })
+        with mock.patch.object(radar_scores.requests, "get", return_value=response):
+            chart, instrument_type = radar_scores.fetch_chart("STOCK")
+
+        self.assertEqual(chart, {
+            "timestamps": [1_700_000_000],
+            "quote": quote_data,
+        })
+        self.assertEqual(instrument_type, "EQUITY")
 
     def test_yahoo_session_collects_cookie_before_fetching_crumb(self):
         session = mock.Mock()
@@ -521,6 +547,8 @@ class RadarScoresRegressionTests(unittest.TestCase):
         result = scored_result()
         row = radar_scores.radar_row(result, date(2026, 8, 18))
 
+        self.assertEqual(radar_scores.METHODOLOGY_VERSION, "radar-v2")
+
         with mock.patch.object(
             radar_scores.psycopg2.extras,
             "execute_values",
@@ -540,7 +568,7 @@ class RadarScoresRegressionTests(unittest.TestCase):
         self.assertEqual(json_value(row[9]), result["memberships"])
         self.assertIsNone(row[10])
         self.assertEqual(row[11:], (
-            20.5, 2050, 2025, "radar-v1", "method-sig", "input-sig"
+            20.5, 2050, 2025, "radar-v2", "method-sig", "input-sig"
         ))
         self.assertIn(
             "radar_scores.methodology_signature IS NOT DISTINCT FROM",

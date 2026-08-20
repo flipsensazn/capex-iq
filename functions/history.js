@@ -30,32 +30,44 @@ async function writeKvJson(kv, key, value) {
   }
 }
 
-export function buildPoints(timestamps, closes, volumes) {
-  if (!Array.isArray(timestamps) || !Array.isArray(closes)) return [];
+export function buildPoints(timestamps, quote) {
+  if (!Array.isArray(timestamps) || !quote) return [];
 
   const points = [];
   for (let index = 0; index < timestamps.length; index += 1) {
     const timestamp = timestamps[index];
-    const close = closes[index];
-    if (!Number.isFinite(timestamp) || !Number.isFinite(close)) continue;
+    const open = quote.open?.[index];
+    const high = quote.high?.[index];
+    const low = quote.low?.[index];
+    const close = quote.close?.[index];
+    if (
+      !Number.isFinite(timestamp)
+      || !Number.isFinite(open)
+      || !Number.isFinite(high)
+      || !Number.isFinite(low)
+      || !Number.isFinite(close)
+    ) continue;
 
     points.push({
       date: new Date(timestamp * 1000).toISOString().slice(0, 10),
+      open,
+      high,
+      low,
       close,
-      volume: Number.isFinite(volumes?.[index]) ? volumes[index] : null,
+      volume: Number.isFinite(quote.volume?.[index]) ? quote.volume[index] : null,
     });
   }
 
   let sum20 = 0;
-  let sum50 = 0;
+  let sum200 = 0;
   for (let index = 0; index < points.length; index += 1) {
     const close = points[index].close;
     sum20 += close;
-    sum50 += close;
+    sum200 += close;
     if (index >= 20) sum20 -= points[index - 20].close;
-    if (index >= 50) sum50 -= points[index - 50].close;
+    if (index >= 200) sum200 -= points[index - 200].close;
     points[index].ma20 = index >= 19 ? sum20 / 20 : null;
-    points[index].ma50 = index >= 49 ? sum50 / 50 : null;
+    points[index].ma200 = index >= 199 ? sum200 / 200 : null;
   }
 
   return points;
@@ -109,13 +121,13 @@ export async function onRequest(context) {
     return jsonResponse({ error: "Invalid ticker format" }, 400, headers);
   }
 
-  const cacheKey = `history_v1_${ticker}`;
+  const cacheKey = `history_v2_${ticker}`;
   const cached = await readKvJson(env.SHARED_DATA, cacheKey);
   if (cached) return jsonResponse(cached, 200, headers);
 
   try {
     const response = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=6mo&interval=1d`,
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=2y&interval=1d`,
       { headers: { "User-Agent": USER_AGENT }, signal: request.signal }
     );
     if (!response.ok) throw new Error(`Yahoo returned ${response.status}`);
@@ -125,7 +137,7 @@ export async function onRequest(context) {
     if (!chart) throw new Error("Yahoo returned no chart data");
 
     const quote = chart?.indicators?.quote?.[0];
-    const points = buildPoints(chart.timestamp, quote?.close, quote?.volume);
+    const points = buildPoints(chart.timestamp, quote);
     if (!points.length) throw new Error("Yahoo returned no usable price history");
 
     const result = {

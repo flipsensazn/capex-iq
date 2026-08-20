@@ -56,32 +56,32 @@ export function findNotablePoints(points, displayFrom) {
   let previousWithAverages = null;
   for (const point of series) {
     const ma20 = finiteNumber(point.ma20);
-    const ma50 = finiteNumber(point.ma50);
-    if (ma20 == null || ma50 == null) {
+    const ma200 = finiteNumber(point.ma200);
+    if (ma20 == null || ma200 == null) {
       previousWithAverages = null;
       continue;
     }
 
     if (previousWithAverages && point.date >= firstDisplayDate) {
-      const previousDifference = previousWithAverages.ma20 - previousWithAverages.ma50;
-      const currentDifference = ma20 - ma50;
+      const previousDifference = previousWithAverages.ma20 - previousWithAverages.ma200;
+      const currentDifference = ma20 - ma200;
       if (previousDifference <= 0 && currentDifference > 0) {
         crossings.push(candidate(
           `cross-${point.date}`,
           "goldenCross",
           point,
-          "MA20 crossed above MA50",
+          "MA20 crossed above MA200",
         ));
       } else if (previousDifference >= 0 && currentDifference < 0) {
         crossings.push(candidate(
           `cross-${point.date}`,
           "deathCross",
           point,
-          "MA20 crossed below MA50",
+          "MA20 crossed below MA200",
         ));
       }
     }
-    previousWithAverages = { ma20, ma50 };
+    previousWithAverages = { ma20, ma200 };
   }
 
   const result = [

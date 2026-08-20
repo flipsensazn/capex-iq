@@ -127,13 +127,27 @@ function scoringCompanyFactsFixture() {
   };
 }
 
+function quoteFixture(closes) {
+  return {
+    open: closes.map(value => Number.isFinite(value) ? value - 0.5 : null),
+    high: closes.map(value => Number.isFinite(value) ? value + 1 : null),
+    low: closes.map(value => Number.isFinite(value) ? value - 1 : null),
+    close: closes,
+    volume: closes.map((_value, index) => 1_000 + index),
+  };
+}
+
 function scoringChartFixture() {
+  const closes = Array.from(
+    { length: 400 },
+    (_, index) => index < 300 ? 100 : index < 380 ? 200 : 150,
+  );
   return {
     timestamps: Array.from(
       { length: 400 },
       (_, index) => FIXED_NOW_SECONDS - (399 - index) * DAY_SECONDS,
     ),
-    closes: Array.from({ length: 400 }, (_, index) => 100 + index * 0.25),
+    quote: quoteFixture(closes),
   };
 }
 
@@ -172,27 +186,34 @@ test("the pure fundamentals export preserves the existing SEC fixture derivation
 
 test("the pure history and price exports preserve rolling and reference semantics", { concurrency: false }, () => {
   const timestamps = Array.from(
-    { length: 50 },
-    (_, index) => Date.UTC(2026, 0, index + 1) / 1000,
+    { length: 200 },
+    (_, index) => Date.UTC(2026, 0, 1) / 1000 + index * DAY_SECONDS,
   );
-  const closes = Array.from({ length: 50 }, (_, index) => index + 1);
-  const points = buildPoints(timestamps, closes);
+  const closes = Array.from({ length: 200 }, (_, index) => index + 1);
+  const points = buildPoints(timestamps, quoteFixture(closes));
 
   assert.deepEqual(points[0], {
     date: "2026-01-01",
+    open: 0.5,
+    high: 2,
+    low: 0,
     close: 1,
-    volume: null,
+    volume: 1_000,
     ma20: null,
-    ma50: null,
+    ma200: null,
   });
   assert.equal(points[19].ma20, 10.5);
-  assert.deepEqual(points[49], {
-    date: "2026-02-19",
-    close: 50,
-    volume: null,
-    ma20: 40.5,
-    ma50: 25.5,
-  });
+  assert.equal(points[198].ma200, null);
+  assert.equal(points[199].ma200, 100.5);
+  assert.equal(Object.hasOwn(points[199], "ma50"), false);
+  for (const field of ["open", "high", "low", "close"]) {
+    const quoteWithNull = quoteFixture([1, 2]);
+    quoteWithNull[field][0] = null;
+    assert.deepEqual(
+      buildPoints(timestamps.slice(0, 2), quoteWithNull).map(point => point.close),
+      [2],
+    );
+  }
 
   withFixedDate(() => {
     const referenceTimestamps = [
@@ -235,32 +256,37 @@ test("the Radar regression vector pins percent units and exact module scores", {
     result.qualityScore.components.find(component => component.key === "returns").detail,
     "ROE 15.0%",
   );
-  assert.equal(result.technicalScore.score, 94);
+  assert.equal(result.technicalScore.score, 71);
   assert.equal(result.technicalScore.basis, "3-month daily series");
   assert.deepEqual(
     result.technicalScore.components.map(({ key, score }) => [key, score]),
     [
-      ["momentum", 87.3888888888889],
-      ["rangePosition", 100],
+      ["momentum", 66.66666666666667],
+      ["rangePosition", 50],
       ["trend", 100],
     ],
   );
   assert.equal(
     result.technicalScore.components.find(component => component.key === "momentum").detail,
-    "1M 3.9% · 6M 29.5% · 1Y 84.1%",
+    "1M -25.0% · 6M 50.0% · 1Y 50.0%",
   );
-  assert.equal(result.price, 199.75);
-  assert.equal(result.marketCap, 199_750);
+  assert.equal(
+    result.technicalScore.components.find(component => component.key === "trend").detail,
+    "close 150.00 · MA20 150.00 · MA200 145.00",
+  );
+  assert.equal(result.price, 150);
+  assert.equal(result.marketCap, 150_000);
   assert.equal(result.fiscalYearBasis, 2025);
-  assert.equal(result.methodologyVersion, "radar-v1");
-  assert.equal(result.methodologySignature, "71a7dda167667be56b4cfa7a9ac204c17cadc2daf3c42826e7ae7c757e194d53");
+  assert.equal(result.methodologyVersion, "radar-v2");
+  assert.equal(result.methodologySignature, "07972d7b087627b45ab8f76778a5b6446277808cd2b8fec1eda1a73f302ce4f8");
+  assert.notEqual(result.methodologySignature, "71a7dda167667be56b4cfa7a9ac204c17cadc2daf3c42826e7ae7c757e194d53");
   assert.equal(result.inputSignature, "b9c55ce720bf773e504f5328d69aaaeb6d028b9f73abcb07a7ef429324d0c8b4");
 });
 
 test("coverage routing distinguishes funds, missing filings, and scored issuers", () => {
   const fund = scoreRadarRecord(scoredInput({
     instrumentType: "ETF",
-    chart: { timestamps: [FIXED_NOW_SECONDS], closes: [12.5] },
+    chart: { timestamps: [FIXED_NOW_SECONDS], quote: quoteFixture([12.5]) },
   }));
   const noFilings = scoreRadarRecord(scoredInput({ companyfacts: null, chart: null }));
   const scored = scoreRadarRecord(scoredInput({ chart: null }));
@@ -287,7 +313,7 @@ test("a chart-null issuer still receives its quality score", () => {
 
 test("market capitalization is the chart price times current shares outstanding", () => {
   const result = scoreRadarRecord(scoredInput({
-    chart: { timestamps: [FIXED_NOW_SECONDS], closes: [12.5] },
+    chart: { timestamps: [FIXED_NOW_SECONDS], quote: quoteFixture([12.5]) },
   }));
 
   assert.equal(result.price, 12.5);
@@ -298,7 +324,7 @@ test("the final chart slots remain authoritative when the last close is null", (
   const result = scoreRadarRecord(scoredInput({
     chart: {
       timestamps: [FIXED_NOW_SECONDS - DAY_SECONDS, FIXED_NOW_SECONDS],
-      closes: [12.5, null],
+      quote: quoteFixture([12.5, null]),
     },
   }));
 

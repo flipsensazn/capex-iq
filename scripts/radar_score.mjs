@@ -11,7 +11,7 @@ import { findRefPrices, pctFrom } from "../functions/prices.js";
 import { computeQualityScore } from "../functions/quality-score.js";
 import { computeTechnicalScore } from "../functions/technical-score.js";
 
-const METHODOLOGY_VERSION = "radar-v1";
+const METHODOLOGY_VERSION = "radar-v2";
 const FUND_INSTRUMENT_TYPES = new Set(["ETF", "MUTUALFUND"]);
 
 function canonicalJson(value) {
@@ -53,11 +53,18 @@ const METHODOLOGY_COMPONENTS = {
   technical: readComponentTable(new URL("../functions/technical-score.js", import.meta.url)),
 };
 
-export const methodologySignature = stableSignature(METHODOLOGY_COMPONENTS);
+const METHODOLOGY_DEFINITION = {
+  version: METHODOLOGY_VERSION,
+  technicalTrend: ["close>ma200", "ma20>ma200"],
+  components: METHODOLOGY_COMPONENTS,
+};
+
+export const methodologySignature = stableSignature(METHODOLOGY_DEFINITION);
 
 function chartInputs(chart) {
   const timestamps = chart?.timestamps;
-  const closes = chart?.closes;
+  const quote = chart?.quote;
+  const closes = quote?.close;
   if (!Array.isArray(timestamps) || !Array.isArray(closes)) return null;
 
   const finalClose = closes.at(-1);
@@ -77,7 +84,7 @@ function chartInputs(chart) {
       week52Low,
       week52High,
     },
-    history: { points: buildPoints(timestamps, closes) },
+    history: { points: buildPoints(timestamps, quote) },
     lastChartTimestamp: Number.isFinite(finalTimestamp) ? finalTimestamp : null,
   };
 }
