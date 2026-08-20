@@ -36,7 +36,7 @@
 #   API_NINJAS_KEY        optional  paid fallback transcript provider
 #   EARNINGSCALL_API_KEY  optional  paid fallback transcript provider
 #   WATCHLIST_BASE_URL    optional  deployed site root, e.g.
-#                                   https://wizzles-watchlist.pages.dev —
+#                                   https://capex-iq.us —
 #                                   used to pull the LIVE capex-map tickers
 #   TICKER_LIMIT          optional  cap tickers per run (testing)
 #   TRANSCRIPT_MIN_PROVIDER_COVERAGE / _MIN_USABLE_COVERAGE /
