@@ -21,7 +21,7 @@
 #
 # Env vars (all optional):
 #   OBSIDIAN_VAULT       vault root   (default: the iCloud vault path below)
-#   WATCHLIST_BASE_URL   site root    (default: https://wizzles-watchlist.pages.dev)
+#   WATCHLIST_BASE_URL   site root    (default: https://capex-iq.us)
 #   SIGNALS_SERVICE_TOKEN first-party token for gated signal endpoints
 
 import os
