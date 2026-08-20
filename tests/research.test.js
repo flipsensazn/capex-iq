@@ -126,10 +126,10 @@ function historyFixture() {
     ticker: "MSFT",
     currency: "USD",
     points: [
-      { date: "2026-05-12", close: 390, volume: 1000, ma20: 389, ma50: 391 },
-      { date: "2026-05-13", close: 395, volume: 1100, ma20: 392, ma50: 391 },
-      { date: "2026-05-14", close: 420, volume: 1200, ma20: 400, ma50: 393 },
-      { date: "2026-05-15", close: 400, volume: 900, ma20: 402, ma50: 395 },
+      { date: "2026-05-12", open: 388, high: 392, low: 386, close: 390, volume: 1000, ma20: 389, ma200: 391 },
+      { date: "2026-05-13", open: 390, high: 397, low: 389, close: 395, volume: 1100, ma20: 392, ma200: 391 },
+      { date: "2026-05-14", open: 396, high: 425, low: 394, close: 420, volume: 1200, ma20: 400, ma200: 393 },
+      { date: "2026-05-15", open: 410, high: 412, low: 398, close: 400, volume: 900, ma20: 402, ma200: 395 },
     ],
     displayFrom: "2026-05-12",
     source: "Yahoo v8 chart",
@@ -481,10 +481,10 @@ async function requestResearch({
     timestamp: Date.now(),
   }), { expirationTtl: 60 });
   if (history) {
-    await kv.put(`history_v1_${ticker.toUpperCase()}`, JSON.stringify(history), { expirationTtl: 3600 });
+    await kv.put(`history_v2_${ticker.toUpperCase()}`, JSON.stringify(history), { expirationTtl: 3600 });
   }
   if (cachedResult) {
-    await kv.put(`research_v7_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
+    await kv.put(`research_v8_${ticker.toUpperCase()}`, JSON.stringify(cachedResult), { expirationTtl: 86400 });
   }
   if (memberRecord !== undefined) {
     await kv.put(`member:${email.toLowerCase()}`, JSON.stringify(memberRecord));
@@ -724,7 +724,7 @@ test("research increments monthly usage once after a successful cache miss", { c
   });
   const body = await response.json();
   const usagePuts = kv.puts.filter(({ key }) => key.startsWith("usage:"));
-  const cachedWrite = kv.puts.find(({ key }) => key === "research_v7_MSFT");
+  const cachedWrite = kv.puts.find(({ key }) => key === "research_v8_MSFT");
 
   assert.equal(response.status, 200);
   assert.equal(geminiCalls, 1);

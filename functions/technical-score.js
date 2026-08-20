@@ -36,9 +36,9 @@ function latestTrendPoint(history) {
     const point = points[index];
     const close = finiteNumber(point?.close);
     const ma20 = finiteNumber(point?.ma20);
-    const ma50 = finiteNumber(point?.ma50);
-    if (close != null && ma20 != null && ma50 != null) {
-      return { close, ma20, ma50 };
+    const ma200 = finiteNumber(point?.ma200);
+    if (close != null && ma20 != null && ma200 != null) {
+      return { close, ma20, ma200 };
     }
   }
   return null;
@@ -75,12 +75,12 @@ export function computeTechnicalScore(priceContext, history) {
       score: trendPoint == null
         ? null
         : meanAvailable([
-          trendPoint.close > trendPoint.ma50 ? 100 : 0,
-          trendPoint.ma20 > trendPoint.ma50 ? 100 : 0,
+          trendPoint.close > trendPoint.ma200 ? 100 : 0,
+          trendPoint.ma20 > trendPoint.ma200 ? 100 : 0,
         ]),
       detail: trendPoint == null
         ? "—"
-        : `close ${formatNumber(trendPoint.close)} · MA20 ${formatNumber(trendPoint.ma20)} · MA50 ${formatNumber(trendPoint.ma50)}`,
+        : `close ${formatNumber(trendPoint.close)} · MA20 ${formatNumber(trendPoint.ma20)} · MA200 ${formatNumber(trendPoint.ma200)}`,
     },
   };
 

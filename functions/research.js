@@ -15,7 +15,7 @@ import { onRequest as pricesHandler } from "./prices.js";
 import { computeQualityScore } from "./quality-score.js";
 import { computeTechnicalScore } from "./technical-score.js";
 
-const CACHE_KEY_PREFIX = "research_v7_";
+const CACHE_KEY_PREFIX = "research_v8_";
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 2 * 1024;
 const MODEL = "gemini-3.5-flash-lite";
